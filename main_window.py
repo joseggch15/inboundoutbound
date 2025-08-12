@@ -1,4 +1,3 @@
-# main_window.py
 import sys
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -8,7 +7,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import QDate, Qt
 from PyQt6.QtGui import QColor, QFont
-from datetime import date, timedelta, datetime # Asegurarse que datetime esté aquí
+from datetime import date, timedelta, datetime
 
 # Importar nuestra lógica separada
 import database_logic as db
@@ -62,15 +61,91 @@ class MainWindow(QMainWindow):
         return box
 
     def setup_schedule_preview_ui(self, parent_layout):
-        schedule_layout = QVBoxLayout()
+        """Configura la UI con dos tablas para congelar las primeras columnas."""
+        schedule_container_layout = QVBoxLayout()
+        
+        tables_layout = QHBoxLayout()
+        tables_layout.setSpacing(0)
+
+        self.frozen_table = QTableWidget()
         self.schedule_table = QTableWidget()
-        schedule_layout.addWidget(self.schedule_table)
-        parent_layout.addWidget(self.create_group_box("🗓️ Vista Previa del Cronograma (PlanStaff.xlsx)", schedule_layout))
+        
+        tables_layout.addWidget(self.frozen_table)
+        tables_layout.addWidget(self.schedule_table, 1) 
+        
+        schedule_container_layout.addLayout(tables_layout)
+
+        self.frozen_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.frozen_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.schedule_table.verticalHeader().setVisible(False)
+
+        self.schedule_table.verticalScrollBar().valueChanged.connect(
+            self.frozen_table.verticalScrollBar().setValue
+        )
+        self.frozen_table.verticalScrollBar().valueChanged.connect(
+            self.schedule_table.verticalScrollBar().setValue
+        )
+
+        parent_layout.addWidget(self.create_group_box("🗓️ Vista Previa del Cronograma (PlanStaff.xlsx)", schedule_container_layout))
+
+    def load_schedule_data(self):
+        """Carga y muestra los datos del Excel en las dos tablas (congelada y principal)."""
+        FROZEN_COLUMN_COUNT = 3
+
+        df = excel.get_schedule_preview()
+        if df.empty:
+            return
+
+        if df.shape[1] < FROZEN_COLUMN_COUNT:
+            actual_frozen_count = df.shape[1]
+        else:
+            actual_frozen_count = FROZEN_COLUMN_COUNT
+
+        headers = [str(col.strftime('%Y-%m-%d')) if isinstance(col, datetime) else str(col) for col in df.columns]
+
+        self.frozen_table.setRowCount(df.shape[0])
+        self.frozen_table.setColumnCount(actual_frozen_count)
+        self.frozen_table.setHorizontalHeaderLabels(headers[:actual_frozen_count])
+
+        self.schedule_table.setRowCount(df.shape[0])
+        self.schedule_table.setColumnCount(df.shape[1] - actual_frozen_count)
+        self.schedule_table.setHorizontalHeaderLabels(headers[actual_frozen_count:])
+
+        for i, row in df.iterrows():
+            for j, val in enumerate(row):
+                item = QTableWidgetItem(str(val))
+                if j < actual_frozen_count:
+                    self.frozen_table.setItem(i, j, item)
+                else:
+                    col_index = j - actual_frozen_count
+                    if str(val).upper() == 'ON':
+                        item.setBackground(QColor("#C6EFCE"))
+                    elif str(val).upper() == 'OFF':
+                        item.setBackground(QColor("#FFC7CE"))
+                    self.schedule_table.setItem(i, col_index, item)
+        
+        self.frozen_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.frozen_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        
+        self.schedule_table.resizeColumnsToContents()
+        self.schedule_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.schedule_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+
+        # --- NUEVO BLOQUE DE CÓDIGO ---
+        # Calcular el ancho total necesario para la tabla congelada y fijarlo.
+        total_width = self.frozen_table.verticalHeader().width() + self.frozen_table.frameWidth() * 2
+        for i in range(self.frozen_table.columnCount()):
+            total_width += self.frozen_table.columnWidth(i)
+        
+        # Se añade un pequeño buffer para asegurar que la barra de scroll no aparezca
+        total_width += 2 
+        self.frozen_table.setFixedWidth(total_width)
+        # --- FIN DEL NUEVO BLOQUE ---
+
 
     def setup_registration_form_ui(self, parent_layout):
         form_layout = QGridLayout()
         
-        # Widgets del formulario
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Ej: Pérez, Juan")
         self.role_combo = QComboBox()
@@ -90,7 +165,6 @@ class MainWindow(QMainWindow):
         save_button = QPushButton("✅ Guardar Cambios en DB y Excel")
         save_button.clicked.connect(self.save_changes)
 
-        # Añadir widgets al layout
         form_layout.addWidget(QLabel("Nombre y Apellido:"), 0, 0)
         form_layout.addWidget(self.username_input, 0, 1)
         form_layout.addWidget(QLabel("Rol/Departamento:"), 1, 0)
@@ -137,41 +211,6 @@ class MainWindow(QMainWindow):
         
         parent_layout.addWidget(self.create_group_box("2. Generar Reporte de Transporte", report_layout))
 
-    def load_schedule_data(self):
-        """Carga y muestra los datos del Excel en la tabla de vista previa."""
-        df = excel.get_schedule_preview()
-        if df.empty:
-            return
-
-        # --- INICIO DE LA CORRECCIÓN ---
-        # Convierte todos los encabezados de columna a texto.
-        # Si un encabezado es una fecha, lo formatea a 'Año-Mes-Día'.
-        headers = []
-        for col in df.columns:
-            if isinstance(col, datetime):
-                headers.append(col.strftime('%Y-%m-%d'))
-            else:
-                headers.append(str(col))
-        
-        self.schedule_table.setRowCount(df.shape[0])
-        self.schedule_table.setColumnCount(df.shape[1])
-        self.schedule_table.setHorizontalHeaderLabels(headers) # Usamos la lista de headers corregida
-        # --- FIN DE LA CORRECCIÓN ---
-
-        for i, row in df.iterrows():
-            for j, val in enumerate(row):
-                item = QTableWidgetItem(str(val))
-                if str(val).upper() == 'ON':
-                    item.setBackground(QColor("#C6EFCE"))
-                elif str(val).upper() == 'OFF':
-                    item.setBackground(QColor("#FFC7CE"))
-                self.schedule_table.setItem(i, j, item)
-        
-        self.schedule_table.resizeColumnsToContents()
-        self.schedule_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        self.schedule_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-
-
     def load_db_data(self):
         """Carga los datos de la base de datos en su tabla."""
         records = db.get_all_operations()
@@ -217,7 +256,6 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error de Fechas", "La fecha de inicio no puede ser posterior a la fecha final.")
             return
             
-        # Determinar el estado a marcar
         if self.on_radio.isChecked():
             schedule_status = "ON"
         elif self.off_radio.isChecked():
@@ -225,10 +263,8 @@ class MainWindow(QMainWindow):
         else:
             schedule_status = None
 
-        # Guardar en la base de datos
         db.add_operation(username, role, badge, start_date, end_date)
         
-        # Actualizar el Excel
         success, message = excel.update_plan_staff_excel(username, role, badge, schedule_status, start_date, end_date)
 
         if success:
@@ -236,7 +272,6 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "Error de Excel", f"Se guardó en la DB, pero no se pudo actualizar PlanStaff.xlsx.\nCausa: {message}")
         
-        # Recargar las vistas de la tabla
         self.refresh_ui_data()
 
     def generate_report(self):
@@ -255,7 +290,6 @@ class MainWindow(QMainWindow):
             
         excel_data = excel.generate_transport_excel_from_db(records)
 
-        # Diálogo para guardar archivo
         default_filename = f"Transport_Request_{start_date}_to_{end_date}.xlsx"
         file_path, _ = QFileDialog.getSaveFileName(self, "Guardar Reporte", default_filename, "Archivos de Excel (*.xlsx)")
 
