@@ -8,7 +8,6 @@ import os
 PLAN_STAFF_FILE = "PlanStaff.xlsx"
 
 def get_roles_from_excel() -> list:
-    """Lee el archivo Excel y extrae una lista única de roles."""
     if not os.path.exists(PLAN_STAFF_FILE):
         return ["Rol no disponible (PlanStaff.xlsx no encontrado)"]
     try:
@@ -24,8 +23,8 @@ def get_roles_from_excel() -> list:
         return ["Error al leer Excel"]
 
 def update_plan_staff_excel(username: str, role: str, badge: str,
-                              schedule_status: str, schedule_start: date, schedule_end: date):
-    """Actualiza PlanStaff.xlsx: añade/actualiza empleado y rellena el calendario SIN BORRAR DATOS ANTIGUOS."""
+                            schedule_status: str, shift_type: str, 
+                            schedule_start: date, schedule_end: date):
     try:
         if os.path.exists(PLAN_STAFF_FILE):
             workbook = openpyxl.load_workbook(PLAN_STAFF_FILE)
@@ -39,6 +38,7 @@ def update_plan_staff_excel(username: str, role: str, badge: str,
 
         green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
         red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        yellow_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid") 
         
         header_map = {cell.value: cell.column for cell in sheet[1]}
         date_map = {cell.value.date() if isinstance(cell.value, datetime) else None: cell.column for cell in sheet[1]}
@@ -55,7 +55,6 @@ def update_plan_staff_excel(username: str, role: str, badge: str,
         if not employee_row_idx:
             employee_row_idx = sheet.max_row + 1
 
-        # Asegurarse de que las columnas existan antes de escribir
         if "NAME" in header_map:
             sheet.cell(row=employee_row_idx, column=header_map["NAME"]).value = username
         if "ROLE" in header_map:
@@ -63,10 +62,24 @@ def update_plan_staff_excel(username: str, role: str, badge: str,
         if "BADGE" in header_map:
             sheet.cell(row=employee_row_idx, column=header_map["BADGE"]).value = badge
         
-        if schedule_status and schedule_start and schedule_end:
-            fill_color = green_fill if schedule_status == "ON" else red_fill
-            today = date.today()
+        cell_text = ""
+        fill_color = None
 
+        if schedule_status == "ON":
+            if shift_type == "Night Shift":
+                # <<< CAMBIO: Se establece el texto como "ON NS" para el turno de noche.
+                cell_text = "ON NS" 
+                fill_color = yellow_fill 
+            else: # Day Shift
+                # Para el turno de día, podemos usar "ON DS" o simplemente "ON". Usemos "ON".
+                cell_text = "ON"
+                fill_color = green_fill
+        elif schedule_status == "OFF":
+            cell_text = "OFF"
+            fill_color = red_fill
+        
+        if cell_text and schedule_start and schedule_end:
+            today = date.today()
             delta = schedule_end - schedule_start
             for i in range(delta.days + 1):
                 day_to_mark = schedule_start + timedelta(days=i)
@@ -74,8 +87,10 @@ def update_plan_staff_excel(username: str, role: str, badge: str,
                 if day_to_mark >= today and day_to_mark in date_map:
                     col_idx = date_map[day_to_mark]
                     cell_to_update = sheet.cell(row=employee_row_idx, column=col_idx)
-                    cell_to_update.value = schedule_status
-                    cell_to_update.fill = fill_color
+                    
+                    cell_to_update.value = cell_text
+                    if fill_color:
+                        cell_to_update.fill = fill_color
         
         workbook.save(PLAN_STAFF_FILE)
         return True, "PlanStaff.xlsx actualizado exitosamente."
@@ -83,7 +98,6 @@ def update_plan_staff_excel(username: str, role: str, badge: str,
         return False, f"Error al guardar en Excel: {e}"
 
 def get_schedule_preview() -> pd.DataFrame:
-    """Lee el archivo Excel y lo carga en un DataFrame de pandas para visualización."""
     if not os.path.exists(PLAN_STAFF_FILE):
         return pd.DataFrame({"Mensaje": [f"No se encontró el archivo {PLAN_STAFF_FILE}."]})
     try:
@@ -93,9 +107,8 @@ def get_schedule_preview() -> pd.DataFrame:
         return pd.DataFrame({"Error": [f"No se pudo leer el archivo Excel: {e}"]})
 
 def generate_transport_excel_from_db(records: list) -> bytes:
-    """Genera el archivo Excel de solicitud de transporte a partir de los registros de la DB."""
     travel_in_records, travel_out_records = [], []
-    time_in, time_out = "06:00:00", "12:00:00"
+    time_in, time_out = "06:00:00", "18:00:00"
     for record in records:
         username, role = record['username'], record['role']
         start_date_str, end_date_str = record['start_date'], record['end_date']
