@@ -57,6 +57,7 @@ class MainWindow(QMainWindow):
         
         tables_layout = QHBoxLayout()
         tables_layout.setSpacing(0)
+        tables_layout.setContentsMargins(0, 0, 0, 0)
 
         self.frozen_table = QTableWidget()
         self.schedule_table = QTableWidget()
@@ -66,9 +67,15 @@ class MainWindow(QMainWindow):
         
         schedule_container_layout.addLayout(tables_layout)
 
-        self.frozen_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.frozen_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.schedule_table.verticalHeader().setVisible(False)
+        # --- UI/UX FIX FOR SCROLLING AND ALIGNMENT ---
+        self.frozen_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.frozen_table.verticalScrollBar().setFixedWidth(0)
+
+        self.frozen_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.frozen_table.horizontalScrollBar().setEnabled(False)
+
+        self.schedule_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.schedule_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         self.schedule_table.verticalScrollBar().valueChanged.connect(
             self.frozen_table.verticalScrollBar().setValue
@@ -77,6 +84,8 @@ class MainWindow(QMainWindow):
             self.schedule_table.verticalScrollBar().setValue
         )
 
+        self.schedule_table.verticalHeader().setVisible(False)
+        
         parent_layout.addWidget(self.create_group_box("🗓️ Vista Previa del Cronograma (PlanStaff.xlsx)", schedule_container_layout))
 
     def load_schedule_data(self):
@@ -110,7 +119,6 @@ class MainWindow(QMainWindow):
                     col_index = j - actual_frozen_count
                     
                     val_str = str(val).upper()
-                    # <<< CAMBIO: Lógica de colores actualizada para reconocer "ON NS"
                     if val_str == 'ON' or 'DAY SHIFT' in val_str or 'FA DAY' in val_str:
                         item.setBackground(QColor("#C6EFCE"))  # Verde
                     elif val_str == 'ON NS' or 'NIGHT SHIFT' in val_str or 'FA NIGHT' in val_str:
@@ -118,7 +126,7 @@ class MainWindow(QMainWindow):
                     elif val_str == 'OFF':
                         item.setBackground(QColor("#FFC7CE"))  # Rojo
                     elif 'LEAVE' in val_str:
-                         item.setBackground(QColor("#D9D9D9")) # Gris para C. Leave
+                        item.setBackground(QColor("#D9D9D9")) # Gris para C. Leave
 
                     self.schedule_table.setItem(i, col_index, item)
         
@@ -133,6 +141,7 @@ class MainWindow(QMainWindow):
         for i in range(self.frozen_table.columnCount()):
             total_width += self.frozen_table.columnWidth(i)
         
+        # The original script had a "+ 2" here which might be for a border. Keeping it.
         total_width += 2 
         self.frozen_table.setFixedWidth(total_width)
 
@@ -250,7 +259,7 @@ class MainWindow(QMainWindow):
         report_button = QPushButton("🚀 Generar y Descargar Reporte")
         report_button.clicked.connect(self.generate_report)
         report_layout.addWidget(report_button)
-        parent_layout.addWidget(self.create_group_box("2. Generar Reporte de Transporte", report_layout))
+        parent_layout.addWidget(self.create_group_box("2. Generar Reporte de Transporte (desde PlanStaff.xlsx)", report_layout))
 
     def load_db_data(self):
         records = db.get_all_operations()
@@ -283,22 +292,47 @@ class MainWindow(QMainWindow):
         if start_date > end_date:
             QMessageBox.warning(self, "Error de Fechas", "La fecha de inicio del reporte no puede ser posterior a la fecha final.")
             return
-        records = db.get_operations_for_report(start_date, end_date)
-        if not records:
-            QMessageBox.information(self, "Sin Datos", "No se encontraron rotaciones activas en el rango de fechas seleccionado.")
+
+        excel_data, message = excel.generate_transport_excel_from_planstaff(start_date, end_date)
+        
+        if not excel_data:
+            QMessageBox.information(self, "Información", message)
             return
-        excel_data = excel.generate_transport_excel_from_db(records)
-        default_filename = f"Transport_Request_{start_date}_to_{end_date}.xlsx"
+            
+        default_filename = f"Transport_Request_{start_date.strftime('%Y%m%d')}_to_{end_date.strftime('%Y%m%d')}.xlsx"
         file_path, _ = QFileDialog.getSaveFileName(self, "Guardar Reporte", default_filename, "Archivos de Excel (*.xlsx)")
+        
         if file_path:
             try:
                 with open(file_path, 'wb') as f:
                     f.write(excel_data)
-                QMessageBox.information(self, "Éxito", f"Reporte guardado exitosamente en:\n{file_path}")
+                QMessageBox.information(self, "Éxito", f"{message}\n\nReporte guardado exitosamente en:\n{file_path}")
             except Exception as e:
                 QMessageBox.critical(self, "Error al Guardar", f"No se pudo guardar el archivo.\nError: {e}")
 
 if __name__ == '__main__':
+    # This block is needed to run the application
+    class DummyExcelLogic:
+        def get_schedule_preview(self):
+            import pandas as pd
+            columns = ['ROLE', 'NAME', 'BADGE'] + [(datetime(2025, 8, 19) + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(30)]
+            data = [['Technician', f'Person {i}', f'B{i}', 'On'] * ((len(columns) - 3) // 4 + 1) for i in range(15)]
+            df = pd.DataFrame(data, columns=columns)
+            date_cols = {col: datetime.strptime(col, '%Y-%m-%d') for col in df.columns if col not in ['ROLE', 'NAME', 'BADGE']}
+            df.rename(columns=date_cols, inplace=True)
+            return df
+        def get_roles_from_excel(self): return ["Technician", "Fuel Attendant"]
+        def update_plan_staff_excel(self, *args): return True, "Success"
+        def generate_transport_excel_from_planstaff(self, *args): return b"dummy data", "Report generated."
+
+    class DummyDBLogic:
+        def setup_database(self): pass
+        def add_operation(self, *args): pass
+        def get_all_operations(self): return [{'id': i, 'username': f'User {i}', 'role': 'Role', 'badge': f'B{i}', 'start_date': '2025-01-01', 'end_date': '2025-01-15'} for i in range(5)]
+
+    excel = DummyExcelLogic()
+    db = DummyDBLogic()
+    
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

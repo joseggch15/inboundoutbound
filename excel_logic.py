@@ -67,11 +67,9 @@ def update_plan_staff_excel(username: str, role: str, badge: str,
 
         if schedule_status == "ON":
             if shift_type == "Night Shift":
-                # <<< CAMBIO: Se establece el texto como "ON NS" para el turno de noche.
                 cell_text = "ON NS" 
                 fill_color = yellow_fill 
             else: # Day Shift
-                # Para el turno de día, podemos usar "ON DS" o simplemente "ON". Usemos "ON".
                 cell_text = "ON"
                 fill_color = green_fill
         elif schedule_status == "OFF":
@@ -79,15 +77,12 @@ def update_plan_staff_excel(username: str, role: str, badge: str,
             fill_color = red_fill
         
         if cell_text and schedule_start and schedule_end:
-            today = date.today()
             delta = schedule_end - schedule_start
             for i in range(delta.days + 1):
                 day_to_mark = schedule_start + timedelta(days=i)
-                
-                if day_to_mark >= today and day_to_mark in date_map:
+                if day_to_mark in date_map:
                     col_idx = date_map[day_to_mark]
                     cell_to_update = sheet.cell(row=employee_row_idx, column=col_idx)
-                    
                     cell_to_update.value = cell_text
                     if fill_color:
                         cell_to_update.fill = fill_color
@@ -106,48 +101,105 @@ def get_schedule_preview() -> pd.DataFrame:
     except Exception as e:
         return pd.DataFrame({"Error": [f"No se pudo leer el archivo Excel: {e}"]})
 
-def generate_transport_excel_from_db(records: list) -> bytes:
+def generate_transport_excel_from_planstaff(report_start: date, report_end: date) -> tuple:
+    """
+    Genera un reporte de transporte analizando PlanStaff.xlsx para encontrar las
+    fechas de entrada y salida, asignando horarios según el turno (ON o ON NS).
+    """
+    try:
+        if not os.path.exists(PLAN_STAFF_FILE):
+            return None, f"No se encontró el archivo {PLAN_STAFF_FILE}."
+        df = pd.read_excel(PLAN_STAFF_FILE, engine='openpyxl').fillna('OFF')
+    except Exception as e:
+        return None, f"No se pudo leer el archivo Excel: {e}"
+
+    info_cols = ['NAME', 'ROLE']
+    for col in info_cols:
+        if col not in df.columns:
+            return None, f"Falta la columna requerida en Excel: '{col}'"
+
+    all_date_cols = sorted([col for col in df.columns if isinstance(col, datetime)])
+    if not all_date_cols:
+        return None, "No se encontraron columnas de fecha en PlanStaff.xlsx."
+
+    date_col_map = {col.date(): col for col in all_date_cols}
     travel_in_records, travel_out_records = [], []
-    time_in, time_out = "06:00:00", "18:00:00"
-    for record in records:
-        username, role = record['username'], record['role']
-        start_date_str, end_date_str = record['start_date'], record['end_date']
-        start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
-        end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
-        
-        if ',' in username:
-            parts = username.split(',', 1); last_name, first_name = parts[0].strip(), parts[1].strip()
+
+    for _, row in df.iterrows():
+        username = row.get('NAME')
+        if not isinstance(username, str) or not username.strip():
+            continue
+        role = row.get('ROLE', 'N/A')
+
+        for d in pd.date_range(start=report_start, end=report_end):
+            current_day = d.date()
+            prev_day = current_day - timedelta(days=1)
+            next_day = current_day + timedelta(days=1)
+
+            # --- Lógica de Entrada (TRAVEL TO SITE) ---
+            if prev_day in date_col_map and current_day in date_col_map:
+                prev_status = str(row.get(date_col_map[prev_day], 'OFF')).upper()
+                curr_status = str(row.get(date_col_map[current_day], 'OFF')).upper()
+                if 'ON' not in prev_status and 'ON' in curr_status:
+                    time_in = "12:00:00" if curr_status == 'ON NS' else "06:00:00"
+                    travel_in_records.append({"NAME": username, "DEPT": role, "DATE": current_day.strftime('%Y-%m-%d'), "TIME": time_in})
+            
+            # --- Lógica de Salida (TRAVEL FROM SITE) ---
+            if next_day in date_col_map and current_day in date_col_map:
+                curr_status = str(row.get(date_col_map[current_day], 'OFF')).upper()
+                next_status = str(row.get(date_col_map[next_day], 'OFF')).upper()
+                if 'ON' in curr_status and 'ON' not in next_status:
+                    time_out = "06:00:00" if curr_status == 'ON NS' else "12:00:00"
+                    travel_out_records.append({"NAME": username, "DEPT": role, "DATE": current_day.strftime('%Y-%m-%d'), "TIME": time_out})
+
+    if not travel_in_records and not travel_out_records:
+        return None, "No se encontraron entradas o salidas de personal en el rango de fechas para generar el reporte."
+
+    def parse_name(username_str):
+        if ',' in username_str:
+            parts = username_str.split(',', 1)
+            return pd.Series([parts[0].strip(), parts[1].strip()])
         else:
-            parts = username.split(); last_name = parts[-1] if parts else ''; first_name = " ".join(parts[:-1]) if len(parts) > 1 else ''
-        
-        travel_in_records.append({"NAME": last_name, "FIRST NAME": first_name, "DEPT": role, "DATE": start_date.strftime('%Y-%m-%d'), "TIME": time_in})
-        travel_out_records.append({"NAME": last_name, "FIRST NAME": first_name, "DEPT": role, "DATE": end_date.strftime('%Y-%m-%d'), "TIME": time_out})
-    
+            parts = username_str.split()
+            last_name = parts[-1] if parts else ''
+            first_name = " ".join(parts[:-1]) if len(parts) > 1 else ''
+            return pd.Series([last_name, first_name])
+
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        cols_in = ['#', 'NAME', 'FIRST NAME', 'GID', 'COMPANY', 'DEPT', 'FROM', 'DATE', 'TIME']
-        cols_out = ['#', 'NAME', 'FIRST NAME', 'GID', 'COMPANY', 'DEPT', 'TO', 'DATE', 'TIME']
-        df_in, df_out = pd.DataFrame(travel_in_records), pd.DataFrame(travel_out_records)
-        
         pd.DataFrame().to_excel(writer, sheet_name='travel list', index=False)
         ws = writer.sheets['travel list']
+        cols_in = ['#', 'NAME', 'FIRST NAME', 'GID', 'COMPANY', 'DEPT', 'FROM', 'DATE', 'TIME']
+        cols_out = ['#', 'NAME', 'FIRST NAME', 'GID', 'COMPANY', 'DEPT', 'TO', 'DATE', 'TIME']
         
-        if not df_in.empty:
+        df_in_processed = pd.DataFrame()
+        if travel_in_records:
+            df_in = pd.DataFrame(travel_in_records)
+            df_in[['NAME', 'FIRST NAME']] = df_in['NAME'].apply(parse_name)
             df_in = df_in.drop_duplicates().sort_values(by=["DEPT", "NAME", "DATE"]).reset_index(drop=True)
             df_in["GID"], df_in["COMPANY"], df_in["FROM"] = "", "PLGims", "PBO"
             df_in.insert(0, '#', range(1, 1 + len(df_in)))
-            df_in.reindex(columns=cols_in).to_excel(writer, sheet_name='travel list', startrow=5, index=False, header=True)
+            df_in_processed = df_in.reindex(columns=cols_in)
+            df_in_processed.to_excel(writer, sheet_name='travel list', startrow=5, index=False, header=True)
         
-        if not df_out.empty:
+        df_out_processed = pd.DataFrame()
+        if travel_out_records:
+            df_out = pd.DataFrame(travel_out_records)
+            df_out[['NAME', 'FIRST NAME']] = df_out['NAME'].apply(parse_name)
             df_out = df_out.drop_duplicates().sort_values(by=["DEPT", "NAME", "DATE"]).reset_index(drop=True)
             df_out["GID"], df_out["COMPANY"], df_out["TO"] = "", "PLGims", "PBO"
             df_out.insert(0, '#', range(1, 1 + len(df_out)))
-            df_out.reindex(columns=cols_out).to_excel(writer, sheet_name='travel list', startrow=5, startcol=len(cols_in) + 1, index=False, header=True)
+            start_col_out = len(cols_in) + 1 if not df_in_processed.empty else 0
+            df_out_processed = df_out.reindex(columns=cols_out)
+            df_out_processed.to_excel(writer, sheet_name='travel list', startrow=5, startcol=start_col_out, index=False, header=True)
         
         ws.cell(row=2, column=1, value="MERIAN TRANSPORTATION REQUEST")
-        ws.cell(row=5, column=1, value="IN")
-        ws.cell(row=5, column=2, value="TRAVEL TO SITE")
-        ws.cell(row=5, column=len(cols_in) + 2, value="OUT")
-        ws.cell(row=5, column=len(cols_in) + 3, value="TRAVEL FROM SITE")
-        
-    return output.getvalue()
+        start_col_out_label = len(cols_in) + 2 if not df_in_processed.empty else 1
+        if not df_in_processed.empty:
+            ws.cell(row=5, column=1, value="IN")
+            ws.cell(row=5, column=2, value="TRAVEL TO SITE")
+        if not df_out_processed.empty:
+            ws.cell(row=5, column=start_col_out_label, value="OUT")
+            ws.cell(row=5, column=start_col_out_label + 1, value="TRAVEL FROM SITE")
+            
+    return output.getvalue(), "Reporte generado exitosamente desde PlanStaff.xlsx."
