@@ -5,13 +5,12 @@ import openpyxl
 from openpyxl.styles import PatternFill
 import os
 
-PLAN_STAFF_FILE = "PlanStaff.xlsx"
-
-def get_roles_from_excel() -> list:
-    if not os.path.exists(PLAN_STAFF_FILE):
-        return ["Rol no disponible (PlanStaff.xlsx no encontrado)"]
+def get_roles_from_excel(plan_staff_file: str) -> list:
+    """Obtiene la lista de roles únicos desde el archivo Excel especificado."""
+    if not os.path.exists(plan_staff_file):
+        return [f"Rol no disponible ({os.path.basename(plan_staff_file)} no encontrado)"]
     try:
-        workbook = openpyxl.load_workbook(PLAN_STAFF_FILE, read_only=True, data_only=True)
+        workbook = openpyxl.load_workbook(plan_staff_file, read_only=True, data_only=True)
         sheet = workbook.active
         header_map = {cell.value: cell.column for cell in sheet[1]}
         if "ROLE" not in header_map: return ["Columna ROLE no encontrada"]
@@ -22,12 +21,13 @@ def get_roles_from_excel() -> list:
         print(f"Error al leer roles de Excel: {e}")
         return ["Error al leer Excel"]
 
-def update_plan_staff_excel(username: str, role: str, badge: str,
-                            schedule_status: str, shift_type: str, 
-                            schedule_start: date, schedule_end: date):
+def update_plan_staff_excel(plan_staff_file: str, username: str, role: str, badge: str,
+                              schedule_status: str, shift_type: str, 
+                              schedule_start: date, schedule_end: date):
+    """Actualiza o crea una entrada para un empleado en el archivo Excel especificado."""
     try:
-        if os.path.exists(PLAN_STAFF_FILE):
-            workbook = openpyxl.load_workbook(PLAN_STAFF_FILE)
+        if os.path.exists(plan_staff_file):
+            workbook = openpyxl.load_workbook(plan_staff_file)
             sheet = workbook.active
         else:
             workbook = openpyxl.Workbook()
@@ -87,29 +87,27 @@ def update_plan_staff_excel(username: str, role: str, badge: str,
                     if fill_color:
                         cell_to_update.fill = fill_color
         
-        workbook.save(PLAN_STAFF_FILE)
-        return True, "PlanStaff.xlsx actualizado exitosamente."
+        workbook.save(plan_staff_file)
+        return True, f"{os.path.basename(plan_staff_file)} actualizado exitosamente."
     except Exception as e:
         return False, f"Error al guardar en Excel: {e}"
 
-def get_schedule_preview() -> pd.DataFrame:
-    if not os.path.exists(PLAN_STAFF_FILE):
-        return pd.DataFrame({"Mensaje": [f"No se encontró el archivo {PLAN_STAFF_FILE}."]})
+def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
+    """Lee el archivo Excel especificado y lo devuelve como un DataFrame de pandas."""
+    if not os.path.exists(plan_staff_file):
+        return pd.DataFrame({"Mensaje": [f"No se encontró el archivo {os.path.basename(plan_staff_file)}."]})
     try:
-        df = pd.read_excel(PLAN_STAFF_FILE, engine='openpyxl')
+        df = pd.read_excel(plan_staff_file, engine='openpyxl')
         return df.fillna('')
     except Exception as e:
         return pd.DataFrame({"Error": [f"No se pudo leer el archivo Excel: {e}"]})
 
-def generate_transport_excel_from_planstaff(report_start: date, report_end: date) -> tuple:
-    """
-    Genera un reporte de transporte analizando PlanStaff.xlsx para encontrar las
-    fechas de entrada y salida, asignando horarios según el turno (ON o ON NS).
-    """
+def generate_transport_excel_from_planstaff(plan_staff_file: str, report_start: date, report_end: date) -> tuple:
+    """Genera un reporte de transporte analizando el archivo Excel especificado."""
     try:
-        if not os.path.exists(PLAN_STAFF_FILE):
-            return None, f"No se encontró el archivo {PLAN_STAFF_FILE}."
-        df = pd.read_excel(PLAN_STAFF_FILE, engine='openpyxl').fillna('OFF')
+        if not os.path.exists(plan_staff_file):
+            return None, f"No se encontró el archivo {os.path.basename(plan_staff_file)}."
+        df = pd.read_excel(plan_staff_file, engine='openpyxl').fillna('OFF')
     except Exception as e:
         return None, f"No se pudo leer el archivo Excel: {e}"
 
@@ -120,7 +118,7 @@ def generate_transport_excel_from_planstaff(report_start: date, report_end: date
 
     all_date_cols = sorted([col for col in df.columns if isinstance(col, datetime)])
     if not all_date_cols:
-        return None, "No se encontraron columnas de fecha en PlanStaff.xlsx."
+        return None, f"No se encontraron columnas de fecha en {os.path.basename(plan_staff_file)}."
 
     date_col_map = {col.date(): col for col in all_date_cols}
     travel_in_records, travel_out_records = [], []
@@ -136,7 +134,6 @@ def generate_transport_excel_from_planstaff(report_start: date, report_end: date
             prev_day = current_day - timedelta(days=1)
             next_day = current_day + timedelta(days=1)
 
-            # --- Lógica de Entrada (TRAVEL TO SITE) ---
             if prev_day in date_col_map and current_day in date_col_map:
                 prev_status = str(row.get(date_col_map[prev_day], 'OFF')).upper()
                 curr_status = str(row.get(date_col_map[current_day], 'OFF')).upper()
@@ -144,7 +141,6 @@ def generate_transport_excel_from_planstaff(report_start: date, report_end: date
                     time_in = "12:00:00" if curr_status == 'ON NS' else "06:00:00"
                     travel_in_records.append({"NAME": username, "DEPT": role, "DATE": current_day.strftime('%Y-%m-%d'), "TIME": time_in})
             
-            # --- Lógica de Salida (TRAVEL FROM SITE) ---
             if next_day in date_col_map and current_day in date_col_map:
                 curr_status = str(row.get(date_col_map[current_day], 'OFF')).upper()
                 next_status = str(row.get(date_col_map[next_day], 'OFF')).upper()
@@ -153,7 +149,7 @@ def generate_transport_excel_from_planstaff(report_start: date, report_end: date
                     travel_out_records.append({"NAME": username, "DEPT": role, "DATE": current_day.strftime('%Y-%m-%d'), "TIME": time_out})
 
     if not travel_in_records and not travel_out_records:
-        return None, "No se encontraron entradas o salidas de personal en el rango de fechas para generar el reporte."
+        return None, "No se encontraron entradas o salidas de personal en el rango de fechas."
 
     def parse_name(username_str):
         if ',' in username_str:
@@ -202,4 +198,4 @@ def generate_transport_excel_from_planstaff(report_start: date, report_end: date
             ws.cell(row=5, column=start_col_out_label, value="OUT")
             ws.cell(row=5, column=start_col_out_label + 1, value="TRAVEL FROM SITE")
             
-    return output.getvalue(), "Reporte generado exitosamente desde PlanStaff.xlsx."
+    return output.getvalue(), f"Reporte generado exitosamente desde {os.path.basename(plan_staff_file)}."
