@@ -24,6 +24,9 @@ class LoginWindow(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Sign In")
         self.setModal(True)
+
+        # Valores que leerá main.py tras un login exitoso
+        self.username = None
         self.user_role = None
         self.excel_file = None
 
@@ -38,7 +41,7 @@ class LoginWindow(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.check_login)
         buttons.rejected.connect(self.reject)
-        # Force English labels on the standard buttons
+        # Forzar etiquetas en inglés
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Sign in")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancel")
 
@@ -48,11 +51,16 @@ class LoginWindow(QDialog):
         layout.addWidget(buttons)
 
     def check_login(self):
-        username = self.username_input.text().lower()
+        # Guardamos el texto tal como lo escribió el usuario para mostrarlo en la UI
+        typed_username = self.username_input.text().strip()
+        # Para validar credenciales, usamos lower()
+        username_lookup = typed_username.lower()
         password = self.password_input.text()
-        user_data = CREDENTIALS.get(username)
+        user_data = CREDENTIALS.get(username_lookup)
 
         if user_data and user_data["password"] == password:
+            # Datos que usará el resto de la app
+            self.username = typed_username if typed_username else username_lookup
             self.user_role = user_data["role"]
             self.excel_file = user_data["excel_file"]
             self.accept()

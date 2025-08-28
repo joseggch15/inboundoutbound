@@ -17,11 +17,14 @@ import excel_logic as excel
 class MainWindow(QMainWindow):
     logout_signal = pyqtSignal()
 
-    def __init__(self, user_role, excel_file):
+    def __init__(self, user_role, excel_file, logged_username=None):
         super().__init__()
         self.user_role = user_role  # RGM or Newmont. Used as 'source'
         self.excel_file = excel_file
-        self.setWindowTitle(f"👨‍✈️ Operations Manager - Profile: {self.user_role}")
+        self.logged_username = logged_username or "Unknown"
+
+        # Título con el usuario
+        self.setWindowTitle(f"👨‍✈️ Operations Manager - Profile: {self.user_role} | User: {self.logged_username}")
         self.setGeometry(100, 100, 1200, 800)
         self.current_user_id = None
 
@@ -39,12 +42,20 @@ class MainWindow(QMainWindow):
         font.setBold(True)
         title_label.setFont(font)
 
+        # <<<<<<<<<< Usuario logueado visible >>>>>>>>>>
+        self.logged_user_label = QLabel(f"👤 {self.logged_username}")
+        lu_font = self.logged_user_label.font()
+        lu_font.setBold(True)
+        self.logged_user_label.setFont(lu_font)
+        self.logged_user_label.setStyleSheet("padding: 0 12px;")
+
         logout_button = QPushButton("🔒 Sign Out")
         logout_button.setFixedWidth(150)
         logout_button.clicked.connect(self.handle_logout)
 
         top_layout.addWidget(title_label)
         top_layout.addStretch()
+        top_layout.addWidget(self.logged_user_label)  # <<<<< aquí se muestra el usuario
         top_layout.addWidget(logout_button)
         main_layout.addLayout(top_layout)
 
@@ -501,7 +512,6 @@ class MainWindow(QMainWindow):
             box.exec()
             return
 
-        # Custom Yes/No in English
         confirm = QMessageBox(self)
         confirm.setIcon(QMessageBox.Icon.Question)
         confirm.setWindowTitle("Confirm Deletion")

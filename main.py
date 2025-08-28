@@ -47,9 +47,11 @@ class LauncherWindow(QWidget):
         login_dialog = LoginWindow(self)
         
         if login_dialog.exec() == QDialog.DialogCode.Accepted:
+            # Datos devueltos por el login
             user_role = login_dialog.user_role
             excel_file = login_dialog.excel_file
-            
+            logged_username = login_dialog.username  # <<<<<<<<<<<<<<<<<<<<<<
+
             self.hide()
 
             loading_screen = LoadingWindow(role=user_role)
@@ -61,7 +63,12 @@ class LauncherWindow(QWidget):
 
             loading_screen.close()
 
-            self.main_app_window = MainWindow(user_role=user_role, excel_file=excel_file)
+            # Pasamos el usuario logueado a la ventana principal
+            self.main_app_window = MainWindow(
+                user_role=user_role,
+                excel_file=excel_file,
+                logged_username=logged_username  # <<<<<<<<<<<<<<<<<<<<<<
+            )
             self.main_app_window.logout_signal.connect(self.handle_logout)
             self.main_app_window.show()
 
