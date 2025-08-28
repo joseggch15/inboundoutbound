@@ -282,6 +282,15 @@ class MainWindow(QMainWindow):
             box.exec()
             return
 
+        if not role:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Incomplete Data")
+            box.setText("Please select a role/department.")
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+            box.exec()
+            return
+
         if start_date > end_date:
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Warning)
@@ -299,10 +308,11 @@ class MainWindow(QMainWindow):
         elif self.none_radio.isChecked():
             schedule_status = None
 
-        # Save rotation in DB
-        db.add_operation(username, role, badge, start_date, end_date)
+        # Registrar en DB solo si se asigna ON/OFF (no para limpiar)
+        if schedule_status in ("ON", "OFF"):
+            db.add_operation(username, role, badge, start_date, end_date)
 
-        # Update Excel
+        # Actualizar Excel (esta parte sí limpia cuando schedule_status es None)
         success, message = excel.update_plan_staff_excel(
             self.excel_file, username, role, badge, schedule_status, shift_type, start_date, end_date
         )

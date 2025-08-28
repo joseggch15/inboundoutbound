@@ -5,13 +5,16 @@ import openpyxl
 from openpyxl.styles import PatternFill
 import os
 
+
+# --------------------------
+# Utilidades internas
+# --------------------------
 def _is_blank_series(s: pd.Series) -> bool:
     """Return True if the entire series is NaN or empty strings."""
     if s is None:
         return True
     if s.isna().all():
         return True
-    # Convert to string to capture '', 'nan', 'None', etc.
     s_str = s.astype(str).str.strip().str.lower()
     return (s_str.eq('') | s_str.eq('nan') | s_str.eq('none') | s_str.eq('null')).all()
 
@@ -22,6 +25,10 @@ def _prefix_for_file(plan_staff_file: str) -> str:
         return 'NM'
     return 'ID'
 
+
+# --------------------------
+# Lecturas auxiliares
+# --------------------------
 def get_roles_from_excel(plan_staff_file: str) -> list:
     """Return the list of unique roles from the given Excel file."""
     if not os.path.exists(plan_staff_file):
@@ -30,7 +37,6 @@ def get_roles_from_excel(plan_staff_file: str) -> list:
         workbook = openpyxl.load_workbook(plan_staff_file, read_only=True, data_only=True)
         sheet = workbook.active
 
-        # Flexible mapping: ROLE (RGM) or Discipline (some Newmont layouts)
         header_map = {cell.value: cell.column for cell in sheet[1]}
         role_header = "ROLE" if "ROLE" in header_map else ("Discipline" if "Discipline" in header_map else None)
         if not role_header:
@@ -52,7 +58,7 @@ def get_users_from_excel(plan_staff_file: str) -> list:
     Extract a list of users (name, role, badge) from the Excel file.
     - Accepts RGM format (NAME, ROLE, BADGE).
     - Accepts Newmont format (Last Name, First Name, Discipline, Company ID).
-    - If BADGE does not exist or is blank (e.g., some Newmont layouts), a stable one is GENERATED with 'NM' prefix.
+    - If BADGE does not exist or is blank, a stable one is GENERATED.
     """
     if not os.path.exists(plan_staff_file):
         print(f"Import file not found: {plan_staff_file}")
@@ -67,15 +73,12 @@ def get_users_from_excel(plan_staff_file: str) -> list:
         users_df = None
 
         if all(col in df.columns for col in rgm_cols):
-            # We have NAME/ROLE/BADGE (RGM-like or "RGM-shaped" Newmont)
             users_df = df[rgm_cols].copy()
 
-            # If BADGE is completely blank → generate
             if _is_blank_series(users_df['BADGE']):
                 prefix = _prefix_for_file(plan_staff_file)
                 users_df['BADGE'] = [f"{prefix}{i+1:05d}" for i in range(len(users_df))]
             else:
-                # Fill only missing BADGE values
                 prefix = _prefix_for_file(plan_staff_file)
                 badge_series = users_df['BADGE'].astype(str)
                 is_missing = users_df['BADGE'].isna() | badge_series.str.strip().eq('') | badge_series.str.lower().isin(['nan', 'none', 'null'])
@@ -83,22 +86,16 @@ def get_users_from_excel(plan_staff_file: str) -> list:
                 users_df.loc[is_missing, 'BADGE'] = [next(seq) for _ in range(is_missing.sum())]
 
         elif all(col in df.columns for col in newmont_cols):
-            # Classic Newmont layout: take Company ID as BADGE
             df_copy = df[newmont_cols].copy()
             df_copy['NAME'] = df_copy['Last Name'].astype(str).str.strip() + ', ' + df_copy['First Name'].astype(str).str.strip()
-            df_copy.rename(columns={
-                'Discipline': 'ROLE',
-                'Company ID': 'BADGE'
-            }, inplace=True)
+            df_copy.rename(columns={'Discipline': 'ROLE', 'Company ID': 'BADGE'}, inplace=True)
             users_df = df_copy[['NAME', 'ROLE', 'BADGE']]
 
-            # If Company ID is blank, generate BADGE
             if _is_blank_series(users_df['BADGE']):
                 prefix = _prefix_for_file(plan_staff_file)
                 users_df['BADGE'] = [f"{prefix}{i+1:05d}" for i in range(len(users_df))]
 
         else:
-            # Flexible attempt: if at least NAME and ROLE exist, generate BADGE
             if all(col in df.columns for col in ['NAME', 'ROLE']):
                 users_df = df[['NAME', 'ROLE']].copy()
                 prefix = _prefix_for_file(plan_staff_file)
@@ -108,34 +105,34 @@ def get_users_from_excel(plan_staff_file: str) -> list:
                 print(f"Expected RGM format ({rgm_cols}) or Newmont ({newmont_cols}).")
                 return []
 
-        # --- Normalization and cleanup ---
         users_df['NAME'] = users_df['NAME'].astype(str).str.strip()
         users_df['ROLE'] = users_df['ROLE'].astype(str).str.strip()
         users_df['BADGE'] = users_df['BADGE'].astype(str).str.strip()
 
-        # Remove rows without NAME or BADGE
         users_df = users_df[(users_df['NAME'] != '') & (users_df['BADGE'] != '')]
-
-        # Avoid duplicates by BADGE
         users_df.drop_duplicates(subset=['BADGE'], keep='first', inplace=True)
 
-        # Rename to lowercase for the DB
         users_df.rename(columns={'NAME': 'name', 'ROLE': 'role', 'BADGE': 'badge'}, inplace=True)
-
         return users_df.to_dict('records')
 
     except Exception as e:
         print(f"Error processing the Excel file: {e}")
         return []
 
+# --------------------------
+# Escritura/lectura de plan staff
+# --------------------------
 def update_plan_staff_excel(plan_staff_file: str, username: str, role: str, badge: str,
                             schedule_status: str, shift_type: str,
                             schedule_start: date, schedule_end: date):
     """
-    Update or create an entry for an employee in the given Excel file.
-    Fallback: if not found by BADGE, try by NAME (useful when Newmont does not provide BADGE).
+    Actualiza (o crea si no existe) la fila del empleado en el Excel de plan staff.
+    - Busca primero por BADGE y, si no lo encuentra, por NAME.
+    - Escribe ON/ON NS/OFF con sus colores.
+    - Si schedule_status es None (opción "Do Not Mark Days"), limpia el rango: deja celdas vacías y SIN color.
     """
     try:
+        # Abrir o crear libro
         if os.path.exists(plan_staff_file):
             workbook = openpyxl.load_workbook(plan_staff_file)
             sheet = workbook.active
@@ -144,18 +141,26 @@ def update_plan_staff_excel(plan_staff_file: str, username: str, role: str, badg
             sheet = workbook.active
             sheet.title = "Operations_best_opt"
             headers = ["TEAM", "ROLE", "NAME", "BADGE"]
-            sheet.append(headers)
+            for col_idx, h in enumerate(headers, start=1):
+                sheet.cell(row=1, column=col_idx).value = h
 
-        green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-        red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-        yellow_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
+        # Colores usados en la vista
+        green_fill  = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # ON (día)
+        red_fill    = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")  # OFF
+        yellow_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")  # ON NS (noche)
 
-        header_map = {cell.value: cell.column for cell in sheet[1]}
-        date_map = {cell.value.date() if isinstance(cell.value, datetime) else None: cell.column for cell in sheet[1]}
+        # Mapas de cabeceras (texto) y fechas (encabezados datetime)
+        header_map = {cell.value: cell.column for cell in sheet[1] if isinstance(cell.value, str)}
+        date_map = {}
+        for cell in sheet[1]:
+            v = cell.value
+            if isinstance(v, datetime):
+                date_map[v.date()] = cell.column  # solo fechas válidas
 
+        # Localizar fila del empleado
         employee_row_idx = None
 
-        # 1) Search by BADGE
+        # 1) Buscar por BADGE
         badge_col_idx = header_map.get("BADGE")
         if badge_col_idx:
             for i in range(2, sheet.max_row + 1):
@@ -164,7 +169,7 @@ def update_plan_staff_excel(plan_staff_file: str, username: str, role: str, badg
                     employee_row_idx = i
                     break
 
-        # 2) Fallback by NAME if not found by BADGE
+        # 2) Si no, por NAME
         if not employee_row_idx and "NAME" in header_map:
             name_col_idx = header_map["NAME"]
             for i in range(2, sheet.max_row + 1):
@@ -173,11 +178,11 @@ def update_plan_staff_excel(plan_staff_file: str, username: str, role: str, badg
                     employee_row_idx = i
                     break
 
-        # 3) If it doesn't exist, create a new row
+        # 3) Si no existe, crear nueva fila
         if not employee_row_idx:
             employee_row_idx = sheet.max_row + 1
 
-        # Write/update base data
+        # Escribir datos básicos (no cambia colores)
         if "NAME" in header_map:
             sheet.cell(row=employee_row_idx, column=header_map["NAME"]).value = username
         if "ROLE" in header_map:
@@ -185,32 +190,41 @@ def update_plan_staff_excel(plan_staff_file: str, username: str, role: str, badg
         if "BADGE" in header_map:
             sheet.cell(row=employee_row_idx, column=header_map["BADGE"]).value = badge
 
-        # Text/Color by status
+        # Determinar texto/estilo según estado
         cell_text = ""
         fill_color = None
-
         if schedule_status == "ON":
             if shift_type == "Night Shift":
                 cell_text = "ON NS"
                 fill_color = yellow_fill
-            else:  # Day Shift
+            else:
                 cell_text = "ON"
                 fill_color = green_fill
         elif schedule_status == "OFF":
             cell_text = "OFF"
             fill_color = red_fill
+        elif schedule_status is None:
+            # "Do Not Mark Days": limpiar texto y color en el rango
+            cell_text = None
+            fill_color = None
 
-        # Mark date range
-        if cell_text and schedule_start and schedule_end:
+        # Marcar (o limpiar) el rango indicado
+        if schedule_start and schedule_end:
             delta = schedule_end - schedule_start
             for i in range(delta.days + 1):
                 day_to_mark = schedule_start + timedelta(days=i)
                 if day_to_mark in date_map:
                     col_idx = date_map[day_to_mark]
                     cell_to_update = sheet.cell(row=employee_row_idx, column=col_idx)
-                    cell_to_update.value = cell_text
-                    if fill_color:
-                        cell_to_update.fill = fill_color
+                    if schedule_status is None:
+                        # LIMPIAR: sin texto y sin relleno
+                        cell_to_update.value = None
+                        cell_to_update.fill = PatternFill(fill_type=None)
+                    else:
+                        # ESCRIBIR: ON / ON NS / OFF
+                        cell_to_update.value = cell_text
+                        if fill_color:
+                            cell_to_update.fill = fill_color
 
         workbook.save(plan_staff_file)
         return True, f"{os.path.basename(plan_staff_file)} updated successfully."

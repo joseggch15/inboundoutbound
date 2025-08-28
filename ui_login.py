@@ -6,12 +6,12 @@ from PyQt6.QtCore import Qt, QTimer
 
 # --- ACCESS CREDENTIALS ---
 CREDENTIALS = {
-    "javier teheran": {
+    "javierteheran": {
         "password": "123",
         "role": "RGM",
         "excel_file": "PlanStaffRGM.xlsx"
     },
-    "miguel venegas": {
+    "miguelvenegas": {
         "password": "456",
         "role": "Newmont",
         "excel_file": "PlanStaffNewmont.xlsx"
