@@ -18,15 +18,11 @@ class MainWindow(QMainWindow):
 
     def __init__(self, user_role, excel_file):
         super().__init__()
-        self.user_role = user_role
+        self.user_role = user_role # RGM o Newmont. Se usará como 'source'
         self.excel_file = excel_file
-        # --- CAMBIO 1: Guardar el nombre del archivo como source_id ---
-        # Usaremos esto para filtrar los usuarios por su archivo de origen en la DB.
-        self.source_id = os.path.basename(excel_file)
-        
         self.setWindowTitle(f"👨‍✈️ Gestor de Operaciones - Perfil: {self.user_role}")
         self.setGeometry(100, 100, 1200, 800)
-        self.current_user_id = None # Para saber qué usuario se está editando en el CRUD
+        self.current_user_id = None
 
         db.setup_database()
 
@@ -36,8 +32,7 @@ class MainWindow(QMainWindow):
 
         top_layout = QHBoxLayout()
         title_label = QLabel(f"Gestor de Transporte y Operaciones ({self.user_role})")
-        font = title_label.font()
-        font.setPointSize(20); font.setBold(True)
+        font = title_label.font(); font.setPointSize(20); font.setBold(True)
         title_label.setFont(font)
         
         logout_button = QPushButton("🔒 Cerrar Sesión")
@@ -49,16 +44,13 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(logout_button)
         main_layout.addLayout(top_layout)
 
-        # --- Pestañas ---
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
 
-        # Pestaña 1: Plan Staff y Reportes
         self.plan_staff_tab = QWidget()
         self.tabs.addTab(self.plan_staff_tab, "📅 Plan Staff y Reportes")
         self.setup_plan_staff_ui()
 
-        # Pestaña 2: CRUD de Usuarios
         self.crud_tab = QWidget()
         self.tabs.addTab(self.crud_tab, "👥 CRUD Usuarios")
         self.setup_crud_ui()
@@ -66,22 +58,17 @@ class MainWindow(QMainWindow):
         self.refresh_ui_data()
 
     def setup_plan_staff_ui(self):
-        """Configura la interfaz de la pestaña 'Plan Staff y Reportes'."""
         layout = QVBoxLayout(self.plan_staff_tab)
         self.setup_schedule_preview_ui(layout)
-        
         forms_db_layout = QHBoxLayout()
         self.setup_registration_form_ui(forms_db_layout)
         self.setup_db_view_ui(forms_db_layout)
         layout.addLayout(forms_db_layout)
-        
         self.setup_report_generator_ui(layout)
 
     def setup_crud_ui(self):
-        """Configura la interfaz de la pestaña 'CRUD Usuarios'."""
         layout = QHBoxLayout(self.crud_tab)
         
-        # Formulario para CRUD
         form_layout = QGridLayout()
         self.crud_name_input = QLineEdit()
         self.crud_role_input = QLineEdit()
@@ -93,6 +80,9 @@ class MainWindow(QMainWindow):
         self.crud_new_button.clicked.connect(self.clear_crud_form)
         self.crud_delete_button = QPushButton("❌ Eliminar Usuario")
         self.crud_delete_button.clicked.connect(self.delete_crud_user)
+        
+        self.import_button = QPushButton("📥 Importar desde Excel")
+        self.import_button.clicked.connect(self.import_users_from_excel)
 
         form_layout.addWidget(QLabel("Nombre y Apellido:"), 0, 0)
         form_layout.addWidget(self.crud_name_input, 0, 1)
@@ -106,11 +96,11 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(self.crud_save_button)
         form_layout.addLayout(button_layout, 3, 0, 1, 2)
         form_layout.addWidget(self.crud_delete_button, 4, 0, 1, 2)
+        form_layout.addWidget(self.import_button, 5, 0, 1, 2)
 
         form_group = self.create_group_box("Gestionar Usuario", form_layout)
         form_group.setFixedWidth(400)
         
-        # Tabla de usuarios
         table_layout = QVBoxLayout()
         self.users_table = QTableWidget()
         self.users_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -118,7 +108,6 @@ class MainWindow(QMainWindow):
         table_layout.addWidget(self.users_table)
         
         table_group = self.create_group_box("Lista de Usuarios Registrados", table_layout)
-
         layout.addWidget(form_group)
         layout.addWidget(table_group)
 
@@ -173,13 +162,10 @@ class MainWindow(QMainWindow):
 
     def setup_registration_form_ui(self, parent_layout):
         form_layout = QGridLayout()
-        # --- NUEVO DROP DOWN DE USUARIOS ---
         self.user_selector_combo = QComboBox()
         self.user_selector_combo.currentIndexChanged.connect(self.autofill_user_data)
-        
         self.role_display = QLineEdit(); self.role_display.setReadOnly(True)
         self.badge_display = QLineEdit(); self.badge_display.setReadOnly(True)
-        
         self.shift_combo = QComboBox(); self.shift_combo.addItems(["Day Shift", "Night Shift"])
         self.on_radio = QRadioButton("ON"); self.off_radio = QRadioButton("OFF")
         self.none_radio = QRadioButton("No Marcar Días"); self.on_radio.setChecked(True)
@@ -192,7 +178,6 @@ class MainWindow(QMainWindow):
         self.end_date_edit.setDisplayFormat("dd/MM/yyyy")
         save_button = QPushButton("✅ Guardar Cambios en DB y Excel")
         save_button.clicked.connect(self.save_plan_changes)
-        
         form_layout.addWidget(QLabel("Seleccionar Empleado:"), 0, 0); form_layout.addWidget(self.user_selector_combo, 0, 1)
         form_layout.addWidget(QLabel("Rol/Departamento:"), 1, 0); form_layout.addWidget(self.role_display, 1, 1)
         form_layout.addWidget(QLabel("Badge (ID):"), 2, 0); form_layout.addWidget(self.badge_display, 2, 1)
@@ -202,7 +187,6 @@ class MainWindow(QMainWindow):
         form_layout.addWidget(QLabel("Fecha Inicio Período:"), 5, 0); form_layout.addWidget(self.start_date_edit, 5, 1)
         form_layout.addWidget(QLabel("Fecha Final Período:"), 6, 0); form_layout.addWidget(self.end_date_edit, 6, 1)
         form_layout.addWidget(save_button, 7, 0, 1, 2)
-        
         self.registration_groupbox = self.create_group_box("1. Registrar Horario de Empleado", form_layout)
         parent_layout.addWidget(self.registration_groupbox, 1)
 
@@ -212,20 +196,17 @@ class MainWindow(QMainWindow):
         role = self.role_display.text()
         start_date = self.start_date_edit.date().toPyDate()
         end_date = self.end_date_edit.date().toPyDate()
-
         if not username or username == "-- Seleccione un usuario --":
             QMessageBox.warning(self, "Datos incompletos", "Por favor, seleccione un empleado.")
             return
         if start_date > end_date:
             QMessageBox.warning(self, "Error de Fechas", "La fecha de inicio no puede ser posterior a la final.")
             return
-            
         schedule_status = "OFF"; shift_type = None
         if self.on_radio.isChecked():
             schedule_status = "ON"; shift_type = self.shift_combo.currentText()
         elif self.none_radio.isChecked():
             schedule_status = None
-
         db.add_operation(username, role, badge, start_date, end_date)
         success, message = excel.update_plan_staff_excel(
             self.excel_file, username, role, badge, schedule_status, shift_type, start_date, end_date
@@ -294,10 +275,8 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Error al Guardar", f"No se pudo guardar el archivo.\nError: {e}")
 
-    # --- Nuevas funciones para el CRUD ---
     def load_crud_users_table(self):
-        # --- CAMBIO 2: Pasar el source_id para filtrar los usuarios ---
-        self.users = db.get_all_users(self.source_id)
+        self.users = db.get_all_users(self.user_role)
         headers = ["ID", "Nombre", "Rol", "Badge"]
         self.users_table.setRowCount(len(self.users)); self.users_table.setColumnCount(len(headers))
         self.users_table.setHorizontalHeaderLabels(headers)
@@ -329,13 +308,10 @@ class MainWindow(QMainWindow):
         if not name or not role or not badge:
             QMessageBox.warning(self, "Datos Incompletos", "Todos los campos son obligatorios.")
             return
-        
-        # --- CAMBIO 3: Pasar el source_id al crear o actualizar ---
-        if self.current_user_id: # Actualizar
-            success, message = db.update_user(self.current_user_id, name, role, badge, self.source_id)
-        else: # Crear
-            success, message = db.add_user(name, role, badge, self.source_id)
-        
+        if self.current_user_id:
+            success, message = db.update_user(self.current_user_id, name, role, badge, self.user_role)
+        else:
+            success, message = db.add_user(name, role, badge, self.user_role)
         if success: QMessageBox.information(self, "Éxito", message)
         else: QMessageBox.warning(self, "Error", message)
         self.refresh_ui_data()
@@ -344,22 +320,18 @@ class MainWindow(QMainWindow):
         if not self.current_user_id:
             QMessageBox.warning(self, "Sin Selección", "Por favor, seleccione un usuario de la tabla para eliminar.")
             return
-        
         reply = QMessageBox.question(self, "Confirmar Eliminación", 
             f"¿Está seguro de que desea eliminar a {self.crud_name_input.text()}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
-        
         if reply == QMessageBox.StandardButton.Yes:
             success, message = db.delete_user(self.current_user_id)
             if success: QMessageBox.information(self, "Éxito", message)
             else: QMessageBox.warning(self, "Error", message)
             self.refresh_ui_data()
 
-    # --- Nuevas funciones para el selector de usuario ---
     def load_users_to_selector(self):
         self.user_selector_combo.clear()
-        # --- CAMBIO 4: Pasar el source_id también aquí ---
-        self.users_for_selector = db.get_all_users(self.source_id)
+        self.users_for_selector = db.get_all_users(self.user_role)
         self.user_selector_combo.addItem("-- Seleccione un usuario --")
         for user in self.users_for_selector:
             self.user_selector_combo.addItem(user['name'])
@@ -372,3 +344,21 @@ class MainWindow(QMainWindow):
         else:
             self.role_display.clear()
             self.badge_display.clear()
+
+    def import_users_from_excel(self):
+        """
+        Importa usuarios desde el archivo Excel a la base de datos usando una
+        operación en bloque para evitar bloqueos de la base de datos.
+        """
+        users = excel.get_users_from_excel(self.excel_file)
+        if not users:
+            QMessageBox.warning(self, "Importación Fallida", "No se encontraron usuarios en el archivo Excel o el archivo no se pudo leer.")
+            return
+        
+        added_count = db.add_users_bulk(users, self.user_role)
+        skipped_count = len(users) - added_count
+        
+        QMessageBox.information(self, "Importación Completa", 
+            f"Se importaron {added_count} nuevos usuarios.\nSe omitieron {skipped_count} usuarios que ya existían.")
+        
+        self.refresh_ui_data()

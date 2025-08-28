@@ -21,6 +21,41 @@ def get_roles_from_excel(plan_staff_file: str) -> list:
         print(f"Error al leer roles de Excel: {e}")
         return ["Error al leer Excel"]
 
+def get_users_from_excel(plan_staff_file: str) -> list:
+    """
+    Extrae una lista de usuarios (Nombre, Rol, Badge) del archivo Excel.
+    Se asegura de que no haya duplicados basados en el 'BADGE'.
+    """
+    if not os.path.exists(plan_staff_file):
+        print(f"Archivo para importación no encontrado: {plan_staff_file}")
+        return []
+    try:
+        df = pd.read_excel(plan_staff_file, engine='openpyxl')
+        
+        required_cols = ['NAME', 'ROLE', 'BADGE']
+        if not all(col in df.columns for col in required_cols):
+            print(f"Faltan columnas requeridas para importar usuarios. Se necesitan: {required_cols}")
+            return []
+
+        # Seleccionar, limpiar y eliminar duplicados
+        users_df = df[required_cols].copy()
+        users_df.dropna(subset=['NAME', 'BADGE'], inplace=True)
+        users_df = users_df[users_df['NAME'].str.strip() != '']
+        users_df.drop_duplicates(subset=['BADGE'], keep='first', inplace=True)
+        
+        # Asegurarse de que los datos tienen el tipo correcto
+        users_df['BADGE'] = users_df['BADGE'].astype(str)
+        users_df['ROLE'] = users_df['ROLE'].fillna('N/A')
+
+        # Renombrar columnas para que coincidan con los parámetros de la base de datos
+        users_df.rename(columns={'NAME': 'name', 'ROLE': 'role', 'BADGE': 'badge'}, inplace=True)
+
+        return users_df.to_dict('records')
+
+    except Exception as e:
+        print(f"Error al leer usuarios de Excel: {e}")
+        return []
+
 def update_plan_staff_excel(plan_staff_file: str, username: str, role: str, badge: str,
                               schedule_status: str, shift_type: str, 
                               schedule_start: date, schedule_end: date):

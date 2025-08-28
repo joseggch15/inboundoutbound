@@ -1,127 +1,145 @@
 import sqlite3
 from datetime import date
 
-DB_NAME = "transporte_operaciones.db"
+DB_FILE = 'transporte_operaciones.db'
 
 def setup_database():
-    """
-    Prepara la base de datos. Crea las tablas 'operations' y 'users' 
-    y se asegura de que la tabla 'users' tenga la columna 'source'.
-    """
-    conn = sqlite3.connect(DB_NAME)
+    """Crea las tablas de la base de datos si no existen."""
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    cursor.execute("""
+    # Tabla para usuarios (personal)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            role TEXT,
+            badge TEXT UNIQUE NOT NULL,
+            source TEXT NOT NULL
+        )
+    ''')
+    
+    # Tabla para el historial de operaciones/rotaciones
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS operations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,
             role TEXT,
             badge TEXT,
-            start_date DATE NOT NULL,
-            end_date DATE NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL
         )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            role TEXT,
-            badge TEXT,
-            source TEXT,
-            UNIQUE(name, source),
-            UNIQUE(badge, source)
-        )
-    """)
+    ''')
     conn.commit()
     conn.close()
 
-# --- Funciones para CRUD de Usuarios ---
-
-def add_user(name: str, role: str, badge: str, source: str) -> tuple:
-    """Añade un nuevo usuario a la tabla 'users' con su fuente (source)."""
+def add_user(name: str, role: str, badge: str, source: str) -> (bool, str):
+    """Añade un nuevo usuario a la base de datos."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
     try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
         cursor.execute("INSERT INTO users (name, role, badge, source) VALUES (?, ?, ?, ?)", (name, role, badge, source))
         conn.commit()
+        return True, f"Usuario {name} añadido exitosamente."
+    except sqlite3.IntegrityError:
+        return False, f"Error: El badge '{badge}' ya existe en la base de datos."
+    except sqlite3.Error as e:
+        return False, f"Error de base de datos: {e}"
+    finally:
         conn.close()
-        return True, "Usuario añadido exitosamente."
-    except sqlite3.IntegrityError as e:
-        return False, f"Error: El nombre o el badge ya existen para {source}. ({e})"
 
 def add_users_bulk(users: list, source: str) -> int:
-    """
-    Añade una lista de usuarios a la base de datos en una sola transacción,
-    asociándolos a una fuente (source).
-    """
-    conn = sqlite3.connect(DB_NAME)
+    """Añade una lista de usuarios a la base de datos, evitando duplicados por 'badge'."""
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    user_data = [(user['NAME'], user['ROLE'], str(user['BADGE']), source) for user in users]
+    cursor.execute("SELECT badge FROM users WHERE source = ?", (source,))
+    existing_badges = {row[0] for row in cursor.fetchall()}
     
-    cursor.executemany("INSERT OR IGNORE INTO users (name, role, badge, source) VALUES (?, ?, ?, ?)", user_data)
+    new_users = [user for user in users if str(user.get('badge')) not in existing_badges]
     
-    added_rows = cursor.rowcount
-    conn.commit()
-    conn.close()
-    return added_rows
+    if not new_users:
+        conn.close()
+        return 0
+
+    # CORRECCIÓN: Se usan las claves en minúscula ('name', 'role', 'badge') para que coincidan
+    # con los datos procesados por excel_logic.py
+    user_data = [(user['name'], user['role'], str(user['badge']), source) for user in new_users]
+    
+    try:
+        cursor.executemany("INSERT INTO users (name, role, badge, source) VALUES (?, ?, ?, ?)", user_data)
+        conn.commit()
+        added_count = cursor.rowcount
+    except sqlite3.Error as e:
+        print(f"Error en la base de datos al añadir usuarios en bloque: {e}")
+        added_count = 0
+    finally:
+        conn.close()
+        
+    return added_count
 
 def get_all_users(source: str) -> list:
-    """Obtiene todos los usuarios de una fuente específica, ordenados por nombre."""
-    conn = sqlite3.connect(DB_NAME)
+    """Obtiene todos los usuarios de la base de datos para una fuente específica."""
+    conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("SELECT id, name, role, badge FROM users WHERE source = ? ORDER BY name", (source,))
-    records = [dict(row) for row in cursor.fetchall()]
+    users = [dict(row) for row in cursor.fetchall()]
     conn.close()
-    return records
+    return users
 
-def update_user(user_id: int, name: str, role: str, badge: str, source: str) -> tuple:
-    """Actualiza un usuario existente."""
+def update_user(user_id: int, name: str, role: str, badge: str, source: str) -> (bool, str):
+    """Actualiza los datos de un usuario existente."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
     try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE users SET name = ?, role = ?, badge = ? WHERE id = ? AND source = ?",
-            (name, role, badge, user_id, source)
-        )
+        # Verificar si el nuevo badge ya está en uso por OTRO usuario de la misma fuente
+        cursor.execute("SELECT id FROM users WHERE badge = ? AND source = ? AND id != ?", (badge, source, user_id))
+        if cursor.fetchone():
+            return False, f"Error: El badge '{badge}' ya está asignado a otro usuario."
+        
+        cursor.execute("UPDATE users SET name = ?, role = ?, badge = ? WHERE id = ?", (name, role, badge, user_id))
         conn.commit()
+        if cursor.rowcount > 0:
+            return True, f"Usuario {name} actualizado exitosamente."
+        else:
+            return False, "Error: No se encontró el usuario para actualizar."
+    except sqlite3.Error as e:
+        return False, f"Error de base de datos: {e}"
+    finally:
         conn.close()
-        return True, "Usuario actualizado exitosamente."
-    except sqlite3.IntegrityError as e:
-        return False, f"Error: El nombre o el badge ya existen para {source}. ({e})"
 
-def delete_user(user_id: int) -> tuple:
-    """Elimina un usuario de la tabla 'users'."""
+def delete_user(user_id: int) -> (bool, str):
+    """Elimina un usuario de la base de datos."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
     try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
         cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()
+        if cursor.rowcount > 0:
+            return True, "Usuario eliminado exitosamente."
+        else:
+            return False, "Error: No se encontró el usuario para eliminar."
+    except sqlite3.Error as e:
+        return False, f"Error de base de datos: {e}"
+    finally:
         conn.close()
-        return True, "Usuario eliminado exitosamente."
-    except Exception as e:
-        return False, f"Error al eliminar el usuario: {e}"
-
-# --- Funciones para Operaciones (Plan Staff) ---
 
 def add_operation(username: str, role: str, badge: str, start_date: date, end_date: date):
-    conn = sqlite3.connect(DB_NAME)
+    """Añade un registro de operación (rotación) a la base de datos."""
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO operations (username, role, badge, start_date, end_date) VALUES (?, ?, ?, ?, ?)",
-        (username, role, badge, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
-    )
+    cursor.execute("INSERT INTO operations (username, role, badge, start_date, end_date) VALUES (?, ?, ?, ?, ?)",
+                   (username, role, badge, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')))
     conn.commit()
     conn.close()
 
 def get_all_operations() -> list:
-    conn = sqlite3.connect(DB_NAME)
+    """Obtiene todos los registros de operaciones de la base de datos."""
+    conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, role, badge, start_date, end_date FROM operations ORDER BY id DESC")
-    records = [dict(row) for row in cursor.fetchall()]
+    cursor.execute("SELECT * FROM operations ORDER BY start_date DESC")
+    operations = [dict(row) for row in cursor.fetchall()]
     conn.close()
-    return records
+    return operations
