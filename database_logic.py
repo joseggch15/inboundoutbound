@@ -1,5 +1,6 @@
 import sqlite3
 from datetime import date
+from typing import Tuple
 
 DB_FILE = 'transporte_operaciones.db'
 
@@ -33,7 +34,7 @@ def setup_database():
     conn.commit()
     conn.close()
 
-def add_user(name: str, role: str, badge: str, source: str) -> (bool, str):
+def add_user(name: str, role: str, badge: str, source: str) -> Tuple[bool, str]:
     """Añade un nuevo usuario a la base de datos."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -62,8 +63,6 @@ def add_users_bulk(users: list, source: str) -> int:
         conn.close()
         return 0
 
-    # CORRECCIÓN: Se usan las claves en minúscula ('name', 'role', 'badge') para que coincidan
-    # con los datos procesados por excel_logic.py
     user_data = [(user['name'], user['role'], str(user['badge']), source) for user in new_users]
     
     try:
@@ -88,7 +87,7 @@ def get_all_users(source: str) -> list:
     conn.close()
     return users
 
-def update_user(user_id: int, name: str, role: str, badge: str, source: str) -> (bool, str):
+def update_user(user_id: int, name: str, role: str, badge: str, source: str) -> Tuple[bool, str]:
     """Actualiza los datos de un usuario existente."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -109,7 +108,7 @@ def update_user(user_id: int, name: str, role: str, badge: str, source: str) -> 
     finally:
         conn.close()
 
-def delete_user(user_id: int) -> (bool, str):
+def delete_user(user_id: int) -> Tuple[bool, str]:
     """Elimina un usuario de la base de datos."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()

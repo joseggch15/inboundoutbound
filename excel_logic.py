@@ -5,6 +5,23 @@ import openpyxl
 from openpyxl.styles import PatternFill
 import os
 
+def _is_blank_series(s: pd.Series) -> bool:
+    """Devuelve True si toda la serie es NaN o strings vacíos."""
+    if s is None:
+        return True
+    if s.isna().all():
+        return True
+    # convertimos a string para capturar '', 'nan', 'None', etc.
+    s_str = s.astype(str).str.strip().str.lower()
+    return (s_str.eq('') | s_str.eq('nan') | s_str.eq('none') | s_str.eq('null')).all()
+
+def _prefix_for_file(plan_staff_file: str) -> str:
+    """Prefijo de BADGE según el archivo (NM para Newmont por defecto)."""
+    base = os.path.basename(plan_staff_file).lower()
+    if 'newmont' in base:
+        return 'NM'
+    return 'ID'
+
 def get_roles_from_excel(plan_staff_file: str) -> list:
     """Obtiene la lista de roles únicos desde el archivo Excel especificado."""
     if not os.path.exists(plan_staff_file):
@@ -12,10 +29,19 @@ def get_roles_from_excel(plan_staff_file: str) -> list:
     try:
         workbook = openpyxl.load_workbook(plan_staff_file, read_only=True, data_only=True)
         sheet = workbook.active
+
+        # Mapeo flexible: ROLE (RGM) o Discipline (algunos layouts de Newmont)
         header_map = {cell.value: cell.column for cell in sheet[1]}
-        if "ROLE" not in header_map: return ["Columna ROLE no encontrada"]
-        role_col_idx = header_map["ROLE"]
-        roles = {sheet.cell(row=i, column=role_col_idx).value for i in range(2, sheet.max_row + 1) if sheet.cell(row=i, column=role_col_idx).value}
+        role_header = "ROLE" if "ROLE" in header_map else ("Discipline" if "Discipline" in header_map else None)
+        if not role_header:
+            return ["Columna ROLE/Discipline no encontrada"]
+
+        role_col_idx = header_map[role_header]
+        roles = {
+            sheet.cell(row=i, column=role_col_idx).value
+            for i in range(2, sheet.max_row + 1)
+            if sheet.cell(row=i, column=role_col_idx).value
+        }
         return sorted(list(roles))
     except Exception as e:
         print(f"Error al leer roles de Excel: {e}")
@@ -23,43 +49,93 @@ def get_roles_from_excel(plan_staff_file: str) -> list:
 
 def get_users_from_excel(plan_staff_file: str) -> list:
     """
-    Extrae una lista de usuarios (Nombre, Rol, Badge) del archivo Excel.
-    Se asegura de que no haya duplicados basados en el 'BADGE'.
+    Extrae una lista de usuarios (name, role, badge) del archivo Excel.
+    - Acepta formato RGM (NAME, ROLE, BADGE).
+    - Acepta formato Newmont (Last Name, First Name, Discipline, Company ID).
+    - Si el BADGE no existe o está en blanco (ej. Newmont), se GENERA uno estable con prefijo 'NM'.
     """
     if not os.path.exists(plan_staff_file):
         print(f"Archivo para importación no encontrado: {plan_staff_file}")
         return []
     try:
         df = pd.read_excel(plan_staff_file, engine='openpyxl')
-        
-        required_cols = ['NAME', 'ROLE', 'BADGE']
-        if not all(col in df.columns for col in required_cols):
-            print(f"Faltan columnas requeridas para importar usuarios. Se necesitan: {required_cols}")
-            return []
 
-        # Seleccionar, limpiar y eliminar duplicados
-        users_df = df[required_cols].copy()
-        users_df.dropna(subset=['NAME', 'BADGE'], inplace=True)
-        users_df = users_df[users_df['NAME'].str.strip() != '']
+        # Layouts esperados
+        rgm_cols = ['NAME', 'ROLE', 'BADGE']
+        newmont_cols = ['Last Name', 'First Name', 'Discipline', 'Company ID']
+
+        users_df = None
+
+        if all(col in df.columns for col in rgm_cols):
+            # Tenemos NAME/ROLE/BADGE (estilo RGM o Newmont "parecido" a RGM)
+            users_df = df[rgm_cols].copy()
+
+            # Si BADGE está completamente vacío → generamos
+            if _is_blank_series(users_df['BADGE']):
+                prefix = _prefix_for_file(plan_staff_file)
+                users_df['BADGE'] = [f"{prefix}{i+1:05d}" for i in range(len(users_df))]
+            else:
+                # Rellenamos sólo los BADGE faltantes
+                prefix = _prefix_for_file(plan_staff_file)
+                badge_series = users_df['BADGE'].astype(str)
+                is_missing = users_df['BADGE'].isna() | badge_series.str.strip().eq('') | badge_series.str.lower().isin(['nan', 'none', 'null'])
+                # Generamos sólo para los faltantes
+                seq = (f"{prefix}{i+1:05d}" for i in range(is_missing.sum()))
+                users_df.loc[is_missing, 'BADGE'] = [next(seq) for _ in range(is_missing.sum())]
+
+        elif all(col in df.columns for col in newmont_cols):
+            # Layout Newmont "clásico": tomamos Company ID como BADGE
+            df_copy = df[newmont_cols].copy()
+            df_copy['NAME'] = df_copy['Last Name'].astype(str).str.strip() + ', ' + df_copy['First Name'].astype(str).str.strip()
+            df_copy.rename(columns={
+                'Discipline': 'ROLE',
+                'Company ID': 'BADGE'
+            }, inplace=True)
+            users_df = df_copy[['NAME', 'ROLE', 'BADGE']]
+
+            # Si Company ID viene vacío, generamos BADGE
+            if _is_blank_series(users_df['BADGE']):
+                prefix = _prefix_for_file(plan_staff_file)
+                users_df['BADGE'] = [f"{prefix}{i+1:05d}" for i in range(len(users_df))]
+
+        else:
+            # Intento flexible: si al menos existen NAME y ROLE, generamos BADGE
+            if all(col in df.columns for col in ['NAME', 'ROLE']):
+                users_df = df[['NAME', 'ROLE']].copy()
+                prefix = _prefix_for_file(plan_staff_file)
+                users_df['BADGE'] = [f"{prefix}{i+1:05d}" for i in range(len(users_df))]
+            else:
+                print(f"Error: Las columnas requeridas no se encontraron en {os.path.basename(plan_staff_file)}.")
+                print(f"Se esperaba el formato RGM ({rgm_cols}) o Newmont ({newmont_cols}).")
+                return []
+
+        # --- Normalización y limpieza ---
+        users_df['NAME'] = users_df['NAME'].astype(str).str.strip()
+        users_df['ROLE'] = users_df['ROLE'].astype(str).str.strip()
+        users_df['BADGE'] = users_df['BADGE'].astype(str).str.strip()
+
+        # Eliminamos filas sin NAME o BADGE (ya con BADGE generado no deberían quedar)
+        users_df = users_df[(users_df['NAME'] != '') & (users_df['BADGE'] != '')]
+
+        # Evitar duplicados por BADGE
         users_df.drop_duplicates(subset=['BADGE'], keep='first', inplace=True)
-        
-        # Asegurarse de que los datos tienen el tipo correcto
-        users_df['BADGE'] = users_df['BADGE'].astype(str)
-        users_df['ROLE'] = users_df['ROLE'].fillna('N/A')
 
-        # Renombrar columnas para que coincidan con los parámetros de la base de datos
+        # Renombrado a minúsculas para la DB
         users_df.rename(columns={'NAME': 'name', 'ROLE': 'role', 'BADGE': 'badge'}, inplace=True)
 
         return users_df.to_dict('records')
 
     except Exception as e:
-        print(f"Error al leer usuarios de Excel: {e}")
+        print(f"Error al procesar el archivo Excel: {e}")
         return []
 
 def update_plan_staff_excel(plan_staff_file: str, username: str, role: str, badge: str,
                               schedule_status: str, shift_type: str, 
                               schedule_start: date, schedule_end: date):
-    """Actualiza o crea una entrada para un empleado en el archivo Excel especificado."""
+    """
+    Actualiza o crea una entrada para un empleado en el archivo Excel especificado.
+    Fallback: si no se encuentra por BADGE, intenta por NAME (útil cuando Newmont no trae BADGE).
+    """
     try:
         if os.path.exists(plan_staff_file):
             workbook = openpyxl.load_workbook(plan_staff_file)
@@ -79,6 +155,8 @@ def update_plan_staff_excel(plan_staff_file: str, username: str, role: str, badg
         date_map = {cell.value.date() if isinstance(cell.value, datetime) else None: cell.column for cell in sheet[1]}
         
         employee_row_idx = None
+
+        # 1) Búsqueda por BADGE
         badge_col_idx = header_map.get("BADGE")
         if badge_col_idx:
             for i in range(2, sheet.max_row + 1):
@@ -86,10 +164,21 @@ def update_plan_staff_excel(plan_staff_file: str, username: str, role: str, badg
                 if cell_value and str(cell_value) == str(badge):
                     employee_row_idx = i
                     break
-        
+
+        # 2) Fallback por NAME si no se encontró por BADGE
+        if not employee_row_idx and "NAME" in header_map:
+            name_col_idx = header_map["NAME"]
+            for i in range(2, sheet.max_row + 1):
+                cell_value = sheet.cell(row=i, column=name_col_idx).value
+                if cell_value and str(cell_value).strip().lower() == str(username).strip().lower():
+                    employee_row_idx = i
+                    break
+
+        # 3) Si no existe, crear nueva fila
         if not employee_row_idx:
             employee_row_idx = sheet.max_row + 1
 
+        # Escribimos/actualizamos los datos base
         if "NAME" in header_map:
             sheet.cell(row=employee_row_idx, column=header_map["NAME"]).value = username
         if "ROLE" in header_map:
@@ -97,6 +186,7 @@ def update_plan_staff_excel(plan_staff_file: str, username: str, role: str, badg
         if "BADGE" in header_map:
             sheet.cell(row=employee_row_idx, column=header_map["BADGE"]).value = badge
         
+        # Texto/Color por estado
         cell_text = ""
         fill_color = None
 
@@ -104,13 +194,14 @@ def update_plan_staff_excel(plan_staff_file: str, username: str, role: str, badg
             if shift_type == "Night Shift":
                 cell_text = "ON NS" 
                 fill_color = yellow_fill 
-            else: # Day Shift
+            else:  # Day Shift
                 cell_text = "ON"
                 fill_color = green_fill
         elif schedule_status == "OFF":
             cell_text = "OFF"
             fill_color = red_fill
         
+        # Marcar rango de días
         if cell_text and schedule_start and schedule_end:
             delta = schedule_end - schedule_start
             for i in range(delta.days + 1):
