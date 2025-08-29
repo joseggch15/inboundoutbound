@@ -94,9 +94,14 @@ def get_audit_log(source: Optional[str] = None) -> List[Dict]:
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     if source:
-        cursor.execute("SELECT ts, username, source, action_type, detail FROM audit_log WHERE source = ? ORDER BY ts DESC", (source,))
+        cursor.execute(
+            "SELECT ts, username, source, action_type, detail FROM audit_log "
+            "WHERE source = ? ORDER BY ts DESC",
+            (source,))
     else:
-        cursor.execute("SELECT ts, username, source, action_type, detail FROM audit_log ORDER BY ts DESC")
+        cursor.execute(
+            "SELECT ts, username, source, action_type, detail FROM audit_log "
+            "ORDER BY ts DESC")
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return rows
@@ -143,6 +148,7 @@ def add_users_bulk(users: list, source: str) -> int:
 
     user_data = [(user['name'], user['role'], str(user['badge']), source) for user in new_users]
 
+    added_count = 0
     try:
         cursor.executemany(
             "INSERT INTO users (name, role, badge, source) VALUES (?, ?, ?, ?)",
@@ -151,8 +157,9 @@ def add_users_bulk(users: list, source: str) -> int:
         conn.commit()
         added_count = cursor.rowcount if cursor.rowcount is not None else len(new_users)
     except sqlite3.Error as e:
+        # En caso de conflicto global de UNIQUE(badge), se omiten esos registros.
+        # No abortamos la app.
         print(f"Database error when adding users in bulk: {e}")
-        added_count = 0
     finally:
         conn.close()
 

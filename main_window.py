@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QComboBox, QDateEdit, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QGroupBox, QRadioButton, QMessageBox, QFileDialog,
-    QTabWidget
+    QTabWidget, QApplication
 )
 from PyQt6.QtCore import QDate, Qt, pyqtSignal
 from PyQt6.QtGui import QColor
@@ -24,6 +24,18 @@ def create_group_box(title: str, inner_layout) -> QGroupBox:
     box.setFont(font)
     box.setLayout(inner_layout)
     return box
+
+
+def _clean(value) -> str:
+    """
+    FR-07: limpia celdas para la UI: None/NaN/'nan'/'null' -> ''
+    """
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if s.lower() in ("nan", "none", "null"):
+        return ""
+    return s
 
 
 # -------------------------------------------------------------
@@ -164,12 +176,14 @@ class PlanStaffWidget(QWidget):
 
         for i, row in df.iterrows():
             for j, val in enumerate(row):
-                item = QTableWidgetItem(str(val))
+                text = _clean(val)  # FR-07
+                item = QTableWidgetItem(text)
+
                 if j < actual_frozen_count:
                     self.frozen_table.setItem(i, j, item)
                 else:
                     col_index = j - actual_frozen_count
-                    val_str = str(val).upper()
+                    val_str = text.upper()  # Usar texto ya saneado
                     if 'ON NS' in val_str or 'NIGHT' in val_str:
                         item.setBackground(QColor("#FFFF99"))
                     elif 'ON' in val_str or 'DAY' in val_str or val_str.isdigit():
@@ -202,11 +216,21 @@ class PlanStaffWidget(QWidget):
         self.db_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
     def load_users_to_selector(self):
+        self.user_selector_combo.blockSignals(True)
         self.user_selector_combo.clear()
         self.users_for_selector = db.get_all_users(self.source)
         self.user_selector_combo.addItem("-- Select a user --")
         for user in self.users_for_selector:
             self.user_selector_combo.addItem(user['name'])
+        self.user_selector_combo.setCurrentIndex(0)
+        self.user_selector_combo.blockSignals(False)
+        # limpiar campos dependientes
+        self.role_display.clear()
+        self.badge_display.clear()
+
+    def refresh_users_only(self):
+        """Repuebla SOLO el combo de usuarios (para sincronización instantánea)."""
+        self.load_users_to_selector()
 
     def autofill_user_data(self, index):
         if index > 0:
@@ -380,8 +404,9 @@ class PlanStaffWidget(QWidget):
 # Widget: CRUD de usuarios (con Import desde Excel)
 # -------------------------------------------------------------
 class CrudWidget(QWidget):
-    # Señal para sincronización inmediata de UI (FR de sincronización)
-    import_done = pyqtSignal(str)  # emite el 'source' cuando termina el import
+    # Señales para sincronización inmediata de UI
+    import_done = pyqtSignal(str)   # emite el 'source' cuando termina el import
+    users_changed = pyqtSignal(str) # emite el 'source' cuando cambia el listado de usuarios (crear/editar/elim)
 
     def __init__(self, source: str, excel_file: str, logged_username: str):
         super().__init__()
@@ -495,6 +520,8 @@ class CrudWidget(QWidget):
         box.exec()
 
         self.refresh_ui_data()
+        # 🔔 sincronizar combo en Plan Staff
+        self.users_changed.emit(self.source)
 
     def delete_crud_user(self):
         if not self.current_user_id:
@@ -523,28 +550,34 @@ class CrudWidget(QWidget):
             box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
             box.exec()
             self.refresh_ui_data()
+            # 🔔 sincronizar combo en Plan Staff
+            self.users_changed.emit(self.source)
 
     def import_users_from_excel(self):
         """
         FR-02: Import users and day-by-day schedules from Excel to DB.
-        Sincroniza UI en caliente (emite señal import_done).
+        Sincroniza UI en caliente (emite señal users_changed + import_done).
         """
         inserted, skipped, upserts = excel.import_excel_to_db(self.excel_file, self.source)
 
         # Log de auditoría (FR-04)
-        db.log_event(self.logged_username, self.source, "DATA_IMPORT", f"users_inserted={inserted}; users_skipped={skipped}; schedule_upserts={upserts}")
+        db.log_event(self.logged_username, self.source, "DATA_IMPORT",
+                     f"users_inserted={inserted}; users_skipped={skipped}; schedule_upserts={upserts}")
 
         # Mensaje al usuario
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Information)
         box.setWindowTitle("Import Complete")
-        box.setText(f"Imported {inserted} new users.\nSkipped {skipped} users that already existed.\nUpserted {upserts} schedule day-entries.")
+        box.setText(f"Imported {inserted} new users.\n"
+                    f"Skipped {skipped} users that already existed.\n"
+                    f"Upserted {upserts} schedule day-entries.")
         box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
         box.exec()
 
         # Refrescar tabla de usuarios inmediatamente
         self.refresh_ui_data()
-        # 🔔 Señal para refrescar el combo "Select Employee" en Plan Staff
+        # 🔔 Señales para refrescar el combo "Select Employee" en Plan Staff
+        self.users_changed.emit(self.source)
         self.import_done.emit(self.source)
 
     def refresh_ui_data(self):
@@ -639,8 +672,14 @@ class MainWindow(QMainWindow):
         self.crud_widget = CrudWidget(self.user_role, self.excel_file, self.logged_username)
         tabs.addTab(self.crud_widget, "👥 Users (CRUD)")
 
-        # 🔗 Conexión para refrescar "Select Employee" inmediatamente tras Import
-        self.crud_widget.import_done.connect(lambda src: self.plan_widget.refresh_ui_data())
+        # 🔗 Conexiones para refrescar "Select Employee" inmediatamente
+        self.crud_widget.users_changed.connect(self._sync_after_users_changed)
+        self.crud_widget.import_done.connect(self._sync_after_users_changed)
+
+    def _sync_after_users_changed(self, src: str):
+        if src == self.user_role:
+            self.plan_widget.refresh_users_only()
+            QApplication.processEvents()  # asegura que la UI se repinta
 
     def handle_logout(self):
         self.logout_signal.emit()
@@ -658,7 +697,8 @@ class AdminMainWindow(QMainWindow):
         self.logged_username = logged_username or "admin"
 
         db.setup_database()
-        db.log_event(self.logged_username, "Administrator", "USER_LOGIN", f"Access to admin console | RGM={rgm_excel} | Newmont={newmont_excel}")
+        db.log_event(self.logged_username, "Administrator", "USER_LOGIN",
+                     f"Access to admin console | RGM={rgm_excel} | Newmont={newmont_excel}")
 
         self.setWindowTitle(f"🛡️ Administrator Console | User: {self.logged_username}")
         self.setGeometry(100, 100, 1400, 900)
@@ -712,8 +752,11 @@ class AdminMainWindow(QMainWindow):
         self.tabs.addTab(audit_all, "📝 Audit Log")
 
         # 🔗 Sincronización en caliente para Admin (cada CRUD refresca su Plan Staff)
-        self.rgm_crud.import_done.connect(lambda src: self.rgm_plan.refresh_ui_data())
-        self.nm_crud.import_done.connect(lambda src: self.nm_plan.refresh_ui_data())
+        self.rgm_crud.users_changed.connect(lambda src: self.rgm_plan.refresh_users_only())
+        self.rgm_crud.import_done.connect(lambda src: self.rgm_plan.refresh_users_only())
+
+        self.nm_crud.users_changed.connect(lambda src: self.nm_plan.refresh_users_only())
+        self.nm_crud.import_done.connect(lambda src: self.nm_plan.refresh_users_only())
 
     def handle_logout(self):
         self.logout_signal.emit()

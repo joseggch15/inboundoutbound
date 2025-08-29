@@ -34,7 +34,7 @@ def _normalize_status(v: object) -> Tuple[Optional[str], Optional[str]]:
     - Valores numéricos o 'OK' se consideran ON (día).
     - 'ON' -> ON (día)
     - 'ON NS' o 'NIGHT' -> ON NS (noche)
-    - 'OFF', 'Break', 'KO' -> OFF
+    - 'OFF', 'Break', 'KO', 'Leave' -> OFF
     - Cualquier otro valor -> None (ignorar)
     """
     if v is None:
@@ -78,6 +78,7 @@ def _to_pydate(col) -> Optional[date]:
 def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
     """
     Carga un DataFrame con columnas: ROLE, NAME, BADGE y columnas fecha.
+    Aplica FR-07: limpia NaN/None en celdas de fechas para no mostrar 'nan'.
     Si el archivo no existe o falla, retorna df vacío.
     """
     if not os.path.exists(plan_staff_file):
@@ -94,7 +95,8 @@ def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
         # Normalizar a ROLE/NAME/BADGE si vienen en formato Newmont
         if "Discipline" in base_cols and "Company ID" in base_cols:
             df["ROLE"] = df["Discipline"]
-            base_cols.append("ROLE")
+            if "BADGE" not in df.columns and "Company ID" in df.columns:
+                df["BADGE"] = df["Company ID"]
         # Fechas
         date_cols = [c for c in cols if _is_date_header(c)]
         keep = []
@@ -110,7 +112,17 @@ def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
         keep += date_cols
         if not keep:
             return pd.DataFrame()
-        return df[keep]
+
+        df_out = df[keep].copy()
+
+        # FR-07: limpiar NaN/None -> '' SOLO para visualización en la UI (no altera importación)
+        for c in date_cols:
+            if c in df_out.columns:
+                df_out[c] = df_out[c].apply(
+                    lambda v: "" if (v is None or str(v).strip().lower() in ("nan", "none", "null")) else v
+                )
+
+        return df_out
     except Exception:
         return pd.DataFrame()
 
@@ -170,7 +182,7 @@ def get_users_from_excel(plan_staff_file: str) -> list:
 
         elif all(col in df.columns for col in newmont_cols):
             df_copy = df[newmont_cols].copy()
-            df_copy['NAME'] = df_copy['Last Name'].astype(str).strip() + ', ' + df_copy['First Name'].astype(str).strip()
+            df_copy['NAME'] = df_copy['Last Name'].astype(str).str.strip() + ', ' + df_copy['First Name'].astype(str).str.strip()
             df_copy.rename(columns={'Discipline': 'ROLE', 'Company ID': 'BADGE'}, inplace=True)
             users_df = df_copy[['NAME', 'ROLE', 'BADGE']]
             if _is_blank_series(users_df['BADGE']):
@@ -489,25 +501,44 @@ def export_plan_from_db(template_path: str, users: List[Dict], schedules: List[D
 # ---------------------------------------
 def generate_transport_report(plan_staff_file: str, start_date: date, end_date: date) -> Tuple[bytes, str]:
     """
-    Genera un archivo Excel simple (bytes) con dos bloques "IN/OUT" en la hoja 'travel list'.
-    Este método es robusto y no depende del formato exacto del template.
+    Genera un archivo Excel sencillo (bytes) con un encabezado y dos bloques IN/OUT
+    en la hoja 'travel list'. No depende del formato exacto del template.
     """
-    # Leer usuarios
     users = get_users_from_excel(plan_staff_file)
-    # Armar DataFrame básico
-    df_in = pd.DataFrame([{"DEPT": u['role'], "NAME": u['name'], "DATE": start_date.strftime("%Y-%m-%d")} for u in users])
-    df_out = pd.DataFrame([{"DEPT": u['role'], "NAME": u['name'], "DATE": end_date.strftime("%Y-%m-%d")} for u in users])
 
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # hoja base
-        df_in.to_excel(writer, sheet_name='travel list', startrow=6, index=False)
-        ws = writer.book["travel list"]
-        ws.cell(row=2, column=1, value="MERIAN TRANSPORTATION REQUEST")
-        ws.cell(row=5, column=1, value="IN")
-        ws.cell(row=5, column=5, value="OUT")
-        # más etiquetas
-        ws.cell(row=6, column=1, value="DEPT")
-        ws.cell(row=6, column=2, value="NAME")
-        ws.cell(row=6, column=3, value="DATE")
-    return output.getvalue(), f"Report successfully generated from {os.path.basename(plan_staff_file)}."
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'travel list'
+
+    ws.cell(row=2, column=1, value="MERIAN TRANSPORTATION REQUEST")
+    ws.cell(row=5, column=1, value="IN")
+    ws.cell(row=5, column=5, value="OUT")
+
+    # Cabeceras
+    ws.cell(row=6, column=1, value="DEPT")
+    ws.cell(row=6, column=2, value="NAME")
+    ws.cell(row=6, column=3, value="DATE")
+
+    ws.cell(row=6, column=5, value="DEPT")
+    ws.cell(row=6, column=6, value="NAME")
+    ws.cell(row=6, column=7, value="DATE")
+
+    # Datos
+    r_in = 7
+    r_out = 7
+    for u in users:
+        ws.cell(row=r_in, column=1, value=u.get('role', ''))
+        ws.cell(row=r_in, column=2, value=u.get('name', ''))
+        ws.cell(row=r_in, column=3, value=start_date.strftime("%Y-%m-%d"))
+        r_in += 1
+
+        ws.cell(row=r_out, column=5, value=u.get('role', ''))
+        ws.cell(row=r_out, column=6, value=u.get('name', ''))
+        ws.cell(row=r_out, column=7, value=end_date.strftime("%Y-%m-%d"))
+        r_out += 1
+
+    # Exportar a bytes
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return out.read(), "Transportation report generated."

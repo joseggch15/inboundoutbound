@@ -14,7 +14,7 @@ class LauncherWindow(QWidget):
     """
     def __init__(self):
         super().__init__()
-        # <<<— TEXTS CHANGED TO ENGLISH —>>>
+        # <<<— TEXTS IN ENGLISH —>>>
         self.setWindowTitle("Welcome to Operations Manager")
         self.setGeometry(400, 400, 400, 200)
         self.main_app_window = None
@@ -22,14 +22,14 @@ class LauncherWindow(QWidget):
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # <<<— TEXTS CHANGED TO ENGLISH —>>>
+        # <<<— TEXTS IN ENGLISH —>>>
         title = QLabel("Transport & Operations Manager")
         font = title.font()
         font.setPointSize(16)
         font.setBold(True)
         title.setFont(font)
 
-        # <<<— TEXTS CHANGED TO ENGLISH —>>>
+        # <<<— TEXTS IN ENGLISH —>>>
         login_button = QPushButton("▶️ Sign In")
         login_button.setFixedSize(200, 50)
         font = login_button.font()
