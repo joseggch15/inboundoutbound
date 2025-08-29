@@ -7,6 +7,7 @@ from datetime import datetime
 from main_window import MainWindow
 from ui_login import LoginWindow, LoadingWindow
 
+
 class LauncherWindow(QWidget):
     """
     Ventana inicial que muestra un botón para iniciar sesión.
@@ -45,7 +46,7 @@ class LauncherWindow(QWidget):
         y el archivo excel a la ventana principal.
         """
         login_dialog = LoginWindow(self)
-        
+
         if login_dialog.exec() == QDialog.DialogCode.Accepted:
             # Datos devueltos por el login
             user_role = login_dialog.user_role
@@ -56,8 +57,9 @@ class LauncherWindow(QWidget):
 
             loading_screen = LoadingWindow(role=user_role)
             loading_screen.show()
-            
+
             start_time = datetime.now()
+            # Pequeño splash no bloqueante
             while (datetime.now() - start_time).total_seconds() < 3:
                 QApplication.instance().processEvents()
 
@@ -78,6 +80,7 @@ class LauncherWindow(QWidget):
         """
         self.main_app_window = None
         self.show()
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

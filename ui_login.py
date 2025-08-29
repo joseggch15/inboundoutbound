@@ -18,6 +18,7 @@ CREDENTIALS = {
     }
 }
 
+
 class LoginWindow(QDialog):
     """Sign-in dialog."""
     def __init__(self, parent=None):
@@ -67,6 +68,7 @@ class LoginWindow(QDialog):
         else:
             QMessageBox.warning(self, "Login Error", "Invalid username or password.")
             self.password_input.clear()
+
 
 class LoadingWindow(QWidget):
     """Loading splash shown after a successful login."""

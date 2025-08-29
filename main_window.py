@@ -29,6 +29,8 @@ class MainWindow(QMainWindow):
         self.current_user_id = None
 
         db.setup_database()
+        # RF-04: log de inicio de sesión
+        db.log_event(self.logged_username, self.user_role, "INICIO_SESION", f"Excel={self.excel_file}")
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -72,6 +74,11 @@ class MainWindow(QMainWindow):
         self.crud_tab = QWidget()
         self.tabs.addTab(self.crud_tab, "👥 Users (CRUD)")
         self.setup_crud_ui()
+
+        # Tab: Audit Log
+        self.audit_tab = QWidget()
+        self.tabs.addTab(self.audit_tab, "📝 Audit Log")
+        self.setup_audit_log_ui()
 
         self.refresh_ui_data()
 
@@ -182,7 +189,7 @@ class MainWindow(QMainWindow):
             return
 
         actual_frozen_count = min(df.shape[1], FROZEN_COLUMN_COUNT)
-        headers = [str(col.strftime('%Y-%m-%d')) if isinstance(col, datetime) else str(col) for col in df.columns]
+        headers = [str(col.strftime('%Y-%m-%d')) if hasattr(col, "strftime") else str(col) for col in df.columns]
 
         self.frozen_table.setRowCount(df.shape[0])
         self.frozen_table.setColumnCount(actual_frozen_count)
@@ -319,14 +326,41 @@ class MainWindow(QMainWindow):
         elif self.none_radio.isChecked():
             schedule_status = None
 
-        # Registrar en DB solo si se asigna ON/OFF (no para limpiar)
-        if schedule_status in ("ON", "OFF"):
-            db.add_operation(username, role, badge, start_date, end_date)
+        # === RF-01: Confirmación si ya existen datos en el rango seleccionado ===
+        conflicts = excel.find_conflicts(self.excel_file, username, badge, start_date, end_date)
+        if conflicts:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Confirmación de sobrescritura")
+            box.setText("¿Está seguro de que desea modificar el turno existente?")
+            aceptar_btn = box.addButton("Aceptar", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() != aceptar_btn:
+                return  # abortar si el usuario cancela
 
-        # Actualizar Excel (esta parte sí limpia cuando schedule_status es None)
+        # --- Persistencia en BD ---
+        if schedule_status in ("ON", "OFF"):
+            # histórico de rango
+            db.add_operation(username, role, badge, start_date, end_date)
+            # estado día a día
+            db.upsert_schedule_range(badge, start_date, end_date, schedule_status, shift_type, self.user_role)
+        else:
+            # limpiar estado día a día en BD cuando se elige "Do Not Mark Days"
+            db.clear_schedule_range(badge, start_date, end_date, self.user_role)
+
+        # --- Actualizar Excel (esta parte puede limpiar cuando schedule_status es None)
         success, message = excel.update_plan_staff_excel(
             self.excel_file, username, role, badge, schedule_status, shift_type, start_date, end_date
         )
+
+        # RF-04: log de modificación
+        try:
+            estado = "LIMPIAR" if schedule_status is None else ("ON NS" if (schedule_status == "ON" and (shift_type or "").startswith("Night")) else schedule_status)
+            detalle = f"User={username} Badge={badge} Role={role} [{start_date}..{end_date}] Estado={estado}"
+            db.log_event(self.logged_username, self.user_role, "MODIFICACION_TURNO", detalle)
+        except Exception:
+            pass
 
         if success:
             box = QMessageBox(self)
@@ -373,7 +407,7 @@ class MainWindow(QMainWindow):
         self.db_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
     # --------------------------
-    # Report generator
+    # Report generator + Exportación Plan Staff
     # --------------------------
     def setup_report_generator_ui(self, parent_layout):
         report_layout = QHBoxLayout()
@@ -393,6 +427,11 @@ class MainWindow(QMainWindow):
         report_button = QPushButton("🚀 Generate Report")
         report_button.clicked.connect(self.generate_report)
         report_layout.addWidget(report_button)
+
+        # NUEVO: Exportación Plan Staff desde BD
+        export_button = QPushButton("📤 Export Plan Staff (.xlsx)")
+        export_button.clicked.connect(self.export_plan_from_db)
+        report_layout.addWidget(export_button)
 
         report_title = f"2. Generate Transportation Report (from {os.path.basename(self.excel_file)})"
         parent_layout.addWidget(self.create_group_box(report_title, report_layout))
@@ -434,6 +473,9 @@ class MainWindow(QMainWindow):
                 box.setText(f"{message}\n\nReport saved to:\n{file_path}")
                 box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
                 box.exec()
+
+                # RF-04: log exportación
+                db.log_event(self.logged_username, self.user_role, "EXPORTACION_DATOS", f"TRANSPORTE -> {file_path}")
             except Exception as e:
                 box = QMessageBox(self)
                 box.setIcon(QMessageBox.Icon.Critical)
@@ -441,6 +483,37 @@ class MainWindow(QMainWindow):
                 box.setText(f"Could not save the file.\nError: {e}")
                 box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
                 box.exec()
+
+    def export_plan_from_db(self):
+        """RF-03: Exporta una planilla desde el estado actual en la BD, manteniendo formato del template actual."""
+        users = db.get_all_users(self.user_role)
+        schedules = db.get_schedules_for_source(self.user_role)
+
+        if not users:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Sin datos")
+            box.setText("No hay usuarios para exportar.")
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+            box.exec()
+            return
+
+        default_name = f"PlanStaff_{self.user_role}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        dest_path, _ = QFileDialog.getSaveFileName(self, "Guardar Plan Staff", default_name, "Excel Files (*.xlsx)")
+        if not dest_path:
+            return
+
+        ok, msg = excel.export_plan_from_db(self.excel_file, users, schedules, dest_path)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information if ok else QMessageBox.Icon.Critical)
+        box.setWindowTitle("Exportación" if ok else "Error")
+        box.setText(msg)
+        box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+        box.exec()
+
+        if ok:
+            # RF-04
+            db.log_event(self.logged_username, self.user_role, "EXPORTACION_DATOS", f"EXPORTACION_PLAN -> {dest_path}")
 
     # --------------------------
     # Users table + CRUD
@@ -517,7 +590,7 @@ class MainWindow(QMainWindow):
         confirm.setWindowTitle("Confirm Deletion")
         confirm.setText(f"Are you sure you want to delete {self.crud_name_input.text()}?")
         yes_btn = confirm.addButton("Yes", QMessageBox.ButtonRole.YesRole)
-        no_btn = confirm.addButton("No", QMessageBox.ButtonRole.NoRole)
+        confirm.addButton("No", QMessageBox.ButtonRole.NoRole)
         confirm.exec()
 
         if confirm.clickedButton() == yes_btn:
@@ -548,9 +621,11 @@ class MainWindow(QMainWindow):
 
     def import_users_from_excel(self):
         """
-        Import users from the Excel file into the database using a bulk operation
-        to avoid DB locks.
+        Import users and schedules from the Excel file into the database.
+        - Usuarios: bulk insert evitando duplicados.
+        - Horarios: se importan ON/ON NS/OFF por día (si hay columnas de fecha).
         """
+        # --- Usuarios ---
         users = excel.get_users_from_excel(self.excel_file)
         if not users:
             box = QMessageBox(self)
@@ -564,14 +639,64 @@ class MainWindow(QMainWindow):
         added_count = db.add_users_bulk(users, self.user_role)
         skipped_count = len(users) - added_count
 
+        # --- Horarios (día a día) ---
+        schedules = excel.import_schedules_from_excel(self.excel_file)
+        imported_sched = 0
+        if schedules:
+            for s in schedules:
+                try:
+                    d = datetime.strptime(s['date'], '%Y-%m-%d').date()
+                    db.upsert_schedule_single(
+                        s['badge'], d, s['status'], s.get('shift_type'), self.user_role
+                    )
+                    imported_sched += 1
+                except Exception:
+                    pass
+
+        # RF-04: log importación
+        db.log_event(
+            self.logged_username, self.user_role, "IMPORTACION_DATOS",
+            f"users_added={added_count} skipped={skipped_count} schedules_upserted={imported_sched} from={self.excel_file}"
+        )
+
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Information)
         box.setWindowTitle("Import Complete")
-        box.setText(f"Imported {added_count} new users.\nSkipped {skipped_count} users that already existed.")
+        box.setText(f"Imported {added_count} new users.\n"
+                    f"Skipped {skipped_count} users that already existed.\n"
+                    f"Upserted {imported_sched} schedule day-entries.")
         box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
         box.exec()
 
         self.refresh_ui_data()
+
+    # --------------------------
+    # Audit Log (UI)
+    # --------------------------
+    def setup_audit_log_ui(self):
+        layout = QVBoxLayout(self.audit_tab)
+        self.audit_table = QTableWidget()
+        layout.addWidget(self.audit_table)
+        group = self.create_group_box("Audit Log (latest)", layout)
+        wrapper = QVBoxLayout()
+        wrapper.addWidget(group)
+        self.audit_tab.setLayout(wrapper)
+
+    def load_audit_log_data(self):
+        events = db.get_audit_log(source=self.user_role)
+        headers = ["Timestamp", "User", "Source", "Action", "Detail"]
+        self.audit_table.setRowCount(len(events))
+        self.audit_table.setColumnCount(len(headers))
+        self.audit_table.setHorizontalHeaderLabels(headers)
+
+        for r, ev in enumerate(events):
+            self.audit_table.setItem(r, 0, QTableWidgetItem(ev.get('ts', '')))
+            self.audit_table.setItem(r, 1, QTableWidgetItem(ev.get('username', '')))
+            self.audit_table.setItem(r, 2, QTableWidgetItem(ev.get('source', '')))
+            self.audit_table.setItem(r, 3, QTableWidgetItem(ev.get('action_type', '')))
+            self.audit_table.setItem(r, 4, QTableWidgetItem(ev.get('detail', '')))
+
+        self.audit_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
     # --------------------------
     # Data refresh
@@ -581,4 +706,5 @@ class MainWindow(QMainWindow):
         self.load_db_data()
         self.load_crud_users_table()
         self.load_users_to_selector()
+        self.load_audit_log_data()
         self.clear_crud_form()

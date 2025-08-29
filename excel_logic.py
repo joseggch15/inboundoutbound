@@ -4,6 +4,7 @@ import io
 import openpyxl
 from openpyxl.styles import PatternFill
 import os
+from typing import List, Dict, Tuple, Optional
 
 
 # --------------------------
@@ -18,12 +19,30 @@ def _is_blank_series(s: pd.Series) -> bool:
     s_str = s.astype(str).str.strip().str.lower()
     return (s_str.eq('') | s_str.eq('nan') | s_str.eq('none') | s_str.eq('null')).all()
 
+
 def _prefix_for_file(plan_staff_file: str) -> str:
     """Badge prefix based on file (NM for Newmont by default)."""
     base = os.path.basename(plan_staff_file).lower()
     if 'newmont' in base:
         return 'NM'
     return 'ID'
+
+
+def _is_date_header(col) -> bool:
+    """Detecta si el encabezado es una fecha (datetime o pandas.Timestamp)."""
+    if isinstance(col, datetime):
+        return True
+    return getattr(col, '__class__', None).__name__ == 'Timestamp'
+
+
+def _to_pydate(col) -> Optional[date]:
+    """Convierte encabezado a date."""
+    if isinstance(col, datetime):
+        return col.date()
+    try:
+        return col.to_pydatetime().date()  # pandas.Timestamp
+    except Exception:
+        return None
 
 
 # --------------------------
@@ -52,6 +71,7 @@ def get_roles_from_excel(plan_staff_file: str) -> list:
     except Exception as e:
         print(f"Error reading roles from Excel: {e}")
         return ["Error reading Excel"]
+
 
 def get_users_from_excel(plan_staff_file: str) -> list:
     """
@@ -119,11 +139,12 @@ def get_users_from_excel(plan_staff_file: str) -> list:
         print(f"Error processing the Excel file: {e}")
         return []
 
+
 # --------------------------
-# Escritura/lectura de plan staff
+# Escritura/lectura de plan staff + soporte RF-01/03
 # --------------------------
 def update_plan_staff_excel(plan_staff_file: str, username: str, role: str, badge: str,
-                            schedule_status: str, shift_type: str,
+                            schedule_status: Optional[str], shift_type: Optional[str],
                             schedule_start: date, schedule_end: date):
     """
     Actualiza (o crea si no existe) la fila del empleado en el Excel de plan staff.
@@ -231,6 +252,7 @@ def update_plan_staff_excel(plan_staff_file: str, username: str, role: str, badg
     except Exception as e:
         return False, f"Error saving to Excel: {e}"
 
+
 def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
     """Read the given Excel file and return it as a pandas DataFrame."""
     if not os.path.exists(plan_staff_file):
@@ -240,6 +262,7 @@ def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
         return df.fillna('')
     except Exception as e:
         return pd.DataFrame({"Error": f"Could not read the Excel file: {e}"}, index=[0])
+
 
 def generate_transport_excel_from_planstaff(plan_staff_file: str, report_start: date, report_end: date) -> tuple:
     """Generate a transportation report by analyzing the given Excel file."""
@@ -255,11 +278,12 @@ def generate_transport_excel_from_planstaff(plan_staff_file: str, report_start: 
         if col not in df.columns:
             return None, f"Required Excel column is missing: '{col}'"
 
-    all_date_cols = sorted([col for col in df.columns if isinstance(col, datetime)])
+    all_date_cols = sorted([col for col in df.columns if _is_date_header(col)], key=lambda c: _to_pydate(c))
     if not all_date_cols:
         return None, f"No date columns found in {os.path.basename(plan_staff_file)}."
 
-    date_col_map = {col.date(): col for col in all_date_cols}
+    # Map a date() -> column header
+    date_col_map = { _to_pydate(col): col for col in all_date_cols }
     travel_in_records, travel_out_records = [], []
 
     for _, row in df.iterrows():
@@ -268,8 +292,9 @@ def generate_transport_excel_from_planstaff(plan_staff_file: str, report_start: 
             continue
         role = row.get('ROLE', 'N/A')
 
-        for d in pd.date_range(start=report_start, end=report_end):
-            current_day = d.date()
+        d = report_start
+        while d <= report_end:
+            current_day = d
             prev_day = current_day - timedelta(days=1)
             next_day = current_day + timedelta(days=1)
 
@@ -286,6 +311,8 @@ def generate_transport_excel_from_planstaff(plan_staff_file: str, report_start: 
                 if 'ON' in curr_status and 'ON' not in next_status:
                     time_out = "06:00:00" if curr_status == 'ON NS' else "12:00:00"
                     travel_out_records.append({"NAME": username, "DEPT": role, "DATE": current_day.strftime('%Y-%m-%d'), "TIME": time_out})
+
+            d += timedelta(days=1)
 
     if not travel_in_records and not travel_out_records:
         return None, "No staff check-ins or check-outs found in the date range."
@@ -338,3 +365,179 @@ def generate_transport_excel_from_planstaff(plan_staff_file: str, report_start: 
             ws.cell(row=5, column=start_col_out_label + 1, value="TRAVEL FROM SITE")
 
     return output.getvalue(), f"Report successfully generated from {os.path.basename(plan_staff_file)}."
+
+
+# --------------------------
+# RF-01: Detección de conflictos (sobrescritura)
+# --------------------------
+def find_conflicts(plan_staff_file: str, username: str, badge: str,
+                   schedule_start: date, schedule_end: date) -> List[Dict]:
+    """
+    Devuelve [{'date': date, 'existing': 'ON/ON NS/OFF/...'}] si hay valores ya escritos en el rango.
+    Busca fila por BADGE y luego por NAME, igual que update_plan_staff_excel.
+    """
+    try:
+        if not os.path.exists(plan_staff_file):
+            return []
+        wb = openpyxl.load_workbook(plan_staff_file, data_only=True)
+        ws = wb.active
+
+        header_map = {cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)}
+        date_map = {cell.value.date(): cell.column for cell in ws[1] if isinstance(cell.value, datetime)}
+
+        # localizar fila por BADGE y luego por NAME
+        row_idx = None
+        if "BADGE" in header_map:
+            for i in range(2, ws.max_row + 1):
+                v = ws.cell(row=i, column=header_map["BADGE"]).value
+                if v and str(v) == str(badge):
+                    row_idx = i
+                    break
+        if not row_idx and "NAME" in header_map:
+            for i in range(2, ws.max_row + 1):
+                v = ws.cell(row=i, column=header_map["NAME"]).value
+                if v and str(v).strip().lower() == str(username).strip().lower():
+                    row_idx = i
+                    break
+        if not row_idx:
+            return []
+
+        conflicts: List[Dict] = []
+        d = schedule_start
+        while d <= schedule_end:
+            if d in date_map:
+                col = date_map[d]
+                val = ws.cell(row=row_idx, column=col).value
+                if val not in (None, '', ' '):
+                    conflicts.append({"date": d, "existing": str(val)})
+            d += timedelta(days=1)
+        return conflicts
+    except Exception:
+        return []
+
+
+# --------------------------
+# RF-03: Exportación desde BD manteniendo formato
+# --------------------------
+def export_plan_from_db(template_path: str, users: List[Dict], schedules: List[Dict], output_path: str) -> Tuple[bool, str]:
+    """
+    users: [{'name', 'role', 'badge'}]  (db.get_all_users(source))
+    schedules: [{'badge','date':'YYYY-MM-DD','status':'ON|ON NS|OFF'}]  (db.get_schedules_for_source(source))
+    """
+    try:
+        if not os.path.exists(template_path):
+            return False, f"Template '{os.path.basename(template_path)}' not found."
+
+        wb = openpyxl.load_workbook(template_path)
+        ws = wb.active
+
+        header_map = {cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)}
+        for h in ["NAME", "ROLE", "BADGE"]:
+            if h not in header_map:
+                return False, f"Required header '{h}' not found in template."
+
+        # Collect date columns present in the header row
+        date_cols = {cell.value.date(): cell.column for cell in ws[1] if isinstance(cell.value, datetime)}
+        if not date_cols:
+            return False, "Template has no date columns."
+
+        # index filas por BADGE (crear si falta)
+        row_by_badge: Dict[str, int] = {}
+        if "BADGE" in header_map:
+            for i in range(2, ws.max_row + 1):
+                v = ws.cell(row=i, column=header_map["BADGE"]).value
+                if v:
+                    row_by_badge[str(v)] = i
+
+        next_row = ws.max_row + 1
+        for u in users:
+            b = str(u['badge'])
+            r = row_by_badge.get(b)
+            if not r:
+                r = next_row
+                next_row += 1
+            ws.cell(row=r, column=header_map["NAME"]).value = u['name']
+            ws.cell(row=r, column=header_map["ROLE"]).value = u['role']
+            ws.cell(row=r, column=header_map["BADGE"]).value = b
+            row_by_badge[b] = r
+
+        # colores coherentes con update_plan_staff_excel
+        green  = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # ON
+        red    = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")  # OFF
+        yellow = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")  # ON NS
+
+        for s in schedules:
+            try:
+                d = datetime.strptime(s['date'], "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if d not in date_cols:
+                continue  # fecha fuera del rango que tiene la planilla
+            row = row_by_badge.get(str(s['badge']))
+            if not row:
+                continue
+            col = date_cols[d]
+            txt = str(s['status']).upper()
+            if txt.startswith("OFF"):
+                ws.cell(row=row, column=col).value = "OFF"
+                ws.cell(row=row, column=col).fill = red
+            elif txt.startswith("ON NS"):
+                ws.cell(row=row, column=col).value = "ON NS"
+                ws.cell(row=row, column=col).fill = yellow
+            else:
+                ws.cell(row=row, column=col).value = "ON"
+                ws.cell(row=row, column=col).fill = green
+
+        wb.save(output_path)
+        return True, f"Exported Plan Staff to: {output_path}"
+    except Exception as e:
+        return False, f"Error exporting Plan Staff: {e}"
+
+
+# --------------------------
+# RF-02: Importación de horarios desde Excel a BD (día a día)
+# --------------------------
+def import_schedules_from_excel(plan_staff_file: str) -> List[Dict[str, str]]:
+    """
+    Lee el plan staff actual y extrae los estados por día (ON / ON NS / OFF) por BADGE.
+    Devuelve registros [{'badge','date':'YYYY-MM-DD','status':'ON|ON NS|OFF','shift_type':...}].
+    Si una fila no tiene BADGE, se omite para evitar ambigüedad en la BD.
+    """
+    if not os.path.exists(plan_staff_file):
+        return []
+    try:
+        df = pd.read_excel(plan_staff_file, engine='openpyxl').fillna('')
+        # ubicar BADGE (o Company ID)
+        badge_col = None
+        if 'BADGE' in df.columns:
+            badge_col = 'BADGE'
+        elif 'Company ID' in df.columns:
+            badge_col = 'Company ID'
+
+        # identificar columnas de fecha
+        date_cols = [c for c in df.columns if _is_date_header(c)]
+
+        results: List[Dict[str, str]] = []
+        for _, row in df.iterrows():
+            badge = str(row.get(badge_col, '')).strip() if badge_col else ''
+            if not badge:
+                # sin badge no hay clave para schedules -> se omite
+                continue
+            for c in date_cols:
+                raw = row.get(c, '')
+                val = str(raw).strip().upper()
+                if val in ('ON', 'ON NS', 'OFF'):
+                    pydate = _to_pydate(c)
+                    if not pydate:
+                        continue
+                    shift_type = 'Night Shift' if val == 'ON NS' else ('Day Shift' if val == 'ON' else None)
+                    results.append({
+                        'badge': badge,
+                        'date': pydate.strftime('%Y-%m-%d'),
+                        'status': val,
+                        'shift_type': shift_type
+                    })
+        return results
+    except Exception as e:
+        print(f"Error importing schedules from Excel: {e}")
+        return []
