@@ -4,7 +4,7 @@ from PyQt6.QtCore import Qt
 from datetime import datetime
 
 # Importar las ventanas
-from main_window import MainWindow
+from main_window import MainWindow, AdminMainWindow
 from ui_login import LoginWindow, LoadingWindow
 
 
@@ -43,7 +43,7 @@ class LauncherWindow(QWidget):
     def start_login_process(self):
         """
         Maneja el flujo completo de login y pasa la información del usuario
-        y el archivo excel a la ventana principal.
+        y el/los archivo(s) excel a la ventana principal.
         """
         login_dialog = LoginWindow(self)
 
@@ -51,7 +51,7 @@ class LauncherWindow(QWidget):
             # Datos devueltos por el login
             user_role = login_dialog.user_role
             excel_file = login_dialog.excel_file
-            logged_username = login_dialog.username  # <<<<<<<<<<<<<<<<<<<<<<
+            logged_username = login_dialog.username
 
             self.hide()
 
@@ -65,12 +65,20 @@ class LauncherWindow(QWidget):
 
             loading_screen.close()
 
-            # Pasamos el usuario logueado a la ventana principal
-            self.main_app_window = MainWindow(
-                user_role=user_role,
-                excel_file=excel_file,
-                logged_username=logged_username  # <<<<<<<<<<<<<<<<<<<<<<
-            )
+            # Selección de ventana según perfil
+            if user_role == "Administrator":
+                self.main_app_window = AdminMainWindow(
+                    logged_username=logged_username,
+                    rgm_excel="PlanStaffRGM.xlsx",
+                    newmont_excel="PlanStaffNewmont.xlsx"
+                )
+            else:
+                self.main_app_window = MainWindow(
+                    user_role=user_role,
+                    excel_file=excel_file,
+                    logged_username=logged_username
+                )
+
             self.main_app_window.logout_signal.connect(self.handle_logout)
             self.main_app_window.show()
 

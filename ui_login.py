@@ -15,6 +15,12 @@ CREDENTIALS = {
         "password": "456",
         "role": "Newmont",
         "excel_file": "PlanStaffNewmont.xlsx"
+    },
+    # FR-05.1: Administrator credentials
+    "admin": {
+        "password": "123456789",
+        "role": "Administrator",
+        "excel_file": ""  # No se usa; Admin verá módulos RGM y Newmont
     }
 }
 
@@ -105,6 +111,9 @@ class LoadingWindow(QWidget):
         elif self.role == "Newmont":
             self.label.setText("Loading Newmont Reports Module...")
             self.setStyleSheet("background-color: #E8F8F5;")
+        elif self.role == "Administrator":
+            self.label.setText("Loading Administrator Console...")
+            self.setStyleSheet("background-color: #FFF3CD;")
         else:
             self.label.setText("Loading application...")
 

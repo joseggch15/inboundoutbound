@@ -38,7 +38,7 @@ def setup_database():
     ''')
 
     # -------------------------
-    # NUEVO: schedules (estado día a día)
+    # schedules (estado día a día)
     # -------------------------
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS schedules (
@@ -52,14 +52,14 @@ def setup_database():
     )''')
 
     # -------------------------
-    # NUEVO: audit_log
+    # audit_log
     # -------------------------
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,          -- quien realizó la acción
-            source TEXT NOT NULL,            -- RGM | Newmont
-            action_type TEXT NOT NULL,       -- INICIO_SESION | MODIFICACION_TURNO | EXPORTACION_DATOS | IMPORTACION_DATOS | ...
+            source TEXT NOT NULL,            -- RGM | Newmont | Administrator
+            action_type TEXT NOT NULL,       -- USER_LOGIN | SHIFT_MODIFICATION | DATA_EXPORT | DATA_IMPORT | ...
             detail TEXT,
             ts TEXT NOT NULL DEFAULT (datetime('now'))
     )''')
@@ -305,3 +305,33 @@ def get_audit_log(limit: int = 500, source: Optional[str] = None) -> List[Dict]:
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return rows
+
+
+# ---------------------------------------------------------------------
+# NUEVO: obtener estados existentes en un rango (para FR-01 y FR-04)
+# ---------------------------------------------------------------------
+def get_schedules_for_badge_range(badge: str, start_date: date, end_date: date, source: str) -> List[Dict]:
+    """
+    Devuelve [{'date':'YYYY-MM-DD','status':'ON|ON NS|OFF','shift_type':..}] para el rango indicado.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT date, status, shift_type
+          FROM schedules
+         WHERE badge = ? AND source = ?
+           AND date BETWEEN ? AND ?
+         ORDER BY date
+    """, (badge, source, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')))
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_schedule_map_for_range(badge: str, start_date: date, end_date: date, source: str) -> Dict[str, str]:
+    """
+    Devuelve {'YYYY-MM-DD': 'STATUS'} para el rango indicado.
+    """
+    rows = get_schedules_for_badge_range(badge, start_date, end_date, source)
+    return {r['date']: r['status'] for r in rows}
