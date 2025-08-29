@@ -64,13 +64,47 @@ def setup_database():
             ts TEXT NOT NULL DEFAULT (datetime('now'))
     )''')
 
+    # Indexes útiles
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_source ON users(source)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_schedules_source ON schedules(source)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_schedules_badge ON schedules(badge)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_schedules_date ON schedules(date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)")
+
     conn.commit()
     conn.close()
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Audit log
+# ---------------------------------------------------------------------
+def log_event(username: str, source: str, action_type: str, detail: str = ""):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO audit_log (username, source, action_type, detail) VALUES (?, ?, ?, ?)",
+        (username or "Unknown", source or "", action_type or "", detail or "")
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_audit_log(source: Optional[str] = None) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    if source:
+        cursor.execute("SELECT ts, username, source, action_type, detail FROM audit_log WHERE source = ? ORDER BY ts DESC", (source,))
+    else:
+        cursor.execute("SELECT ts, username, source, action_type, detail FROM audit_log ORDER BY ts DESC")
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+# ---------------------------------------------------------------------
 # Users CRUD
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 def add_user(name: str, role: str, badge: str, source: str) -> Tuple[bool, str]:
     """Add a new user to the database."""
     conn = sqlite3.connect(DB_FILE)
@@ -91,7 +125,10 @@ def add_user(name: str, role: str, badge: str, source: str) -> Tuple[bool, str]:
 
 
 def add_users_bulk(users: list, source: str) -> int:
-    """Add a list of users to the database, avoiding duplicates by 'badge'."""
+    """
+    Add users in bulk, avoiding duplicates by (badge).
+    Returns the number of actually inserted users.
+    """
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
@@ -112,7 +149,7 @@ def add_users_bulk(users: list, source: str) -> int:
             user_data
         )
         conn.commit()
-        added_count = cursor.rowcount
+        added_count = cursor.rowcount if cursor.rowcount is not None else len(new_users)
     except sqlite3.Error as e:
         print(f"Database error when adding users in bulk: {e}")
         added_count = 0
@@ -154,7 +191,7 @@ def update_user(user_id: int, name: str, role: str, badge: str, source: str) -> 
             (name, role, badge, user_id)
         )
         conn.commit()
-        if cursor.rowcount > 0:
+        if cursor.rowcount and cursor.rowcount > 0:
             return True, f"User {name} updated successfully."
         else:
             return False, "Error: User not found for update."
@@ -171,7 +208,7 @@ def delete_user(user_id: int) -> Tuple[bool, str]:
     try:
         cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()
-        if cursor.rowcount > 0:
+        if cursor.rowcount and cursor.rowcount > 0:
             return True, "User deleted successfully."
         else:
             return False, "Error: User not found for deletion."
@@ -181,157 +218,103 @@ def delete_user(user_id: int) -> Tuple[bool, str]:
         conn.close()
 
 
-# -----------------------------------------------------------------------------
-# Operations (rangos) + Auditoría + Schedules (día a día)
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Operations & schedules
+# ---------------------------------------------------------------------
 def add_operation(username: str, role: str, badge: str, start_date: date, end_date: date):
-    """Add an operation (rotation range) record to the database."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO operations (username, role, badge, start_date, end_date) VALUES (?, ?, ?, ?, ?)",
-        (username, role, badge, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+        (username, role, badge, start_date.isoformat(), end_date.isoformat())
     )
     conn.commit()
     conn.close()
 
 
-def get_all_operations() -> list:
-    """Get all operation records from the database."""
+def upsert_schedule_day(badge: str, d: date, status: str, shift_type: Optional[str], source: str):
+    """
+    Upsert de un día en schedules.
+    """
     conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM operations ORDER BY start_date DESC")
-    operations = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return operations
-
-
-def log_event(username: str, source: str, action_type: str, detail: Optional[str] = None) -> None:
-    """Append an event to the audit_log table."""
     try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
+        # Intentar UPDATE primero
         cursor.execute(
-            "INSERT INTO audit_log (username, source, action_type, detail) VALUES (?, ?, ?, ?)",
-            (username, source, action_type, detail)
+            "UPDATE schedules SET status = ?, shift_type = ? WHERE badge = ? AND date = ? AND source = ?",
+            (status, shift_type, badge, d.isoformat(), source)
         )
+        if cursor.rowcount == 0:
+            cursor.execute(
+                "INSERT INTO schedules (badge, date, status, shift_type, source) VALUES (?, ?, ?, ?, ?)",
+                (badge, d.isoformat(), status, shift_type, source)
+            )
         conn.commit()
-    except Exception as e:
-        # No romper el flujo si el log falla
-        print(f"[audit_log] Could not log event: {e}")
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        conn.close()
 
 
-def upsert_schedule_single(badge: str, d: date, status: str,
-                           shift_type: Optional[str], source: str) -> None:
-    """
-    Inserta/actualiza un único día en 'schedules'.
-    Mapea 'ON' + Night a 'ON NS'.
-    """
-    text_status = status
-    if status == "ON" and (shift_type or "").lower().startswith("night"):
-        text_status = "ON NS"
-
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO schedules (badge, date, status, shift_type, source)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(badge, date, source) DO UPDATE
-            SET status=excluded.status, shift_type=excluded.shift_type
-    """, (badge, d.strftime('%Y-%m-%d'), text_status, shift_type, source))
-    conn.commit()
-    conn.close()
-
-
-def upsert_schedule_range(badge: str, start_date: date, end_date: date,
+def upsert_schedule_range(badge: str, start_d: date, end_d: date,
                           status: str, shift_type: Optional[str], source: str) -> int:
-    """Inserta/actualiza estado día a día en schedules."""
-    count = 0
-    d = start_date
-    while d <= end_date:
-        upsert_schedule_single(badge, d, status, shift_type, source)
+    """
+    Marca ON/ON NS/OFF por rango [start_d, end_d]. Devuelve cuántos días se escribieron.
+    """
+    total = 0
+    d = start_d
+    while d <= end_d:
+        upsert_schedule_day(badge, d, status, shift_type, source)
+        total += 1
         d += timedelta(days=1)
-        count += 1
-    return count
+    return total
 
 
-def clear_schedule_range(badge: str, start_date: date, end_date: date, source: str) -> int:
-    """Elimina registros de 'schedules' para el rango indicado (útil al 'limpiar' días)."""
+def clear_schedule_range(badge: str, start_d: date, end_d: date, source: str) -> int:
+    """Elimina (limpia) estado día-a-día en rango."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("""
-        DELETE FROM schedules
-          WHERE badge = ? AND source = ?
-            AND date BETWEEN ? AND ?
-    """, (badge, source, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')))
-    deleted = cursor.rowcount
+    cursor.execute(
+        "DELETE FROM schedules WHERE badge = ? AND source = ? AND date >= ? AND date <= ?",
+        (badge, source, start_d.isoformat(), end_d.isoformat())
+    )
+    deleted = cursor.rowcount if cursor.rowcount is not None else 0
     conn.commit()
     conn.close()
     return deleted
 
 
+def get_schedule_map_for_range(badge: str, start_d: date, end_d: date, source: str) -> Dict[str, Dict]:
+    """Devuelve { 'YYYY-MM-DD': {'status':..., 'shift_type':...} } para el rango indicado."""
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT date, status, shift_type FROM schedules WHERE badge = ? AND source = ? AND date >= ? AND date <= ?",
+        (badge, source, start_d.isoformat(), end_d.isoformat())
+    )
+    res = {row['date']: {'status': row['status'], 'shift_type': row['shift_type']} for row in cursor.fetchall()}
+    conn.close()
+    return res
+
+
 def get_schedules_for_source(source: str) -> List[Dict]:
-    """Devuelve todos los schedules para un 'source'."""
+    """Lista completa de schedules para un source."""
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM schedules WHERE source=? ORDER BY date", (source,))
-    rows = [dict(r) for r in cursor.fetchall()]
+    cursor.execute(
+        "SELECT badge, date, status, shift_type, source FROM schedules WHERE source = ? ORDER BY date",
+        (source,)
+    )
+    res = [dict(r) for r in cursor.fetchall()]
     conn.close()
-    return rows
+    return res
 
 
-def get_audit_log(limit: int = 500, source: Optional[str] = None) -> List[Dict]:
-    """Devuelve eventos de auditoría (más recientes primero)."""
+def get_all_operations() -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    if source:
-        cursor.execute(
-            "SELECT * FROM audit_log WHERE source = ? ORDER BY ts DESC LIMIT ?",
-            (source, limit)
-        )
-    else:
-        cursor.execute(
-            "SELECT * FROM audit_log ORDER BY ts DESC LIMIT ?",
-            (limit,)
-        )
-    rows = [dict(r) for r in cursor.fetchall()]
+    cursor.execute("SELECT id, username, role, badge, start_date, end_date FROM operations ORDER BY id DESC")
+    res = [dict(r) for r in cursor.fetchall()]
     conn.close()
-    return rows
-
-
-# ---------------------------------------------------------------------
-# NUEVO: obtener estados existentes en un rango (para FR-01 y FR-04)
-# ---------------------------------------------------------------------
-def get_schedules_for_badge_range(badge: str, start_date: date, end_date: date, source: str) -> List[Dict]:
-    """
-    Devuelve [{'date':'YYYY-MM-DD','status':'ON|ON NS|OFF','shift_type':..}] para el rango indicado.
-    """
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT date, status, shift_type
-          FROM schedules
-         WHERE badge = ? AND source = ?
-           AND date BETWEEN ? AND ?
-         ORDER BY date
-    """, (badge, source, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')))
-    rows = [dict(r) for r in cursor.fetchall()]
-    conn.close()
-    return rows
-
-
-def get_schedule_map_for_range(badge: str, start_date: date, end_date: date, source: str) -> Dict[str, str]:
-    """
-    Devuelve {'YYYY-MM-DD': 'STATUS'} para el rango indicado.
-    """
-    rows = get_schedules_for_badge_range(badge, start_date, end_date, source)
-    return {r['date']: r['status'] for r in rows}
+    return res

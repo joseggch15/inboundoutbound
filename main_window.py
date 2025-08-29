@@ -94,7 +94,7 @@ class PlanStaffWidget(QWidget):
         report_title = f"2. Generate Transportation Report (from {os.path.basename(self.excel_file)})"
         root.addWidget(create_group_box(report_title, report_layout))
 
-        # Cargar datos
+        # Cargar datos iniciales
         self.refresh_ui_data()
 
     # ---------- sub-UIs ----------
@@ -146,6 +146,8 @@ class PlanStaffWidget(QWidget):
         FROZEN_COLUMN_COUNT = 3
         df = excel.get_schedule_preview(self.excel_file)
         if df.empty:
+            self.frozen_table.clear(); self.schedule_table.clear()
+            self.frozen_table.setRowCount(0); self.schedule_table.setRowCount(0)
             return
 
         actual_frozen_count = min(df.shape[1], FROZEN_COLUMN_COUNT)
@@ -156,8 +158,9 @@ class PlanStaffWidget(QWidget):
         self.frozen_table.setHorizontalHeaderLabels(headers[:actual_frozen_count])
 
         self.schedule_table.setRowCount(df.shape[0])
-        self.schedule_table.setColumnCount(df.shape[1] - actual_frozen_count)
-        self.schedule_table.setHorizontalHeaderLabels(headers[actual_frozen_count:])
+        self.schedule_table.setColumnCount(max(0, df.shape[1] - actual_frozen_count))
+        if df.shape[1] - actual_frozen_count > 0:
+            self.schedule_table.setHorizontalHeaderLabels(headers[actual_frozen_count:])
 
         for i, row in df.iterrows():
             for j, val in enumerate(row):
@@ -169,9 +172,9 @@ class PlanStaffWidget(QWidget):
                     val_str = str(val).upper()
                     if 'ON NS' in val_str or 'NIGHT' in val_str:
                         item.setBackground(QColor("#FFFF99"))
-                    elif 'ON' in val_str or 'DAY' in val_str:
+                    elif 'ON' in val_str or 'DAY' in val_str or val_str.isdigit():
                         item.setBackground(QColor("#C6EFCE"))
-                    elif 'OFF' in val_str:
+                    elif 'OFF' in val_str or 'BREAK' in val_str or 'KO' in val_str:
                         item.setBackground(QColor("#FFC7CE"))
                     elif 'LEAVE' in val_str:
                         item.setBackground(QColor("#D9D9D9"))
@@ -290,86 +293,52 @@ class PlanStaffWidget(QWidget):
         )
 
         # --- Auditoría (FR-04): detalle con prev y nuevo ---
-        try:
-            if schedule_status is None:
-                new_state = "CLEAR"
-            elif schedule_status == "ON" and (shift_type or "").startswith("Night"):
-                new_state = "ON NS"
-            else:
-                new_state = schedule_status
+        new_map = db.get_schedule_map_for_range(badge, start_date, end_date, self.source)
+        db.log_event(
+            self.logged_username,
+            self.source,
+            "SHIFT_MODIFICATION",
+            f"{username} ({badge}) {start_date}..{end_date} prev={prev_map} new={new_map}; Excel={'OK' if success else 'ERR'}"
+        )
 
-            detalle = (
-                f"user={username} badge={badge} role={role} "
-                f"range=[{start_date}..{end_date}] prev={prev_map} new={new_state}"
-            )
-            db.log_event(self.logged_username, self.source, "SHIFT_MODIFICATION", detalle)
-        except Exception:
-            pass
+        # --- Mensaje
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information if success else QMessageBox.Icon.Warning)
+        box.setWindowTitle("Success" if success else "Warning")
+        box.setText(message if success else ("Saved to DB. " + message))
+        box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+        box.exec()
 
-        if success:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Information)
-            box.setWindowTitle("Success")
-            box.setText(f"DB & Excel updated for {username}.")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
-        else:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Excel Error")
-            box.setText(f"Saved in DB, but Excel error:\n{message}")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
-
+        # Refrescar preview/combos/tabla
         self.refresh_ui_data()
 
     def generate_report(self):
-        start_date = self.report_start_date.date().toPyDate()
-        end_date = self.report_end_date.date().toPyDate()
+        s = self.report_start_date.date().toPyDate()
+        e = self.report_end_date.date().toPyDate()
+        excel_data, message = excel.generate_transport_report(self.excel_file, s, e)
 
-        if start_date > end_date:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Date Error")
-            box.setText("Start date cannot be after end date.")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save Transportation Report", "transport_request.xlsx", "Excel Files (*.xlsx)")
+        if not file_path:
             return
-
-        excel_data, message = excel.generate_transport_excel_from_planstaff(self.excel_file, start_date, end_date)
-        if not excel_data:
+        try:
+            with open(file_path, 'wb') as f:
+                f.write(excel_data)
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Information)
-            box.setWindowTitle("Information")
-            box.setText(message)
+            box.setWindowTitle("Success")
+            box.setText(f"{message}\n\nReport saved to:\n{file_path}")
             box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
             box.exec()
-            return
 
-        default_filename = f"Transport_Request_{start_date.strftime('%Y%m%d')}_to_{end_date.strftime('%Y%m%d')}.xlsx"
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "Save Report", default_filename, "Excel Files (*.xlsx)"
-        )
-        if file_path:
-            try:
-                with open(file_path, 'wb') as f:
-                    f.write(excel_data)
-                box = QMessageBox(self)
-                box.setIcon(QMessageBox.Icon.Information)
-                box.setWindowTitle("Success")
-                box.setText(f"{message}\n\nReport saved to:\n{file_path}")
-                box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-                box.exec()
-
-                # FR-04: log exportación
-                db.log_event(self.logged_username, self.source, "DATA_EXPORT", f"TRANSPORT -> {file_path}")
-            except Exception as e:
-                box = QMessageBox(self)
-                box.setIcon(QMessageBox.Icon.Critical)
-                box.setWindowTitle("Save Error")
-                box.setText(f"Could not save the file.\nError: {e}")
-                box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-                box.exec()
+            # FR-04: log exportación
+            db.log_event(self.logged_username, self.source, "DATA_EXPORT", f"TRANSPORT -> {file_path}")
+        except Exception as e:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Critical)
+            box.setWindowTitle("Save Error")
+            box.setText(f"Could not save the file.\nError: {e}")
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+            box.exec()
 
     def export_plan_from_db(self):
         """FR-03: Exporta una planilla desde el estado actual en la BD, manteniendo formato del template actual."""
@@ -411,6 +380,9 @@ class PlanStaffWidget(QWidget):
 # Widget: CRUD de usuarios (con Import desde Excel)
 # -------------------------------------------------------------
 class CrudWidget(QWidget):
+    # Señal para sincronización inmediata de UI (FR de sincronización)
+    import_done = pyqtSignal(str)  # emite el 'source' cuando termina el import
+
     def __init__(self, source: str, excel_file: str, logged_username: str):
         super().__init__()
         self.source = source
@@ -466,14 +438,15 @@ class CrudWidget(QWidget):
 
         self.refresh_ui_data()
 
-    def load_crud_users_table(self):
-        self.users = db.get_all_users(self.source)
+    # Tabla y formulario CRUD
+    def load_users_table(self):
+        users = db.get_all_users(self.source)
         headers = ["ID", "Name", "Role", "Badge"]
-        self.users_table.setRowCount(len(self.users))
+        self.users_table.setRowCount(len(users))
         self.users_table.setColumnCount(len(headers))
         self.users_table.setHorizontalHeaderLabels(headers)
 
-        for row, user in enumerate(self.users):
+        for row, user in enumerate(users):
             self.users_table.setItem(row, 0, QTableWidgetItem(str(user['id'])))
             self.users_table.setItem(row, 1, QTableWidgetItem(user['name']))
             self.users_table.setItem(row, 2, QTableWidgetItem(user['role']))
@@ -496,9 +469,9 @@ class CrudWidget(QWidget):
         self.users_table.clearSelection()
 
     def save_crud_user(self):
-        name = self.crud_name_input.text()
-        role = self.crud_role_input.text()
-        badge = self.crud_badge_input.text()
+        name = self.crud_name_input.text().strip()
+        role = self.crud_role_input.text().strip()
+        badge = self.crud_badge_input.text().strip()
 
         if not name or not role or not badge:
             box = QMessageBox(self)
@@ -553,60 +526,34 @@ class CrudWidget(QWidget):
 
     def import_users_from_excel(self):
         """
-        Import users and schedules from the Excel file into the database.
-        - Usuarios: bulk insert evitando duplicados.
-        - Horarios: se importan ON/ON NS/OFF por día (si hay columnas de fecha).
+        FR-02: Import users and day-by-day schedules from Excel to DB.
+        Sincroniza UI en caliente (emite señal import_done).
         """
-        users = excel.get_users_from_excel(self.excel_file)
-        if not users:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Import Failed")
-            box.setText("No users were found in the Excel file or the file could not be read.")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
-            return
+        inserted, skipped, upserts = excel.import_excel_to_db(self.excel_file, self.source)
 
-        added_count = db.add_users_bulk(users, self.source)
-        skipped_count = len(users) - added_count
+        # Log de auditoría (FR-04)
+        db.log_event(self.logged_username, self.source, "DATA_IMPORT", f"users_inserted={inserted}; users_skipped={skipped}; schedule_upserts={upserts}")
 
-        schedules = excel.import_schedules_from_excel(self.excel_file)
-        imported_sched = 0
-        if schedules:
-            for s in schedules:
-                try:
-                    d = datetime.strptime(s['date'], '%Y-%m-%d').date()
-                    db.upsert_schedule_single(
-                        s['badge'], d, s['status'], s.get('shift_type'), self.source
-                    )
-                    imported_sched += 1
-                except Exception:
-                    pass
-
-        # Auditoría
-        db.log_event(
-            self.logged_username, self.source, "DATA_IMPORT",
-            f"users_added={added_count} skipped={skipped_count} schedules_upserted={imported_sched} from={self.excel_file}"
-        )
-
+        # Mensaje al usuario
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Information)
         box.setWindowTitle("Import Complete")
-        box.setText(f"Imported {added_count} new users.\n"
-                    f"Skipped {skipped_count} users that already existed.\n"
-                    f"Upserted {imported_sched} schedule day-entries.")
+        box.setText(f"Imported {inserted} new users.\nSkipped {skipped} users that already existed.\nUpserted {upserts} schedule day-entries.")
         box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
         box.exec()
 
+        # Refrescar tabla de usuarios inmediatamente
         self.refresh_ui_data()
+        # 🔔 Señal para refrescar el combo "Select Employee" en Plan Staff
+        self.import_done.emit(self.source)
 
     def refresh_ui_data(self):
-        self.load_crud_users_table()
+        self.load_users_table()
         self.clear_crud_form()
 
 
 # -------------------------------------------------------------
-# Widget: Audit Log (para Admin o por fuente)
+# Widget: Audit Log (visible solo para Admin)
 # -------------------------------------------------------------
 class AuditLogWidget(QWidget):
     def __init__(self, source: str | None):
@@ -652,7 +599,6 @@ class MainWindow(QMainWindow):
         self.logged_username = logged_username or "Unknown"
 
         db.setup_database()
-        # FR-04: USER_LOGIN (en inglés)
         db.log_event(self.logged_username, self.user_role, "USER_LOGIN", f"Excel={self.excel_file}")
 
         self.setWindowTitle(f"👨‍✈️ Operations Manager - Profile: {self.user_role} | User: {self.logged_username}")
@@ -693,7 +639,8 @@ class MainWindow(QMainWindow):
         self.crud_widget = CrudWidget(self.user_role, self.excel_file, self.logged_username)
         tabs.addTab(self.crud_widget, "👥 Users (CRUD)")
 
-        # Importante: Audit Log solo para Admin. Usuarios normales no ven la pestaña.
+        # 🔗 Conexión para refrescar "Select Employee" inmediatamente tras Import
+        self.crud_widget.import_done.connect(lambda src: self.plan_widget.refresh_ui_data())
 
     def handle_logout(self):
         self.logout_signal.emit()
@@ -745,24 +692,28 @@ class AdminMainWindow(QMainWindow):
 
         # FR-05.3: Pestañas visibles para Admin
         # 1) RGM CRUD
-        rgm_crud = CrudWidget("RGM", rgm_excel, self.logged_username)
-        self.tabs.addTab(rgm_crud, "👥 RGM CRUD")
+        self.rgm_crud = CrudWidget("RGM", rgm_excel, self.logged_username)
+        self.tabs.addTab(self.rgm_crud, "👥 RGM CRUD")
 
         # 2) RGM Plan Staff
-        rgm_plan = PlanStaffWidget("RGM", rgm_excel, self.logged_username)
-        self.tabs.addTab(rgm_plan, "📅 RGM Plan Staff")
+        self.rgm_plan = PlanStaffWidget("RGM", rgm_excel, self.logged_username)
+        self.tabs.addTab(self.rgm_plan, "📅 RGM Plan Staff")
 
         # 3) Newmont CRUD
-        nm_crud = CrudWidget("Newmont", newmont_excel, self.logged_username)
-        self.tabs.addTab(nm_crud, "👥 Newmont CRUD")
+        self.nm_crud = CrudWidget("Newmont", newmont_excel, self.logged_username)
+        self.tabs.addTab(self.nm_crud, "👥 Newmont CRUD")
 
         # 4) Newmont Plan Staff
-        nm_plan = PlanStaffWidget("Newmont", newmont_excel, self.logged_username)
-        self.tabs.addTab(nm_plan, "📅 Newmont Plan Staff")
+        self.nm_plan = PlanStaffWidget("Newmont", newmont_excel, self.logged_username)
+        self.tabs.addTab(self.nm_plan, "📅 Newmont Plan Staff")
 
         # 5) Audit Log (global)
         audit_all = AuditLogWidget(source=None)
         self.tabs.addTab(audit_all, "📝 Audit Log")
+
+        # 🔗 Sincronización en caliente para Admin (cada CRUD refresca su Plan Staff)
+        self.rgm_crud.import_done.connect(lambda src: self.rgm_plan.refresh_ui_data())
+        self.nm_crud.import_done.connect(lambda src: self.nm_plan.refresh_ui_data())
 
     def handle_logout(self):
         self.logout_signal.emit()

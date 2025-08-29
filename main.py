@@ -3,31 +3,34 @@ from PyQt6.QtWidgets import QApplication, QDialog, QWidget, QVBoxLayout, QPushBu
 from PyQt6.QtCore import Qt
 from datetime import datetime
 
-# Importar las ventanas
+# Ventanas principales
 from main_window import MainWindow, AdminMainWindow
 from ui_login import LoginWindow, LoadingWindow
 
 
 class LauncherWindow(QWidget):
     """
-    Ventana inicial que muestra un botón para iniciar sesión.
+    Initial window with a single Sign In button.
     """
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Bienvenido al Gestor de Operaciones")
+        # <<<— TEXTS CHANGED TO ENGLISH —>>>
+        self.setWindowTitle("Welcome to Operations Manager")
         self.setGeometry(400, 400, 400, 200)
         self.main_app_window = None
 
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        title = QLabel("Gestor de Transporte y Operaciones")
+        # <<<— TEXTS CHANGED TO ENGLISH —>>>
+        title = QLabel("Transport & Operations Manager")
         font = title.font()
         font.setPointSize(16)
         font.setBold(True)
         title.setFont(font)
 
-        login_button = QPushButton("▶️ Iniciar Sesión")
+        # <<<— TEXTS CHANGED TO ENGLISH —>>>
+        login_button = QPushButton("▶️ Sign In")
         login_button.setFixedSize(200, 50)
         font = login_button.font()
         font.setPointSize(12)
@@ -42,13 +45,13 @@ class LauncherWindow(QWidget):
 
     def start_login_process(self):
         """
-        Maneja el flujo completo de login y pasa la información del usuario
-        y el/los archivo(s) excel a la ventana principal.
+        Handles the complete sign-in flow and opens the main window
+        depending on the user's role.
         """
         login_dialog = LoginWindow(self)
 
         if login_dialog.exec() == QDialog.DialogCode.Accepted:
-            # Datos devueltos por el login
+            # Data returned by the login dialog
             user_role = login_dialog.user_role
             excel_file = login_dialog.excel_file
             logged_username = login_dialog.username
@@ -59,13 +62,13 @@ class LauncherWindow(QWidget):
             loading_screen.show()
 
             start_time = datetime.now()
-            # Pequeño splash no bloqueante
+            # Small non-blocking splash
             while (datetime.now() - start_time).total_seconds() < 3:
                 QApplication.instance().processEvents()
 
             loading_screen.close()
 
-            # Selección de ventana según perfil
+            # Open the appropriate main window
             if user_role == "Administrator":
                 self.main_app_window = AdminMainWindow(
                     logged_username=logged_username,
@@ -83,9 +86,7 @@ class LauncherWindow(QWidget):
             self.main_app_window.show()
 
     def handle_logout(self):
-        """
-        Muestra esta ventana de lanzador de nuevo al cerrar sesión.
-        """
+        """Shows the launcher again after signing out."""
         self.main_app_window = None
         self.show()
 

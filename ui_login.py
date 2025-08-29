@@ -20,7 +20,7 @@ CREDENTIALS = {
     "admin": {
         "password": "123456789",
         "role": "Administrator",
-        "excel_file": ""  # No se usa; Admin verá módulos RGM y Newmont
+        "excel_file": ""  # Admin verá módulos RGM y Newmont
     }
 }
 
@@ -48,7 +48,7 @@ class LoginWindow(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.check_login)
         buttons.rejected.connect(self.reject)
-        # Forzar etiquetas en inglés
+        # Etiquetas en inglés
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Sign in")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancel")
 
@@ -81,7 +81,7 @@ class LoadingWindow(QWidget):
     def __init__(self, role):
         super().__init__()
         self.role = role
-        self.setWindowTitle("Loading...")
+        self.setWindowTitle("Loading.")
         self.setFixedSize(400, 150)
 
         layout = QVBoxLayout(self)
@@ -106,16 +106,16 @@ class LoadingWindow(QWidget):
 
     def setup_ui_for_role(self):
         if self.role == "RGM":
-            self.label.setText("Loading RGM Plan Staff Module...")
+            self.label.setText("Loading RGM Plan Staff Module.")
             self.setStyleSheet("background-color: #E6F3FF;")
         elif self.role == "Newmont":
-            self.label.setText("Loading Newmont Reports Module...")
+            self.label.setText("Loading Newmont Reports Module.")
             self.setStyleSheet("background-color: #E8F8F5;")
         elif self.role == "Administrator":
-            self.label.setText("Loading Administrator Console...")
+            self.label.setText("Loading Administrator Console.")
             self.setStyleSheet("background-color: #FFF3CD;")
         else:
-            self.label.setText("Loading application...")
+            self.label.setText("Loading application.")
 
     def update_progress(self):
         self.progress_value += 1
