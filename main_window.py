@@ -476,7 +476,7 @@ class CrudWidget(QWidget):
             self.users_table.setItem(row, 1, QTableWidgetItem(user['name']))
             self.users_table.setItem(row, 2, QTableWidgetItem(user['role']))
             self.users_table.setItem(row, 3, QTableWidgetItem(user['badge']))
-
+        self.users_table.setColumnHidden(0, True) # El '0' es el índice de la columna 'ID'
         self.users_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
     def load_user_to_crud_form(self, item):
