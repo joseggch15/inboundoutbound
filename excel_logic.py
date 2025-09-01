@@ -505,28 +505,33 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
     ENTRADAS (IN) y SALIDAS (OUT) con la siguiente lógica dentro del intervalo
     [start_date, end_date] (inclusive):
 
-      - ENTRADA (IN / TRAVEL TO SITE): el PRIMER 'ON' que tenga un 'OFF' a su izquierda
-        (es decir, el día anterior no es ON/ON NS).
-      - SALIDA  (OUT / TRAVEL FROM SITE): el ÚLTIMO 'ON' que tenga un 'OFF' a su derecha
-        (es decir, el día siguiente no es ON/ON NS).
+      - ENTRADA (IN / TRAVEL TO SITE):
+          status(d) ∈ {'ON','ON NS'} y status(d-1) != status(d)
+          (incluye OFF→ON, OFF→ON NS, y cambios ON↔ON NS)
+      - SALIDA  (OUT / TRAVEL FROM SITE):
+          status(d) ∈ {'ON','ON NS'} y status(d+1) != status(d)
+          (incluye ON→OFF, ON NS→OFF, y cambios ON↔ON NS)
+
+    Además:
+      - Si NO hay entrada en el rango, se agrega la **siguiente entrada** > end_date.
+      - Si NO hay salida  en el rango, se agrega la **siguiente salida**  > end_date.
 
     Tiempos por turno:
-      - Si el día ON es 'ON' (verde): ENTRADA 06:00, SALIDA 12:00.
-      - Si el día ON es 'ON NS' (amarillo): ENTRADA 12:00, SALIDA 06:00.
+      - 'ON'    (verde): IN=06:00:00, OUT=12:00:00
+      - 'ON NS' (amarillo): IN=12:00:00, OUT=06:00:00
 
     Layout:
       Hoja 'travel list'
-        IN / TRAVEL TO SITE   -> columnas: #, NAME, FIRST NAME, GID, COMPANY, DEPT, FROM, DATE, TIME
-        OUT / TRAVEL FROM SITE-> columnas: #, NAME, FIRST NAME, GID, COMPANY, DEPT, TO,   DATE, TIME
+        IN / TRAVEL TO SITE   -> #, NAME, FIRST NAME, GID, COMPANY, DEPT, FROM, DATE, TIME
+        OUT / TRAVEL FROM SITE-> #, NAME, FIRST NAME, GID, COMPANY, DEPT, TO,   DATE, TIME
     """
-    # 1) Usuarios básicos (name, role, badge) desde el Excel (ya tienes este helper)
+    # 1) Usuarios básicos (name, role, badge) desde el Excel
     users_basic = get_users_from_excel(plan_staff_file)
 
-    # 2) Cargamos el DataFrame bruto del plan staff
+    # 2) DataFrame bruto del plan staff
     try:
         df = pd.read_excel(plan_staff_file, engine='openpyxl')
     except Exception:
-        # Si no se puede leer, devolvemos un libro vacío para no romper flujo
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "travel list"
@@ -535,7 +540,7 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
         out.seek(0)
         return out.read(), "Unsupported Plan Staff format."
 
-    # 3) Resolver esquema de columnas de identidad
+    # 3) Resolver esquema (RGM vs Newmont)
     if all(col in df.columns for col in ['NAME', 'ROLE', 'BADGE']):  # RGM
         name_field, role_field, badge_field = 'NAME', 'ROLE', 'BADGE'
     elif all(col in df.columns for col in ['Last Name', 'First Name', 'Discipline', 'Company ID']):  # Newmont
@@ -549,7 +554,7 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
         out.seek(0)
         return out.read(), "Unsupported Plan Staff format."
 
-    # 4) Helper para nombre completo en formato "Apellido, Nombre" (Newmont)
+    # Helper para nombre a "Apellido, Nombre" (Newmont)
     def _full_name_from_newmont(row) -> str:
         last = str(row.get('Last Name', '')).strip()
         first = str(row.get('First Name', '')).strip()
@@ -557,45 +562,38 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
             return f"{last}, {first}".strip(", ").strip()
         return ""
 
-    # 5) Parámetros por defecto (ajústalos si hace falta)
+    # Parámetros por defecto
     company_default = "PLGims"
     site_code = "PBO"
 
-    # 6) Horarios por tipo de ON
+    # Horarios según turno/status del día
     def _times_for(status: str, which: str) -> str:
-        """
-        which in {"IN","OUT"}
-        ON NS -> IN=12:00:00, OUT=06:00:00
-        ON    -> IN=06:00:00, OUT=12:00:00
-        """
+        # which in {"IN","OUT"}
         if status == "ON NS":
             return "12:00:00" if which == "IN" else "06:00:00"
         return "06:00:00" if which == "IN" else "12:00:00"
 
-    # 7) Detectar/ordenar columnas de fecha (usa helpers existentes)
+    # Columnas fecha
     date_cols = [c for c in df.columns if _is_date_header(c)]
     date_cols_sorted = sorted(date_cols, key=lambda c: _to_pydate(c) or date.min)
 
-    # 8) Mapa rápido badge -> (name, role) basado en users_basic
+    # Mapa badge -> (name, role)
     id_map = {u['badge']: (u['name'], u['role']) for u in users_basic}
 
-    # 9) Construcción del workbook con layout legacy
+    # 4) Workbook y headers (legacy)
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "travel list"
 
-    # Título y secciones
     ws.cell(row=2, column=1, value="MERIAN TRANSPORTATION REQUEST")
     ws.cell(row=5, column=1, value="IN")
     ws.cell(row=5, column=2, value="TRAVEL TO SITE")
     ws.cell(row=5, column=11, value="OUT")
     ws.cell(row=5, column=12, value="TRAVEL FROM SITE")
 
-    # Cabeceras
     headers_in = ["#", "NAME", "FIRST NAME", "GID", "COMPANY", "DEPT", "FROM", "DATE", "TIME"]
     for idx, h in enumerate(headers_in, start=1):
         ws.cell(row=6, column=idx, value=h)
-
     headers_out = ["#", "NAME", "FIRST NAME", "GID", "COMPANY", "DEPT", "TO", "DATE", "TIME"]
     for idx, h in enumerate(headers_out, start=11):
         ws.cell(row=6, column=idx, value=h)
@@ -605,20 +603,18 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
     idx_in = 1
     idx_out = 1
 
-    # 10) Recorremos filas (personas) y detectamos entradas/salidas dentro del rango
+    # 5) Por cada persona, detectar entradas/salidas y “próximas” si no hay en el rango
     for _, row in df.iterrows():
         # Identidad
         if name_field:
             full_name = str(row.get(name_field, "")).strip()
         else:
             full_name = _full_name_from_newmont(row)
-
         role = str(row.get(role_field, "")).strip() if role_field else ""
         badge = str(row.get(badge_field, "")).strip()
         if not badge:
             continue
 
-        # Si users_basic tiene nombre/rol "limpios", los usamos
         if badge in id_map:
             full_name_clean, role_clean = id_map[badge]
             if full_name_clean:
@@ -626,7 +622,7 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
             if role_clean:
                 role = role_clean
 
-        # Split a (apellido, nombre) para columnas NAME / FIRST NAME
+        # Split NAME / FIRST NAME
         if "," in full_name:
             last, first = [p.strip() for p in full_name.split(",", 1)]
         else:
@@ -636,61 +632,102 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
             elif len(parts) == 1:
                 last, first = parts[0], ""
             else:
-                first = parts[0]
-                last = " ".join(parts[1:])
+                first = parts[0]; last = " ".join(parts[1:])
 
-        # Serie (fecha, status) sólo de columnas de fecha
-        states = []
+        # Serie (fecha, status)
+        states: List[Tuple[date, Optional[str]]] = []
         for dc in date_cols_sorted:
             d = _to_pydate(dc)
             if not d:
                 continue
-            status, _shift = _normalize_status(row.get(dc))  # status: "ON" | "ON NS" | "OFF" | None
+            status, _ = _normalize_status(row.get(dc))  # "ON" | "ON NS" | "OFF" | None
             states.append((d, status))
 
         if not states:
             continue
 
-        # Detectar transiciones para ENTRADA/SALIDA
+        # Entradas/Salidas dentro del rango
+        had_entry_in_range = False
+        had_exit_in_range = False
+
+        # Guardar también candidatos > end_date (para “próximas”)
+        next_entry_after_range: Optional[Tuple[date, str]] = None
+        next_exit_after_range: Optional[Tuple[date, str]] = None
+
+        n = len(states)
         for i, (d, status) in enumerate(states):
             if status not in ("ON", "ON NS"):
                 continue
             prev_status = states[i-1][1] if i > 0 else "OFF"
-            next_status = states[i+1][1] if i < len(states)-1 else "OFF"
+            next_status = states[i+1][1] if i < n-1 else "OFF"
 
-            is_entry = prev_status not in ("ON", "ON NS")  # OFF a la izquierda
-            is_exit  = next_status not in ("ON", "ON NS")  # OFF a la derecha
+            # NUEVO: segmentación por turno -> entrada/salida cuando cambia el estado exacto
+            is_entry = (prev_status != status)
+            is_exit  = (next_status != status)
 
-            # IN: si la fecha de entrada cae dentro del rango
-            if is_entry and (start_date <= d <= end_date):
-                ws.cell(row=r_in, column=1, value=idx_in)                         # #
-                ws.cell(row=r_in, column=2, value=last)                           # NAME
-                ws.cell(row=r_in, column=3, value=first)                          # FIRST NAME
-                ws.cell(row=r_in, column=4, value=badge)                          # GID
-                ws.cell(row=r_in, column=5, value=company_default)                # COMPANY
-                ws.cell(row=r_in, column=6, value=role)                           # DEPT
-                ws.cell(row=r_in, column=7, value=site_code)                      # FROM
-                ws.cell(row=r_in, column=8, value=d.strftime("%Y-%m-%d"))         # DATE
-                ws.cell(row=r_in, column=9, value=_times_for(status, "IN"))       # TIME
-                r_in += 1
-                idx_in += 1
+            if is_entry:
+                if start_date <= d <= end_date:
+                    # IN en el rango
+                    ws.cell(row=r_in, column=1, value=idx_in)
+                    ws.cell(row=r_in, column=2, value=last)
+                    ws.cell(row=r_in, column=3, value=first)
+                    ws.cell(row=r_in, column=4, value=badge)
+                    ws.cell(row=r_in, column=5, value=company_default)
+                    ws.cell(row=r_in, column=6, value=role)
+                    ws.cell(row=r_in, column=7, value=site_code)              # FROM
+                    ws.cell(row=r_in, column=8, value=d.strftime("%Y-%m-%d")) # DATE
+                    ws.cell(row=r_in, column=9, value=_times_for(status, "IN"))
+                    r_in += 1; idx_in += 1
+                    had_entry_in_range = True
+                elif d > end_date and next_entry_after_range is None:
+                    next_entry_after_range = (d, status)
 
-            # OUT: si la fecha de salida cae dentro del rango
-            if is_exit and (start_date <= d <= end_date):
-                ws.cell(row=r_out, column=11, value=idx_out)                      # #
-                ws.cell(row=r_out, column=12, value=last)                         # NAME
-                ws.cell(row=r_out, column=13, value=first)                        # FIRST NAME
-                ws.cell(row=r_out, column=14, value=badge)                        # GID
-                ws.cell(row=r_out, column=15, value=company_default)              # COMPANY
-                ws.cell(row=r_out, column=16, value=role)                         # DEPT
-                ws.cell(row=r_out, column=17, value=site_code)                    # TO
-                ws.cell(row=r_out, column=18, value=d.strftime("%Y-%m-%d"))       # DATE
-                ws.cell(row=r_out, column=19, value=_times_for(status, "OUT"))    # TIME
-                r_out += 1
-                idx_out += 1
+            if is_exit:
+                if start_date <= d <= end_date:
+                    # OUT en el rango
+                    ws.cell(row=r_out, column=11, value=idx_out)
+                    ws.cell(row=r_out, column=12, value=last)
+                    ws.cell(row=r_out, column=13, value=first)
+                    ws.cell(row=r_out, column=14, value=badge)
+                    ws.cell(row=r_out, column=15, value=company_default)
+                    ws.cell(row=r_out, column=16, value=role)
+                    ws.cell(row=r_out, column=17, value=site_code)             # TO
+                    ws.cell(row=r_out, column=18, value=d.strftime("%Y-%m-%d"))# DATE
+                    ws.cell(row=r_out, column=19, value=_times_for(status, "OUT"))
+                    r_out += 1; idx_out += 1
+                    had_exit_in_range = True
+                elif d > end_date and next_exit_after_range is None:
+                    next_exit_after_range = (d, status)
 
-    # 11) Exportar a bytes
+        # Si no hubo ENTRADA en el rango, agregar la PRÓXIMA entrada > end_date
+        if not had_entry_in_range and next_entry_after_range:
+            d, status = next_entry_after_range
+            ws.cell(row=r_in, column=1, value=idx_in)
+            ws.cell(row=r_in, column=2, value=last)
+            ws.cell(row=r_in, column=3, value=first)
+            ws.cell(row=r_in, column=4, value=badge)
+            ws.cell(row=r_in, column=5, value=company_default)
+            ws.cell(row=r_in, column=6, value=role)
+            ws.cell(row=r_in, column=7, value=site_code)
+            ws.cell(row=r_in, column=8, value=d.strftime("%Y-%m-%d"))
+            ws.cell(row=r_in, column=9, value=_times_for(status, "IN"))
+            r_in += 1; idx_in += 1
+
+        # Si no hubo SALIDA en el rango, agregar la PRÓXIMA salida > end_date
+        if not had_exit_in_range and next_exit_after_range:
+            d, status = next_exit_after_range
+            ws.cell(row=r_out, column=11, value=idx_out)
+            ws.cell(row=r_out, column=12, value=last)
+            ws.cell(row=r_out, column=13, value=first)
+            ws.cell(row=r_out, column=14, value=badge)
+            ws.cell(row=r_out, column=15, value=company_default)
+            ws.cell(row=r_out, column=16, value=role)
+            ws.cell(row=r_out, column=17, value=site_code)
+            ws.cell(row=r_out, column=18, value=d.strftime("%Y-%m-%d"))
+            ws.cell(row=r_out, column=19, value=_times_for(status, "OUT"))
+            r_out += 1; idx_out += 1
+
     out = io.BytesIO()
     wb.save(out)
     out.seek(0)
-    return out.read(), "Transportation report generated (legacy format with ON/OFF logic)."
+    return out.read(), "Transportation report generated (legacy format with shift-aware IN/OUT + next transitions)."
