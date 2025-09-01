@@ -501,44 +501,196 @@ def export_plan_from_db(template_path: str, users: List[Dict], schedules: List[D
 # ---------------------------------------
 def generate_transport_report(plan_staff_file: str, start_date: date, end_date: date) -> Tuple[bytes, str]:
     """
-    Genera un archivo Excel sencillo (bytes) con un encabezado y dos bloques IN/OUT
-    en la hoja 'travel list'. No depende del formato exacto del template.
-    """
-    users = get_users_from_excel(plan_staff_file)
+    Genera un Excel con la estructura legacy (Transport_Request_*), detectando
+    ENTRADAS (IN) y SALIDAS (OUT) con la siguiente lógica dentro del intervalo
+    [start_date, end_date] (inclusive):
 
+      - ENTRADA (IN / TRAVEL TO SITE): el PRIMER 'ON' que tenga un 'OFF' a su izquierda
+        (es decir, el día anterior no es ON/ON NS).
+      - SALIDA  (OUT / TRAVEL FROM SITE): el ÚLTIMO 'ON' que tenga un 'OFF' a su derecha
+        (es decir, el día siguiente no es ON/ON NS).
+
+    Tiempos por turno:
+      - Si el día ON es 'ON' (verde): ENTRADA 06:00, SALIDA 12:00.
+      - Si el día ON es 'ON NS' (amarillo): ENTRADA 12:00, SALIDA 06:00.
+
+    Layout:
+      Hoja 'travel list'
+        IN / TRAVEL TO SITE   -> columnas: #, NAME, FIRST NAME, GID, COMPANY, DEPT, FROM, DATE, TIME
+        OUT / TRAVEL FROM SITE-> columnas: #, NAME, FIRST NAME, GID, COMPANY, DEPT, TO,   DATE, TIME
+    """
+    # 1) Usuarios básicos (name, role, badge) desde el Excel (ya tienes este helper)
+    users_basic = get_users_from_excel(plan_staff_file)
+
+    # 2) Cargamos el DataFrame bruto del plan staff
+    try:
+        df = pd.read_excel(plan_staff_file, engine='openpyxl')
+    except Exception:
+        # Si no se puede leer, devolvemos un libro vacío para no romper flujo
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "travel list"
+        out = io.BytesIO()
+        wb.save(out)
+        out.seek(0)
+        return out.read(), "Unsupported Plan Staff format."
+
+    # 3) Resolver esquema de columnas de identidad
+    if all(col in df.columns for col in ['NAME', 'ROLE', 'BADGE']):  # RGM
+        name_field, role_field, badge_field = 'NAME', 'ROLE', 'BADGE'
+    elif all(col in df.columns for col in ['Last Name', 'First Name', 'Discipline', 'Company ID']):  # Newmont
+        name_field, role_field, badge_field = None, 'Discipline', 'Company ID'
+    else:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "travel list"
+        out = io.BytesIO()
+        wb.save(out)
+        out.seek(0)
+        return out.read(), "Unsupported Plan Staff format."
+
+    # 4) Helper para nombre completo en formato "Apellido, Nombre" (Newmont)
+    def _full_name_from_newmont(row) -> str:
+        last = str(row.get('Last Name', '')).strip()
+        first = str(row.get('First Name', '')).strip()
+        if last or first:
+            return f"{last}, {first}".strip(", ").strip()
+        return ""
+
+    # 5) Parámetros por defecto (ajústalos si hace falta)
+    company_default = "PLGims"
+    site_code = "PBO"
+
+    # 6) Horarios por tipo de ON
+    def _times_for(status: str, which: str) -> str:
+        """
+        which in {"IN","OUT"}
+        ON NS -> IN=12:00:00, OUT=06:00:00
+        ON    -> IN=06:00:00, OUT=12:00:00
+        """
+        if status == "ON NS":
+            return "12:00:00" if which == "IN" else "06:00:00"
+        return "06:00:00" if which == "IN" else "12:00:00"
+
+    # 7) Detectar/ordenar columnas de fecha (usa helpers existentes)
+    date_cols = [c for c in df.columns if _is_date_header(c)]
+    date_cols_sorted = sorted(date_cols, key=lambda c: _to_pydate(c) or date.min)
+
+    # 8) Mapa rápido badge -> (name, role) basado en users_basic
+    id_map = {u['badge']: (u['name'], u['role']) for u in users_basic}
+
+    # 9) Construcción del workbook con layout legacy
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = 'travel list'
+    ws.title = "travel list"
 
+    # Título y secciones
     ws.cell(row=2, column=1, value="MERIAN TRANSPORTATION REQUEST")
     ws.cell(row=5, column=1, value="IN")
-    ws.cell(row=5, column=5, value="OUT")
+    ws.cell(row=5, column=2, value="TRAVEL TO SITE")
+    ws.cell(row=5, column=11, value="OUT")
+    ws.cell(row=5, column=12, value="TRAVEL FROM SITE")
 
     # Cabeceras
-    ws.cell(row=6, column=1, value="DEPT")
-    ws.cell(row=6, column=2, value="NAME")
-    ws.cell(row=6, column=3, value="DATE")
+    headers_in = ["#", "NAME", "FIRST NAME", "GID", "COMPANY", "DEPT", "FROM", "DATE", "TIME"]
+    for idx, h in enumerate(headers_in, start=1):
+        ws.cell(row=6, column=idx, value=h)
 
-    ws.cell(row=6, column=5, value="DEPT")
-    ws.cell(row=6, column=6, value="NAME")
-    ws.cell(row=6, column=7, value="DATE")
+    headers_out = ["#", "NAME", "FIRST NAME", "GID", "COMPANY", "DEPT", "TO", "DATE", "TIME"]
+    for idx, h in enumerate(headers_out, start=11):
+        ws.cell(row=6, column=idx, value=h)
 
-    # Datos
     r_in = 7
     r_out = 7
-    for u in users:
-        ws.cell(row=r_in, column=1, value=u.get('role', ''))
-        ws.cell(row=r_in, column=2, value=u.get('name', ''))
-        ws.cell(row=r_in, column=3, value=start_date.strftime("%Y-%m-%d"))
-        r_in += 1
+    idx_in = 1
+    idx_out = 1
 
-        ws.cell(row=r_out, column=5, value=u.get('role', ''))
-        ws.cell(row=r_out, column=6, value=u.get('name', ''))
-        ws.cell(row=r_out, column=7, value=end_date.strftime("%Y-%m-%d"))
-        r_out += 1
+    # 10) Recorremos filas (personas) y detectamos entradas/salidas dentro del rango
+    for _, row in df.iterrows():
+        # Identidad
+        if name_field:
+            full_name = str(row.get(name_field, "")).strip()
+        else:
+            full_name = _full_name_from_newmont(row)
 
-    # Exportar a bytes
+        role = str(row.get(role_field, "")).strip() if role_field else ""
+        badge = str(row.get(badge_field, "")).strip()
+        if not badge:
+            continue
+
+        # Si users_basic tiene nombre/rol "limpios", los usamos
+        if badge in id_map:
+            full_name_clean, role_clean = id_map[badge]
+            if full_name_clean:
+                full_name = full_name_clean
+            if role_clean:
+                role = role_clean
+
+        # Split a (apellido, nombre) para columnas NAME / FIRST NAME
+        if "," in full_name:
+            last, first = [p.strip() for p in full_name.split(",", 1)]
+        else:
+            parts = full_name.split()
+            if len(parts) == 0:
+                last, first = "", ""
+            elif len(parts) == 1:
+                last, first = parts[0], ""
+            else:
+                first = parts[0]
+                last = " ".join(parts[1:])
+
+        # Serie (fecha, status) sólo de columnas de fecha
+        states = []
+        for dc in date_cols_sorted:
+            d = _to_pydate(dc)
+            if not d:
+                continue
+            status, _shift = _normalize_status(row.get(dc))  # status: "ON" | "ON NS" | "OFF" | None
+            states.append((d, status))
+
+        if not states:
+            continue
+
+        # Detectar transiciones para ENTRADA/SALIDA
+        for i, (d, status) in enumerate(states):
+            if status not in ("ON", "ON NS"):
+                continue
+            prev_status = states[i-1][1] if i > 0 else "OFF"
+            next_status = states[i+1][1] if i < len(states)-1 else "OFF"
+
+            is_entry = prev_status not in ("ON", "ON NS")  # OFF a la izquierda
+            is_exit  = next_status not in ("ON", "ON NS")  # OFF a la derecha
+
+            # IN: si la fecha de entrada cae dentro del rango
+            if is_entry and (start_date <= d <= end_date):
+                ws.cell(row=r_in, column=1, value=idx_in)                         # #
+                ws.cell(row=r_in, column=2, value=last)                           # NAME
+                ws.cell(row=r_in, column=3, value=first)                          # FIRST NAME
+                ws.cell(row=r_in, column=4, value=badge)                          # GID
+                ws.cell(row=r_in, column=5, value=company_default)                # COMPANY
+                ws.cell(row=r_in, column=6, value=role)                           # DEPT
+                ws.cell(row=r_in, column=7, value=site_code)                      # FROM
+                ws.cell(row=r_in, column=8, value=d.strftime("%Y-%m-%d"))         # DATE
+                ws.cell(row=r_in, column=9, value=_times_for(status, "IN"))       # TIME
+                r_in += 1
+                idx_in += 1
+
+            # OUT: si la fecha de salida cae dentro del rango
+            if is_exit and (start_date <= d <= end_date):
+                ws.cell(row=r_out, column=11, value=idx_out)                      # #
+                ws.cell(row=r_out, column=12, value=last)                         # NAME
+                ws.cell(row=r_out, column=13, value=first)                        # FIRST NAME
+                ws.cell(row=r_out, column=14, value=badge)                        # GID
+                ws.cell(row=r_out, column=15, value=company_default)              # COMPANY
+                ws.cell(row=r_out, column=16, value=role)                         # DEPT
+                ws.cell(row=r_out, column=17, value=site_code)                    # TO
+                ws.cell(row=r_out, column=18, value=d.strftime("%Y-%m-%d"))       # DATE
+                ws.cell(row=r_out, column=19, value=_times_for(status, "OUT"))    # TIME
+                r_out += 1
+                idx_out += 1
+
+    # 11) Exportar a bytes
     out = io.BytesIO()
     wb.save(out)
     out.seek(0)
-    return out.read(), "Transportation report generated."
+    return out.read(), "Transportation report generated (legacy format with ON/OFF logic)."

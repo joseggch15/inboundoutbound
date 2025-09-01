@@ -341,7 +341,13 @@ class PlanStaffWidget(QWidget):
         e = self.report_end_date.date().toPyDate()
         excel_data, message = excel.generate_transport_report(self.excel_file, s, e)
 
-        file_path, _ = QFileDialog.getSaveFileName(self, "Save Transportation Report", "transport_request.xlsx", "Excel Files (*.xlsx)")
+        file_path, _ = QFileDialog.getSaveFileName(
+    self,
+    "Save Transportation Report",
+    f"Transport_Request_{s.strftime('%Y%m%d')}_to_{e.strftime('%Y%m%d')}.xlsx",
+    "Excel Files (*.xlsx)"
+)
+
         if not file_path:
             return
         try:
