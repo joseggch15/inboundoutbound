@@ -5,22 +5,28 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer
 
 # --- ACCESS CREDENTIALS ---
+# Habilitamos can_manage_shift_types SOLO a los Site Managers reales:
+# - javierteheran  -> RGM  -> acceso a RGM Shift Types
+# - miguelvenegas  -> Newmont -> acceso a Newmont Shift Types
 CREDENTIALS = {
     "javierteheran": {
         "password": "123",
         "role": "RGM",
-        "excel_file": "PlanStaffRGM.xlsx"
+        "excel_file": "PlanStaffRGM.xlsx",
+        "can_manage_shift_types": True
     },
     "miguelvenegas": {
         "password": "456",
         "role": "Newmont",
-        "excel_file": "PlanStaffNewmont.xlsx"
+        "excel_file": "PlanStaffNewmont.xlsx",
+        "can_manage_shift_types": True
     },
-    # FR-05.1: Administrator credentials
+    # Administrator (mantiene acceso completo)
     "admin": {
         "password": "123456789",
         "role": "Administrator",
-        "excel_file": ""  # Admin verá módulos RGM y Newmont
+        "excel_file": "",
+        "can_manage_shift_types": True
     }
 }
 
@@ -36,6 +42,7 @@ class LoginWindow(QDialog):
         self.username = None
         self.user_role = None
         self.excel_file = None
+        self.can_manage_shift_types = False  # <— NUEVO
 
         layout = QVBoxLayout(self)
 
@@ -48,7 +55,6 @@ class LoginWindow(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.check_login)
         buttons.rejected.connect(self.reject)
-        # Etiquetas en inglés
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Sign in")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancel")
 
@@ -58,18 +64,16 @@ class LoginWindow(QDialog):
         layout.addWidget(buttons)
 
     def check_login(self):
-        # Guardamos el texto tal como lo escribió el usuario para mostrarlo en la UI
         typed_username = self.username_input.text().strip()
-        # Para validar credenciales, usamos lower()
         username_lookup = typed_username.lower()
         password = self.password_input.text()
         user_data = CREDENTIALS.get(username_lookup)
 
         if user_data and user_data["password"] == password:
-            # Datos que usará el resto de la app
             self.username = typed_username if typed_username else username_lookup
             self.user_role = user_data["role"]
             self.excel_file = user_data["excel_file"]
+            self.can_manage_shift_types = bool(user_data.get("can_manage_shift_types", False))  # <— NUEVO
             self.accept()
         else:
             QMessageBox.warning(self, "Login Error", "Invalid username or password.")

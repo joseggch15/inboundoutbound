@@ -1,10 +1,10 @@
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QComboBox, QDateEdit, QPushButton, QTableWidget,
-    QTableWidgetItem, QHeaderView, QGroupBox, QRadioButton, QMessageBox, QFileDialog,
-    QTabWidget, QApplication
+    QTableWidgetItem, QHeaderView, QGroupBox, QMessageBox, QFileDialog,
+    QTabWidget, QApplication, QColorDialog, QTimeEdit
 )
-from PyQt6.QtCore import QDate, Qt, pyqtSignal
+from PyQt6.QtCore import QDate, Qt, pyqtSignal, QTime
 from PyQt6.QtGui import QColor
 from datetime import datetime
 import os
@@ -119,17 +119,8 @@ class PlanStaffWidget(QWidget):
         self.role_display = QLineEdit(); self.role_display.setReadOnly(True)
         self.badge_display = QLineEdit(); self.badge_display.setReadOnly(True)
 
-        self.shift_combo = QComboBox()
-        self.shift_combo.addItems(["Day Shift", "Night Shift"])
-
-        self.on_radio = QRadioButton("ON")
-        self.off_radio = QRadioButton("OFF")
-        self.none_radio = QRadioButton("Do Not Mark Days")
-        self.on_radio.setChecked(True)
-        # habilitar shift solo si ON
-        self.on_radio.toggled.connect(lambda: self.shift_combo.setEnabled(self.on_radio.isChecked()))
-        self.off_radio.toggled.connect(lambda: self.shift_combo.setEnabled(self.on_radio.isChecked()))
-        self.none_radio.toggled.connect(lambda: self.shift_combo.setEnabled(self.on_radio.isChecked()))
+        # NUEVO: selector unificado de estado/turno (base + personalizados)
+        self.status_selector = QComboBox()
 
         self.start_date_edit = QDateEdit(QDate.currentDate()); self.start_date_edit.setCalendarPopup(True); self.start_date_edit.setDisplayFormat("dd/MM/yyyy")
         self.end_date_edit = QDateEdit(QDate.currentDate().addDays(14)); self.end_date_edit.setCalendarPopup(True); self.end_date_edit.setDisplayFormat("dd/MM/yyyy")
@@ -140,20 +131,44 @@ class PlanStaffWidget(QWidget):
         form_layout.addWidget(QLabel("Select Employee:"), 0, 0); form_layout.addWidget(self.user_selector_combo, 0, 1)
         form_layout.addWidget(QLabel("Role/Department:"), 1, 0); form_layout.addWidget(self.role_display, 1, 1)
         form_layout.addWidget(QLabel("Badge (ID):"), 2, 0); form_layout.addWidget(self.badge_display, 2, 1)
-        form_layout.addWidget(QLabel("Shift:"), 3, 0); form_layout.addWidget(self.shift_combo, 3, 1)
+        form_layout.addWidget(QLabel("Status/Shift:"), 3, 0); form_layout.addWidget(self.status_selector, 3, 1)
+        form_layout.addWidget(QLabel("Period Start Date:"), 4, 0); form_layout.addWidget(self.start_date_edit, 4, 1)
+        form_layout.addWidget(QLabel("Period End Date:"), 5, 0); form_layout.addWidget(self.end_date_edit, 5, 1)
+        form_layout.addWidget(save_button, 6, 0, 1, 2)
 
-        status_layout = QHBoxLayout()
-        status_layout.addWidget(self.on_radio); status_layout.addWidget(self.off_radio); status_layout.addWidget(self.none_radio)
-
-        form_layout.addWidget(QLabel("Status to Mark:"), 4, 0)
-        form_layout.addLayout(status_layout, 4, 1)
-        form_layout.addWidget(QLabel("Period Start Date:"), 5, 0); form_layout.addWidget(self.start_date_edit, 5, 1)
-        form_layout.addWidget(QLabel("Period End Date:"), 6, 0); form_layout.addWidget(self.end_date_edit, 6, 1)
-        form_layout.addWidget(save_button, 7, 0, 1, 2)
+        # Cargar opciones (base + personalizados)
+        self.load_shift_type_options()
 
         return form_layout
 
     # ---------- data loaders ----------
+    def load_shift_type_options(self):
+        """Carga estados base + tipos personalizados (de DB) en el combo."""
+        self.status_selector.blockSignals(True)
+        self.status_selector.clear()
+
+        # Opción vacía
+        self.status_selector.addItem("— Do Not Mark Days —", {"kind": "none"})
+
+        # Base
+        self.status_selector.addItem("OFF", {"kind": "base", "status": "OFF", "shift_type": None, "in_time": None, "out_time": None})
+        self.status_selector.addItem("ON (Day Shift)", {"kind": "base", "status": "ON", "shift_type": "Day Shift", "in_time": None, "out_time": None})
+        self.status_selector.addItem("ON NS (Night Shift)", {"kind": "base", "status": "ON NS", "shift_type": "Night Shift", "in_time": None, "out_time": None})
+
+        # Personalizados
+        types = db.get_shift_types(self.source)
+        if types:
+            self.status_selector.addItem("—— Custom Shift Types ——", {"kind": "separator"})
+            for t in types:
+                label = f"{t['name']} [{t['code']}]  {t['in_time']}-{t['out_time']}"
+                self.status_selector.addItem(
+                    label,
+                    {"kind": "custom", "code": t['code'], "name": t['name'], "in_time": t['in_time'], "out_time": t['out_time']}
+                )
+
+        self.status_selector.setCurrentIndex(0)
+        self.status_selector.blockSignals(False)
+
     def load_schedule_data(self):
         FROZEN_COLUMN_COUNT = 3
         df = excel.get_schedule_preview(self.excel_file)
@@ -161,6 +176,9 @@ class PlanStaffWidget(QWidget):
             self.frozen_table.clear(); self.schedule_table.clear()
             self.frozen_table.setRowCount(0); self.schedule_table.setRowCount(0)
             return
+
+        # mapa de colores por código personalizado
+        custom_map = db.get_shift_type_map(self.source)
 
         actual_frozen_count = min(df.shape[1], FROZEN_COLUMN_COUNT)
         headers = [str(col.strftime('%Y-%m-%d')) if hasattr(col, "strftime") else str(col) for col in df.columns]
@@ -183,15 +201,18 @@ class PlanStaffWidget(QWidget):
                     self.frozen_table.setItem(i, j, item)
                 else:
                     col_index = j - actual_frozen_count
-                    val_str = text.upper()  # Usar texto ya saneado
+                    val_str = text.upper().strip()
+                    # Colores base
                     if 'ON NS' in val_str or 'NIGHT' in val_str:
                         item.setBackground(QColor("#FFFF99"))
-                    elif 'ON' in val_str or 'DAY' in val_str or val_str.isdigit():
+                    elif val_str == 'ON' or 'DAY' in val_str or val_str.isdigit():
                         item.setBackground(QColor("#C6EFCE"))
-                    elif 'OFF' in val_str or 'BREAK' in val_str or 'KO' in val_str:
+                    elif val_str in ('OFF', 'BREAK', 'KO', 'LEAVE'):
                         item.setBackground(QColor("#FFC7CE"))
-                    elif 'LEAVE' in val_str:
-                        item.setBackground(QColor("#D9D9D9"))
+                    else:
+                        # ¿código personalizado?
+                        if val_str in custom_map and custom_map[val_str].get("color_hex"):
+                            item.setBackground(QColor(custom_map[val_str]["color_hex"]))
                     self.schedule_table.setItem(i, col_index, item)
 
         self.frozen_table.resizeColumnsToContents()
@@ -276,13 +297,24 @@ class PlanStaffWidget(QWidget):
             box.exec()
             return
 
-        schedule_status = "OFF"
-        shift_type = None
-        if self.on_radio.isChecked():
-            schedule_status = "ON"
-            shift_type = self.shift_combo.currentText()
-        elif self.none_radio.isChecked():
+        # Interpretar selección de estado/turno
+        sel = self.status_selector.currentData()
+        if not sel or sel.get("kind") == "none":
             schedule_status = None
+            shift_type = None
+            in_time = None
+            out_time = None
+        elif sel["kind"] == "base":
+            schedule_status = sel["status"]           # 'ON'|'ON NS'|'OFF'
+            shift_type = sel["shift_type"]            # 'Day Shift'|'Night Shift'|None
+            in_time = None
+            out_time = None
+        else:
+            # custom
+            schedule_status = sel["code"]             # código
+            shift_type = sel["name"]                  # nombre del tipo
+            in_time = sel.get("in_time")
+            out_time = sel.get("out_time")
 
         # --- FR-01: Confirmación de sobrescritura (Excel + BD) ---
         conflicts_excel = excel.find_conflicts(self.excel_file, username, badge, start_date, end_date)
@@ -302,21 +334,30 @@ class PlanStaffWidget(QWidget):
         prev_map = db.get_schedule_map_for_range(badge, start_date, end_date, self.source)
 
         # --- Persistencia en BD ---
-        if schedule_status in ("ON", "OFF"):
+        if schedule_status in ("ON", "OFF", "ON NS") or (schedule_status and isinstance(schedule_status, str)):
             # histórico de rango
-            db.add_operation(username, role, badge, start_date, end_date)
+            if schedule_status is not None:
+                db.add_operation(username, role, badge, start_date, end_date)
             # estado día a día
-            db.upsert_schedule_range(badge, start_date, end_date, schedule_status, shift_type, self.source)
+            if schedule_status is None:
+                db.clear_schedule_range(badge, start_date, end_date, self.source)
+            else:
+                db.upsert_schedule_range(
+                    badge, start_date, end_date, schedule_status, shift_type, self.source,
+                    in_time=in_time, out_time=out_time
+                )
         else:
             # limpiar estado día a día en BD cuando se elige "Do Not Mark Days"
             db.clear_schedule_range(badge, start_date, end_date, self.source)
 
         # --- Actualizar Excel
         success, message = excel.update_plan_staff_excel(
-            self.excel_file, username, role, badge, schedule_status, shift_type, start_date, end_date
+            self.excel_file, username, role, badge,
+            schedule_status, shift_type, start_date, end_date, self.source,
+            in_time=in_time, out_time=out_time
         )
 
-        # --- Auditoría (FR-04): detalle con prev y nuevo ---
+        # --- Auditoría (FR-04)
         new_map = db.get_schedule_map_for_range(badge, start_date, end_date, self.source)
         db.log_event(
             self.logged_username,
@@ -342,11 +383,11 @@ class PlanStaffWidget(QWidget):
         excel_data, message = excel.generate_transport_report(self.excel_file, s, e)
 
         file_path, _ = QFileDialog.getSaveFileName(
-    self,
-    "Save Transportation Report",
-    f"Transport_Request_{s.strftime('%Y%m%d')}_to_{e.strftime('%Y%m%d')}.xlsx",
-    "Excel Files (*.xlsx)"
-)
+            self,
+            "Save Transportation Report",
+            f"Transport_Request_{s.strftime('%Y%m%d')}_to_{e.strftime('%Y%m%d')}.xlsx",
+            "Excel Files (*.xlsx)"
+        )
 
         if not file_path:
             return
@@ -371,7 +412,7 @@ class PlanStaffWidget(QWidget):
             box.exec()
 
     def export_plan_from_db(self):
-        """FR-03: Exporta una planilla desde el estado actual en la BD, manteniendo formato del template actual."""
+        """FR-03: Exporta una planilla desde el estado actual en la BD (incluye tipos personalizados)."""
         users = db.get_all_users(self.source)
         schedules = db.get_schedules_for_source(self.source)
 
@@ -389,7 +430,7 @@ class PlanStaffWidget(QWidget):
         if not dest_path:
             return
 
-        ok, msg = excel.export_plan_from_db(self.excel_file, users, schedules, dest_path)
+        ok, msg = excel.export_plan_from_db(self.excel_file, users, schedules, dest_path, self.source)
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Information if ok else QMessageBox.Icon.Critical)
         box.setWindowTitle("Export" if ok else "Error")
@@ -401,6 +442,7 @@ class PlanStaffWidget(QWidget):
             db.log_event(self.logged_username, self.source, "DATA_EXPORT", f"PLAN_EXPORT -> {dest_path}")
 
     def refresh_ui_data(self):
+        self.load_shift_type_options()  # <- refresca opciones
         self.load_schedule_data()
         self.load_db_data()
         self.load_users_to_selector()
@@ -592,50 +634,205 @@ class CrudWidget(QWidget):
 
 
 # -------------------------------------------------------------
-# Widget: Audit Log (visible solo para Admin)
+# Widget: Shift Types Admin (Admin y Site Managers)
 # -------------------------------------------------------------
-class AuditLogWidget(QWidget):
-    def __init__(self, source: str | None):
+class ShiftTypeAdminWidget(QWidget):
+    types_changed = pyqtSignal(str)  # emite source
+
+    def __init__(self, source: str, excel_file: str, logged_username: str):
         super().__init__()
         self.source = source
-        layout = QVBoxLayout(self)
-        self.audit_table = QTableWidget()
-        layout.addWidget(self.audit_table)
+        self.excel_file = excel_file
+        self.logged_username = logged_username or "Unknown"
+        self.current_type_id = None
+        self.current_old_code = None
 
-        refresh_btn = QPushButton("🔄 Refresh")
-        refresh_btn.clicked.connect(self.load_audit_log_data)
-        layout.addWidget(refresh_btn, alignment=Qt.AlignmentFlag.AlignRight)
+        layout = QHBoxLayout(self)
 
-        self.load_audit_log_data()
+        # Left: form
+        form_layout = QGridLayout()
+        self.name_input = QLineEdit()
+        self.code_input = QLineEdit()
+        self.color_display = QLineEdit(); self.color_display.setReadOnly(True)
+        self.pick_color_btn = QPushButton("🎨 Pick Color")
+        self.pick_color_btn.clicked.connect(self.pick_color)
 
-    def load_audit_log_data(self):
-        events = db.get_audit_log(source=self.source)
-        headers = ["Timestamp", "User", "Source", "Action", "Detail"]
-        self.audit_table.setRowCount(len(events))
-        self.audit_table.setColumnCount(len(headers))
-        self.audit_table.setHorizontalHeaderLabels(headers)
+        self.in_time_edit = QTimeEdit(); self.in_time_edit.setDisplayFormat("HH:mm"); self.in_time_edit.setTime(QTime(8, 0))
+        self.out_time_edit = QTimeEdit(); self.out_time_edit.setDisplayFormat("HH:mm"); self.out_time_edit.setTime(QTime(17, 0))
 
-        for r, ev in enumerate(events):
-            self.audit_table.setItem(r, 0, QTableWidgetItem(ev.get('ts', '')))
-            self.audit_table.setItem(r, 1, QTableWidgetItem(ev.get('username', '')))
-            self.audit_table.setItem(r, 2, QTableWidgetItem(ev.get('source', '')))
-            self.audit_table.setItem(r, 3, QTableWidgetItem(ev.get('action_type', '')))
-            self.audit_table.setItem(r, 4, QTableWidgetItem(ev.get('detail', '')))
+        self.new_btn = QPushButton("✨ New Shift Type")
+        self.new_btn.clicked.connect(self.clear_form)
+        self.save_btn = QPushButton("💾 Save")
+        self.save_btn.clicked.connect(self.save_type)
+        self.delete_btn = QPushButton("❌ Delete")
+        self.delete_btn.clicked.connect(self.delete_type)
 
-        self.audit_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        form_layout.addWidget(QLabel("Name:"), 0, 0); form_layout.addWidget(self.name_input, 0, 1)
+        form_layout.addWidget(QLabel("Code (short):"), 1, 0); form_layout.addWidget(self.code_input, 1, 1)
+        form_layout.addWidget(QLabel("Color:"), 2, 0)
+        h_color = QHBoxLayout(); h_color.addWidget(self.color_display); h_color.addWidget(self.pick_color_btn)
+        form_layout.addLayout(h_color, 2, 1)
+        form_layout.addWidget(QLabel("IN time (HH:MM):"), 3, 0); form_layout.addWidget(self.in_time_edit, 3, 1)
+        form_layout.addWidget(QLabel("OUT time (HH:MM):"), 4, 0); form_layout.addWidget(self.out_time_edit, 4, 1)
+        actions = QHBoxLayout(); actions.addWidget(self.new_btn); actions.addWidget(self.save_btn); actions.addWidget(self.delete_btn)
+        form_layout.addLayout(actions, 5, 0, 1, 2)
+
+        form_group = create_group_box(f"Configure Shift Types ({self.source})", form_layout)
+        form_group.setFixedWidth(450)
+
+        # Right: table
+        table_layout = QVBoxLayout()
+        self.types_table = QTableWidget()
+        self.types_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.types_table.itemClicked.connect(self.load_type_to_form)
+        table_layout.addWidget(self.types_table)
+
+        table_group = create_group_box("Defined Shift Types", table_layout)
+
+        layout.addWidget(form_group)
+        layout.addWidget(table_group)
+
+        self.refresh_table()
+
+    def pick_color(self):
+        initial = QColor(self.color_display.text() or "#FFC000")
+        color = QColorDialog.getColor(initial, self, "Pick Color")
+        if color.isValid():
+            self.color_display.setText(color.name())
+
+    def load_type_to_form(self, item):
+        row = item.row()
+        self.current_type_id = int(self.types_table.item(row, 0).text())
+        name = self.types_table.item(row, 1).text()
+        code = self.types_table.item(row, 2).text()
+        color = self.types_table.item(row, 3).text()
+        in_time = self.types_table.item(row, 4).text()
+        out_time = self.types_table.item(row, 5).text()
+        self.name_input.setText(name)
+        self.code_input.setText(code)
+        self.color_display.setText(color)
+        self.in_time_edit.setTime(QTime.fromString(in_time, "HH:mm"))
+        self.out_time_edit.setTime(QTime.fromString(out_time, "HH:mm"))
+        self.current_old_code = code
+
+    def clear_form(self):
+        self.current_type_id = None
+        self.current_old_code = None
+        self.name_input.clear()
+        self.code_input.clear()
+        self.color_display.setText("#FFC000")
+        self.in_time_edit.setTime(QTime(8, 0))
+        self.out_time_edit.setTime(QTime(17, 0))
+        self.types_table.clearSelection()
+
+    def save_type(self):
+        name = self.name_input.text().strip()
+        code = self.code_input.text().strip().upper()
+        color_hex = self.color_display.text().strip() or "#FFC000"
+        in_time = self.in_time_edit.time().toString("HH:mm")
+        out_time = self.out_time_edit.time().toString("HH:mm")
+
+        if not name or not code:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Incomplete Data")
+            box.setText("Name and Code are required.")
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+            box.exec()
+            return
+
+        if self.current_type_id:
+            ok, msg, old_code, new_code = db.update_shift_type(self.current_type_id, self.source, name, code, color_hex, in_time, out_time)
+            if ok:
+                # Si cambió el código -> actualizar Excel
+                if old_code and new_code and old_code != new_code:
+                    excel.apply_shift_type_update_to_excel(self.excel_file, self.source, old_code, new_code, color_hex)
+                db.log_event(self.logged_username, self.source, "SHIFT_TYPE_UPDATE", f"{old_code} -> {new_code} | {name} {in_time}-{out_time} {color_hex}")
+                self.types_changed.emit(self.source)
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Information if ok else QMessageBox.Icon.Warning)
+            box.setWindowTitle("Save" if ok else "Error")
+            box.setText(msg)
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+            box.exec()
+        else:
+            ok, msg = db.create_shift_type(self.source, name, code, color_hex, in_time, out_time)
+            if ok:
+                db.log_event(self.logged_username, self.source, "SHIFT_TYPE_CREATE", f"{code} | {name} {in_time}-{out_time} {color_hex}")
+                self.types_changed.emit(self.source)
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Information if ok else QMessageBox.Icon.Warning)
+            box.setWindowTitle("Create" if ok else "Error")
+            box.setText(msg)
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+            box.exec()
+
+        self.refresh_table()
+        self.clear_form()
+
+    def delete_type(self):
+        if not self.current_type_id:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("No Selection")
+            box.setText("Please select a shift type in the table to delete.")
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+            box.exec()
+            return
+
+        confirm = QMessageBox(self)
+        confirm.setIcon(QMessageBox.Icon.Question)
+        confirm.setWindowTitle("Confirm Deletion")
+        confirm.setText(f"Are you sure you want to delete {self.name_input.text()}?")
+        yes_btn = confirm.addButton("Yes", QMessageBox.ButtonRole.YesRole)
+        confirm.addButton("No", QMessageBox.ButtonRole.NoRole)
+        confirm.exec()
+
+        if confirm.clickedButton() == yes_btn:
+            ok, msg, source, code = db.delete_shift_type(self.current_type_id)
+            if ok:
+                db.log_event(self.logged_username, self.source, "SHIFT_TYPE_DELETE", f"{code}")
+                self.types_changed.emit(self.source)
+            # Si está en uso, el mensaje ya indica por qué no se puede eliminar
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Information if ok else QMessageBox.Icon.Warning)
+            box.setWindowTitle("Delete" if ok else "Cannot delete")
+            box.setText(msg)
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+            box.exec()
+
+            self.refresh_table()
+            self.clear_form()
+
+    def refresh_table(self):
+        types = db.get_shift_types(self.source)
+        headers = ["ID", "Name", "Code", "Color", "IN", "OUT"]
+        self.types_table.setRowCount(len(types))
+        self.types_table.setColumnCount(len(headers))
+        self.types_table.setHorizontalHeaderLabels(headers)
+        for r, t in enumerate(types):
+            self.types_table.setItem(r, 0, QTableWidgetItem(str(t['id'])))
+            self.types_table.setItem(r, 1, QTableWidgetItem(t['name']))
+            self.types_table.setItem(r, 2, QTableWidgetItem(t['code']))
+            self.types_table.setItem(r, 3, QTableWidgetItem(t['color_hex']))
+            self.types_table.setItem(r, 4, QTableWidgetItem(t['in_time']))
+            self.types_table.setItem(r, 5, QTableWidgetItem(t['out_time']))
+        self.types_table.setColumnHidden(0, True)
+        self.types_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
 
 # -------------------------------------------------------------
-# Ventana principal (perfil normal)
+# Ventana principal (perfil normal: RGM o Newmont)
 # -------------------------------------------------------------
 class MainWindow(QMainWindow):
     logout_signal = pyqtSignal()
 
-    def __init__(self, user_role, excel_file, logged_username=None):
+    def __init__(self, user_role, excel_file, logged_username=None, can_manage_shift_types: bool = False):
         super().__init__()
         self.user_role = user_role  # RGM or Newmont. Used as 'source'
         self.excel_file = excel_file
         self.logged_username = logged_username or "Unknown"
+        self.can_manage_shift_types = bool(can_manage_shift_types)  # <— NUEVO
 
         db.setup_database()
         db.log_event(self.logged_username, self.user_role, "USER_LOGIN", f"Excel={self.excel_file}")
@@ -670,13 +867,20 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         main_layout.addWidget(tabs)
 
-        # Pestaña Plan Staff (con preview/registro/reportes)
+        # 1) Plan Staff (con preview/registro/reportes)
         self.plan_widget = PlanStaffWidget(self.user_role, self.excel_file, self.logged_username)
         tabs.addTab(self.plan_widget, "📅 Plan Staff & Reports")
 
-        # Pestaña CRUD
+        # 2) Users CRUD
         self.crud_widget = CrudWidget(self.user_role, self.excel_file, self.logged_username)
         tabs.addTab(self.crud_widget, "👥 Users (CRUD)")
+
+        # 3) Shift Types (solo si el usuario puede gestionarlos)
+        if self.can_manage_shift_types:
+            self.shift_types_widget = ShiftTypeAdminWidget(self.user_role, self.excel_file, self.logged_username)
+            tabs.addTab(self.shift_types_widget, f"⚙️ {self.user_role} Shift Types")
+            # Refrescar combos/preview cuando cambien tipos
+            self.shift_types_widget.types_changed.connect(lambda src: self.plan_widget.refresh_ui_data())
 
         # 🔗 Conexiones para refrescar "Select Employee" inmediatamente
         self.crud_widget.users_changed.connect(self._sync_after_users_changed)
@@ -693,7 +897,7 @@ class MainWindow(QMainWindow):
 
 
 # -------------------------------------------------------------
-# Ventana de Administrador (perfil con acceso unificado)
+# Ventana de Administrador (acceso unificado)
 # -------------------------------------------------------------
 class AdminMainWindow(QMainWindow):
     logout_signal = pyqtSignal()
@@ -736,7 +940,6 @@ class AdminMainWindow(QMainWindow):
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
 
-        # FR-05.3: Pestañas visibles para Admin
         # 1) RGM CRUD
         self.rgm_crud = CrudWidget("RGM", rgm_excel, self.logged_username)
         self.tabs.addTab(self.rgm_crud, "👥 RGM CRUD")
@@ -757,13 +960,57 @@ class AdminMainWindow(QMainWindow):
         audit_all = AuditLogWidget(source=None)
         self.tabs.addTab(audit_all, "📝 Audit Log")
 
-        # 🔗 Sincronización en caliente para Admin (cada CRUD refresca su Plan Staff)
+        # 6) Shift Types (Admin para ambos sites)
+        self.rgm_types = ShiftTypeAdminWidget("RGM", rgm_excel, self.logged_username)
+        self.tabs.addTab(self.rgm_types, "⚙️ RGM Shift Types")
+
+        self.nm_types = ShiftTypeAdminWidget("Newmont", newmont_excel, self.logged_username)
+        self.tabs.addTab(self.nm_types, "⚙️ Newmont Shift Types")
+
+        # 🔗 Sincronización en caliente
         self.rgm_crud.users_changed.connect(lambda src: self.rgm_plan.refresh_users_only())
         self.rgm_crud.import_done.connect(lambda src: self.rgm_plan.refresh_users_only())
 
         self.nm_crud.users_changed.connect(lambda src: self.nm_plan.refresh_users_only())
         self.nm_crud.import_done.connect(lambda src: self.nm_plan.refresh_users_only())
 
+        self.rgm_types.types_changed.connect(lambda src: self.rgm_plan.refresh_ui_data())
+        self.nm_types.types_changed.connect(lambda src: self.nm_plan.refresh_ui_data())
+
     def handle_logout(self):
         self.logout_signal.emit()
         self.close()
+
+
+# -------------------------------------------------------------
+# Widget: Audit Log (visible para Admin; reutilizable si se desea)
+# -------------------------------------------------------------
+class AuditLogWidget(QWidget):
+    def __init__(self, source: str | None):
+        super().__init__()
+        self.source = source
+        layout = QVBoxLayout(self)
+        self.audit_table = QTableWidget()
+        layout.addWidget(self.audit_table)
+
+        refresh_btn = QPushButton("🔄 Refresh")
+        refresh_btn.clicked.connect(self.load_audit_log_data)
+        layout.addWidget(refresh_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+        self.load_audit_log_data()
+
+    def load_audit_log_data(self):
+        events = db.get_audit_log(source=self.source)
+        headers = ["Timestamp", "User", "Source", "Action", "Detail"]
+        self.audit_table.setRowCount(len(events))
+        self.audit_table.setColumnCount(len(headers))
+        self.audit_table.setHorizontalHeaderLabels(headers)
+
+        for r, ev in enumerate(events):
+            self.audit_table.setItem(r, 0, QTableWidgetItem(ev.get('ts', '')))
+            self.audit_table.setItem(r, 1, QTableWidgetItem(ev.get('username', '')))
+            self.audit_table.setItem(r, 2, QTableWidgetItem(ev.get('source', '')))
+            self.audit_table.setItem(r, 3, QTableWidgetItem(ev.get('action_type', '')))
+            self.audit_table.setItem(r, 4, QTableWidgetItem(ev.get('detail', '')))
+
+        self.audit_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)

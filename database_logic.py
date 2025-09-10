@@ -6,7 +6,7 @@ DB_FILE = 'transporte_operaciones.db'
 
 
 def setup_database():
-    """Create database tables if they do not exist."""
+    """Create database tables if they do not exist and run lightweight migrations."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
@@ -45,11 +45,23 @@ def setup_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             badge TEXT NOT NULL,
             date TEXT NOT NULL,              -- 'YYYY-MM-DD'
-            status TEXT NOT NULL,            -- 'ON', 'ON NS', 'OFF'
-            shift_type TEXT,                 -- 'Day Shift' | 'Night Shift' | NULL
+            status TEXT NOT NULL,            -- 'ON', 'ON NS', 'OFF' o CODIGO personalizado (p.ej. 'SOP')
+            shift_type TEXT,                 -- 'Day Shift' | 'Night Shift' | Nombre del tipo personalizado | NULL
             source TEXT NOT NULL,
+            in_time TEXT,                    -- HH:MM (para tipos personalizados)
+            out_time TEXT,                   -- HH:MM (para tipos personalizados)
             UNIQUE (badge, date, source)
     )''')
+
+    # --- migración blanda: agregar columnas si faltan (SQLite acepta ADD COLUMN múltiples veces con try/except) ---
+    try:
+        cursor.execute("ALTER TABLE schedules ADD COLUMN in_time TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE schedules ADD COLUMN out_time TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     # -------------------------
     # audit_log
@@ -59,9 +71,25 @@ def setup_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,          -- quien realizó la acción
             source TEXT NOT NULL,            -- RGM | Newmont | Administrator
-            action_type TEXT NOT NULL,       -- USER_LOGIN | SHIFT_MODIFICATION | DATA_EXPORT | DATA_IMPORT | ...
+            action_type TEXT NOT NULL,       -- USER_LOGIN | SHIFT_MODIFICATION | DATA_EXPORT | DATA_IMPORT | SHIFT_TYPE_* ...
             detail TEXT,
             ts TEXT NOT NULL DEFAULT (datetime('now'))
+    )''')
+
+    # -------------------------
+    # shift_types (nueva)
+    # -------------------------
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS shift_types (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,           -- RGM | Newmont (ámbito del tipo)
+            name TEXT NOT NULL,             -- único por source
+            code TEXT NOT NULL,             -- único por source (p.ej. 'SOP')
+            color_hex TEXT NOT NULL,        -- '#RRGGBB'
+            in_time TEXT NOT NULL,          -- 'HH:MM' 24h
+            out_time TEXT NOT NULL,         -- 'HH:MM' 24h
+            UNIQUE (source, name),
+            UNIQUE (source, code)
     )''')
 
     # Indexes útiles
@@ -70,6 +98,8 @@ def setup_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_schedules_badge ON schedules(badge)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_schedules_date ON schedules(date)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_shift_types_source ON shift_types(source)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_shift_types_code ON shift_types(code)")
 
     conn.commit()
     conn.close()
@@ -158,7 +188,6 @@ def add_users_bulk(users: list, source: str) -> int:
         added_count = cursor.rowcount if cursor.rowcount is not None else len(new_users)
     except sqlite3.Error as e:
         # En caso de conflicto global de UNIQUE(badge), se omiten esos registros.
-        # No abortamos la app.
         print(f"Database error when adding users in bulk: {e}")
     finally:
         conn.close()
@@ -239,37 +268,57 @@ def add_operation(username: str, role: str, badge: str, start_date: date, end_da
     conn.close()
 
 
-def upsert_schedule_day(badge: str, d: date, status: str, shift_type: Optional[str], source: str):
+def upsert_schedule_day(
+    badge: str,
+    d: date,
+    status: str,
+    shift_type: Optional[str],
+    source: str,
+    in_time: Optional[str] = None,
+    out_time: Optional[str] = None
+):
     """
-    Upsert de un día en schedules.
+    Upsert de un día en schedules. Soporta:
+      - estados base: 'ON'/'ON NS'/'OFF' (in_time/out_time pueden ser None)
+      - tipos personalizados: status=code, shift_type=name, in_time/out_time HH:MM
     """
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     try:
-        # Intentar UPDATE primero
+        # UPDATE primero
         cursor.execute(
-            "UPDATE schedules SET status = ?, shift_type = ? WHERE badge = ? AND date = ? AND source = ?",
-            (status, shift_type, badge, d.isoformat(), source)
+            "UPDATE schedules SET status = ?, shift_type = ?, in_time = ?, out_time = ? "
+            "WHERE badge = ? AND date = ? AND source = ?",
+            (status, shift_type, in_time, out_time, badge, d.isoformat(), source)
         )
         if cursor.rowcount == 0:
             cursor.execute(
-                "INSERT INTO schedules (badge, date, status, shift_type, source) VALUES (?, ?, ?, ?, ?)",
-                (badge, d.isoformat(), status, shift_type, source)
+                "INSERT INTO schedules (badge, date, status, shift_type, source, in_time, out_time) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (badge, d.isoformat(), status, shift_type, source, in_time, out_time)
             )
         conn.commit()
     finally:
         conn.close()
 
 
-def upsert_schedule_range(badge: str, start_d: date, end_d: date,
-                          status: str, shift_type: Optional[str], source: str) -> int:
+def upsert_schedule_range(
+    badge: str,
+    start_d: date,
+    end_d: date,
+    status: str,
+    shift_type: Optional[str],
+    source: str,
+    in_time: Optional[str] = None,
+    out_time: Optional[str] = None
+) -> int:
     """
-    Marca ON/ON NS/OFF por rango [start_d, end_d]. Devuelve cuántos días se escribieron.
+    Marca por rango [start_d, end_d]. Devuelve cuántos días se escribieron.
     """
     total = 0
     d = start_d
     while d <= end_d:
-        upsert_schedule_day(badge, d, status, shift_type, source)
+        upsert_schedule_day(badge, d, status, shift_type, source, in_time, out_time)
         total += 1
         d += timedelta(days=1)
     return total
@@ -290,15 +339,24 @@ def clear_schedule_range(badge: str, start_d: date, end_d: date, source: str) ->
 
 
 def get_schedule_map_for_range(badge: str, start_d: date, end_d: date, source: str) -> Dict[str, Dict]:
-    """Devuelve { 'YYYY-MM-DD': {'status':..., 'shift_type':...} } para el rango indicado."""
+    """Devuelve { 'YYYY-MM-DD': {'status':..., 'shift_type':..., 'in_time':..., 'out_time':...} } para el rango."""
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT date, status, shift_type FROM schedules WHERE badge = ? AND source = ? AND date >= ? AND date <= ?",
+        "SELECT date, status, shift_type, in_time, out_time "
+        "FROM schedules WHERE badge = ? AND source = ? AND date >= ? AND date <= ?",
         (badge, source, start_d.isoformat(), end_d.isoformat())
     )
-    res = {row['date']: {'status': row['status'], 'shift_type': row['shift_type']} for row in cursor.fetchall()}
+    res = {
+        row['date']: {
+            'status': row['status'],
+            'shift_type': row['shift_type'],
+            'in_time': row['in_time'],
+            'out_time': row['out_time']
+        }
+        for row in cursor.fetchall()
+    }
     conn.close()
     return res
 
@@ -309,7 +367,8 @@ def get_schedules_for_source(source: str) -> List[Dict]:
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT badge, date, status, shift_type, source FROM schedules WHERE source = ? ORDER BY date",
+        "SELECT badge, date, status, shift_type, source, in_time, out_time "
+        "FROM schedules WHERE source = ? ORDER BY date",
         (source,)
     )
     res = [dict(r) for r in cursor.fetchall()]
@@ -325,3 +384,141 @@ def get_all_operations() -> List[Dict]:
     res = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return res
+
+
+# ---------------------------------------------------------------------
+# Shift Types (CRUD + helpers)
+# ---------------------------------------------------------------------
+def get_shift_types(source: str) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, source, name, code, color_hex, in_time, out_time "
+        "FROM shift_types WHERE source = ? ORDER BY name",
+        (source,)
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_shift_type_map(source: str) -> Dict[str, Dict]:
+    """
+    Devuelve {code_upper: {'name':..., 'color_hex':..., 'in_time':..., 'out_time':...}}
+    """
+    types = get_shift_types(source)
+    return {
+        t['code'].strip().upper(): {
+            'name': t['name'],
+            'color_hex': t['color_hex'],
+            'in_time': t['in_time'],
+            'out_time': t['out_time']
+        }
+        for t in types
+    }
+
+
+def create_shift_type(source: str, name: str, code: str, color_hex: str, in_time: str, out_time: str) -> Tuple[bool, str]:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO shift_types (source, name, code, color_hex, in_time, out_time) VALUES (?,?,?,?,?,?)",
+            (source, name.strip(), code.strip().upper(), color_hex.strip(), in_time.strip(), out_time.strip())
+        )
+        conn.commit()
+        return True, "Shift type created."
+    except sqlite3.IntegrityError as e:
+        return False, f"Error: name/code already exists for {source}."
+    except sqlite3.Error as e:
+        return False, f"Database error: {e}"
+    finally:
+        conn.close()
+
+
+def update_shift_type(
+    type_id: int,
+    source: str,
+    name: str,
+    code: str,
+    color_hex: str,
+    in_time: str,
+    out_time: str
+) -> Tuple[bool, str, Optional[str], Optional[str]]:
+    """
+    Actualiza un tipo de turno. Si el código cambia, actualiza TODAS las asignaciones en schedules
+    (status viejo -> status nuevo) para el mismo source. Devuelve (ok, msg, old_code, new_code).
+    """
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT code FROM shift_types WHERE id = ? AND source = ?", (type_id, source))
+        row = cur.fetchone()
+        if not row:
+            return False, "Shift type not found.", None, None
+        old_code = row[0]
+        new_code = code.strip().upper()
+
+        # Verificar unicidad (name/code) excepto el propio registro
+        cur.execute("SELECT id FROM shift_types WHERE source=? AND name=? AND id != ?", (source, name.strip(), type_id))
+        if cur.fetchone():
+            return False, "Error: another shift type with the same name already exists.", None, None
+        cur.execute("SELECT id FROM shift_types WHERE source=? AND code=? AND id != ?", (source, new_code, type_id))
+        if cur.fetchone():
+            return False, "Error: another shift type with the same code already exists.", None, None
+
+        # Update shift_types
+        cur.execute(
+            "UPDATE shift_types SET name=?, code=?, color_hex=?, in_time=?, out_time=? WHERE id=? AND source=?",
+            (name.strip(), new_code, color_hex.strip(), in_time.strip(), out_time.strip(), type_id, source)
+        )
+
+        # Si cambió el código, propagar a schedules
+        if old_code != new_code:
+            cur.execute(
+                "UPDATE schedules SET status=? WHERE status=? AND source=?",
+                (new_code, old_code, source)
+            )
+
+        conn.commit()
+        return True, "Shift type updated.", old_code, new_code
+    except sqlite3.Error as e:
+        return False, f"Database error: {e}", None, None
+    finally:
+        conn.close()
+
+
+def delete_shift_type(type_id: int) -> Tuple[bool, str, Optional[str], Optional[str]]:
+    """
+    Intenta eliminar; si está en uso, lo impide.
+    Devuelve (ok, msg, source, code) para facilitar mensajes y acciones.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT source, code, name FROM shift_types WHERE id=?", (type_id,))
+        row = cur.fetchone()
+        if not row:
+            return False, "Shift type not found.", None, None
+        source, code, name = row[0], row[1], row[2]
+
+        # Regla crítica: impedir eliminación si está asignado
+        cur.execute("SELECT COUNT(1) FROM schedules WHERE source=? AND status=?", (source, code))
+        cnt = cur.fetchone()[0]
+        if cnt and int(cnt) > 0:
+            return (
+                False,
+                f"No se puede eliminar el tipo de turno '{name}' porque está asignado a uno o más empleados. "
+                f"Reasigne primero esos turnos.",
+                source,
+                code
+            )
+
+        cur.execute("DELETE FROM shift_types WHERE id=?", (type_id,))
+        conn.commit()
+        return True, "Shift type deleted.", source, code
+    except sqlite3.Error as e:
+        return False, f"Database error: {e}", None, None
+    finally:
+        conn.close()

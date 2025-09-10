@@ -14,7 +14,6 @@ class LauncherWindow(QWidget):
     """
     def __init__(self):
         super().__init__()
-        # <<<— TEXTS IN ENGLISH —>>>
         self.setWindowTitle("Welcome to Operations Manager")
         self.setGeometry(400, 400, 400, 200)
         self.main_app_window = None
@@ -22,14 +21,12 @@ class LauncherWindow(QWidget):
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # <<<— TEXTS IN ENGLISH —>>>
         title = QLabel("Transport & Operations Manager")
         font = title.font()
         font.setPointSize(16)
         font.setBold(True)
         title.setFont(font)
 
-        # <<<— TEXTS IN ENGLISH —>>>
         login_button = QPushButton("▶️ Sign In")
         login_button.setFixedSize(200, 50)
         font = login_button.font()
@@ -55,6 +52,7 @@ class LauncherWindow(QWidget):
             user_role = login_dialog.user_role
             excel_file = login_dialog.excel_file
             logged_username = login_dialog.username
+            can_manage_shift_types = getattr(login_dialog, "can_manage_shift_types", False)  # <— NUEVO
 
             self.hide()
 
@@ -62,7 +60,7 @@ class LauncherWindow(QWidget):
             loading_screen.show()
 
             start_time = datetime.now()
-            # Small non-blocking splash
+            # Small non-blocking splash (mantiene comportamiento actual)
             while (datetime.now() - start_time).total_seconds() < 3:
                 QApplication.instance().processEvents()
 
@@ -79,7 +77,8 @@ class LauncherWindow(QWidget):
                 self.main_app_window = MainWindow(
                     user_role=user_role,
                     excel_file=excel_file,
-                    logged_username=logged_username
+                    logged_username=logged_username,
+                    can_manage_shift_types=can_manage_shift_types  # <— NUEVO
                 )
 
             self.main_app_window.logout_signal.connect(self.handle_logout)
