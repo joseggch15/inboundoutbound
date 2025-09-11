@@ -1,3 +1,4 @@
+# Basado y extendido a partir del módulo original. Referencia: :contentReference[oaicite:0]{index=0}
 import sqlite3
 from datetime import date, timedelta
 from typing import Tuple, List, Dict, Optional

@@ -1,16 +1,33 @@
-import pandas as pd
-from datetime import date, timedelta, datetime
-from typing import List, Dict, Tuple, Optional
+# excel_logic.py
+# ============================================================
+# Utilidades de Excel para PlanStaff con SSoT (SQLite),
+# validación de estructura, importación validada,
+# exportación/regeneración desde BD, comparación Excel↔BD,
+# y utilidades de reporte.
+#
+# Esta versión corrige el error de Pylance:
+#   "variant no está definido"
+# garantizando que la variable 'variant' se inicializa y se
+# propaga correctamente en validate_excel_structure y en
+# cualquier flujo que la use (meta['variant']).
+# ============================================================
+
+from __future__ import annotations
+
 import os
 import io
+from datetime import date, timedelta, datetime
+from typing import List, Dict, Tuple, Optional, Set
+
+import pandas as pd
 import openpyxl
 from openpyxl.styles import PatternFill
 from openpyxl.comments import Comment
 
+# ============================================================
+# Helpers / Normalización
+# ============================================================
 
-# ---------------------------------------
-# Utilidades internas
-# ---------------------------------------
 def _is_blank_series(s: pd.Series) -> bool:
     """True si toda la serie es NaN o strings vacíos."""
     if s is None:
@@ -73,9 +90,27 @@ def _to_pydate(col) -> Optional[date]:
         return None
 
 
-# ---------------------------------------
+def _fill_for_base_status(status: Optional[str]) -> Optional[PatternFill]:
+    """Devuelve PatternFill para estados base ('ON', 'OFF', 'ON NS')."""
+    if status is None:
+        return None
+    s = str(status).strip().upper()
+    green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # ON día
+    red   = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")  # OFF
+    yel   = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")  # ON NS
+    if s == "ON":
+        return green
+    if s == "OFF":
+        return red
+    if s == "ON NS":
+        return yel
+    return None
+
+
+# ============================================================
 # Lecturas auxiliares / previews
-# ---------------------------------------
+# ============================================================
+
 def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
     """
     Carga un DataFrame con columnas: ROLE, NAME, BADGE y columnas fecha.
@@ -100,12 +135,12 @@ def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
                 df["BADGE"] = df["Company ID"]
         # Fechas
         date_cols = [c for c in cols if _is_date_header(c)]
-        keep = []
+        keep: List[str] = []
         # Mantener ROLE/NAME/BADGE si existen
         for key in ["ROLE", "NAME", "BADGE"]:
             if key in df.columns:
                 keep.append(key)
-        # si no había BADGE pero hay Company ID/Discipline, también
+        # si no había BADGE pero hay Company ID, también
         if "Company ID" in df.columns and "BADGE" not in keep:
             df["BADGE"] = df["Company ID"].astype(str)
             keep.append("BADGE")
@@ -210,9 +245,10 @@ def get_users_from_excel(plan_staff_file: str) -> list:
         return []
 
 
-# ---------------------------------------
-# Escritura / actualización de plan staff (FR-01 + tipos personalizados)
-# ---------------------------------------
+# ============================================================
+# Escritura / actualización del plan staff (Excel)
+# ============================================================
+
 def update_plan_staff_excel(
     plan_staff_file: str,
     username: str,
@@ -232,7 +268,7 @@ def update_plan_staff_excel(
     - Escribe:
         * Estados base -> 'ON' / 'ON NS' / 'OFF' con colores legacy.
         * Tipos personalizados -> código (p.ej. 'SOP') y color del tipo.
-          Además añade un comentario con 'IN-OUT' (HH:MM-HH:MM) si viene in_time/out_time.
+      Además añade un comentario con 'IN-OUT' (HH:MM-HH:MM) si viene in_time/out_time.
     - Si schedule_status es None, limpia el rango.
     """
     try:
@@ -355,9 +391,10 @@ def update_plan_staff_excel(
         return False, f"Error updating plan staff: {e}"
 
 
-# ---------------------------------------
-# RF-01: Detección de conflictos (sobrescritura)
-# ---------------------------------------
+# ============================================================
+# FR-01: Detección de conflictos (sobrescritura)
+# ============================================================
+
 def find_conflicts(plan_staff_file: str, username: str, badge: str,
                    schedule_start: date, schedule_end: date) -> List[Dict]:
     """
@@ -404,16 +441,24 @@ def find_conflicts(plan_staff_file: str, username: str, badge: str,
         return []
 
 
-# ---------------------------------------
-# RF-02: Importar Excel -> DB (usuarios + schedules)
-# ---------------------------------------
+# ============================================================
+# FR-02: Importar Excel -> DB (usuarios + schedules) con validación
+# ============================================================
+
 def import_excel_to_db(plan_staff_file: str, source: str) -> Tuple[int, int, int]:
     """
     Procesa .xlsx y almacena en la BD:
       - Usuarios (name, role, badge)
       - Schedules día-a-día (ON/ON NS/OFF)
     Devuelve: (nuevos_usuarios, usuarios_omitidos, upserts_schedule)
+
+    Si el archivo NO es válido (estructura), levanta ValueError con detalle.
     """
+    # Validación previa estricta
+    ok, errors, _meta = validate_excel_structure(plan_staff_file)
+    if not ok:
+        raise ValueError("Invalid Plan Staff structure:\n" + "\n".join(f"- {e}" for e in errors))
+
     from database_logic import add_users_bulk, get_all_users, upsert_schedule_day  # import diferido
 
     users_in_file = get_users_from_excel(plan_staff_file)
@@ -433,7 +478,6 @@ def import_excel_to_db(plan_staff_file: str, source: str) -> Tuple[int, int, int
     try:
         df = pd.read_excel(plan_staff_file, engine='openpyxl')
         # detectar identificadores
-        name_field = 'NAME' if 'NAME' in df.columns else None
         role_field = 'ROLE' if 'ROLE' in df.columns else ('Discipline' if 'Discipline' in df.columns else None)
         badge_field = 'BADGE' if 'BADGE' in df.columns else ('Company ID' if 'Company ID' in df.columns else None)
 
@@ -459,9 +503,10 @@ def import_excel_to_db(plan_staff_file: str, source: str) -> Tuple[int, int, int
     return (inserted, skipped, upserts)
 
 
-# ---------------------------------------
-# RF-03: Exportar Excel desde la BD (plantilla base + tipos personalizados)
-# ---------------------------------------
+# ============================================================
+# FR-03: Exportar Excel desde la BD (manteniendo plantilla)
+# ============================================================
+
 def export_plan_from_db(
     template_path: str,
     users: List[Dict],
@@ -471,7 +516,8 @@ def export_plan_from_db(
 ) -> Tuple[bool, str]:
     """
     users: [{'name','role','badge'}]
-    schedules: [{'badge','date':'YYYY-MM-DD','status', 'in_time','out_time'}]
+    schedules: [{'badge','date':'YYYY-MM-DD','status','shift_type','in_time','out_time'}]
+    Soporta plantillas RGM (NAME/ROLE/BADGE) y Newmont (Last/First/Discipline/Company ID).
     """
     try:
         if not os.path.exists(template_path):
@@ -487,9 +533,15 @@ def export_plan_from_db(
         ws = wb.active
 
         header_map = {cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)}
-        for h in ["NAME", "ROLE", "BADGE"]:
-            if h not in header_map:
-                return False, f"Required header '{h}' not found in template."
+
+        # Detectar variante de plantilla
+        variant = None
+        if all(h in header_map for h in ("NAME", "ROLE", "BADGE")):
+            variant = "RGM"
+        elif all(h in header_map for h in ("Last Name", "First Name", "Discipline", "Company ID")):
+            variant = "Newmont"
+        else:
+            return False, "Unsupported template: expected RGM (NAME/ROLE/BADGE) or Newmont (Last/First/Discipline/Company ID)."
 
         # Mapas de fechas existentes
         date_map: Dict[date, int] = {}
@@ -502,7 +554,9 @@ def export_plan_from_db(
         red   = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
         yel   = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
 
-        def _fill_for(status: str) -> Optional[PatternFill]:
+        def _fill_for(status: Optional[str]) -> Optional[PatternFill]:
+            if status is None:
+                return None
             s = str(status).strip().upper()
             if s == "OFF":
                 return red
@@ -516,57 +570,129 @@ def export_plan_from_db(
                 return PatternFill(start_color=hex6, end_color=hex6, fill_type="solid")
             return None
 
-        # Escribir usuarios en orden
-        start_row = 2
-        for idx, u in enumerate(users):
-            r = start_row + idx
-            ws.cell(row=r, column=header_map["NAME"], value=u["name"])
-            ws.cell(row=r, column=header_map["ROLE"], value=u["role"])
-            ws.cell(row=r, column=header_map["BADGE"], value=u["badge"])
-
-        # Asegurar columnas de todas las fechas presentes
-        used_dates = sorted({datetime.strptime(s['date'], "%Y-%m-%d").date() for s in schedules})
-        for d in used_dates:
-            if d not in date_map:
-                new_col = ws.max_column + 1
-                ws.cell(row=1, column=new_col, value=datetime(d.year, d.month, d.day))
-                date_map[d] = new_col
-
-        # Mapa rápido badge->row
-        badge_row = {}
-        for idx, u in enumerate(users):
-            r = start_row + idx
-            badge_row[u['badge']] = r
-
+        # Schedules -> mapa por badge y fecha
+        sched_by_badge: Dict[str, Dict[str, Dict[str, Optional[str]]]] = {}
         for s in schedules:
-            b = s['badge']
-            r = badge_row.get(b)
-            if not r:
+            b = str(s.get('badge', '')).strip()
+            d = str(s.get('date', '')).strip()  # 'YYYY-MM-DD'
+            if not b or not d:
                 continue
-            d = datetime.strptime(s['date'], "%Y-%m-%d").date()
-            col = date_map.get(d)
-            if not col:
-                continue
-            cell = ws.cell(row=r, column=col)
-            st = (s.get('status') or '').strip().upper()
+            sched_by_badge.setdefault(b, {})[d] = {
+                'status': s.get('status'),
+                'shift_type': s.get('shift_type'),
+                'in_time': s.get('in_time'),
+                'out_time': s.get('out_time')
+            }
 
-            if st in ("OFF", "ON NS", "ON"):
-                cell.value = st
-                cell.fill = _fill_for(st) or PatternFill(fill_type=None)
-                cell.comment = None
-            elif st:
-                # personalizado
-                cell.value = st
-                cell.fill = _fill_for(st) or PatternFill(fill_type=None)
-                it = s.get('in_time'); ot = s.get('out_time')
-                if it and ot:
-                    cell.comment = Comment(f"{it}-{ot}", "ShiftType")
-                else:
-                    cell.comment = None
+        # Helper para nombre en Newmont
+        def split_name(full: str) -> Tuple[str, str]:
+            if not full:
+                return "", ""
+            s = str(full).strip()
+            if "," in s:
+                last, first = s.split(",", 1)
+                return last.strip(), first.strip()
+            parts = s.split()
+            if len(parts) >= 2:
+                return parts[-1], " ".join(parts[:-1])
+            return s, ""
+
+        # Escribir/actualizar usuarios
+        # Índice rápido por badge ya existente
+        badge_col = header_map["BADGE"] if variant == "RGM" else header_map["Company ID"]
+        existing_rows_by_badge: Dict[str, int] = {}
+        for i in range(2, ws.max_row + 1):
+            v = ws.cell(row=i, column=badge_col).value
+            if v:
+                existing_rows_by_badge[str(v).strip()] = i
+
+        for u in users:
+            name = u.get('name', '').strip()
+            role = u.get('role', '').strip()
+            badge = str(u.get('badge', '')).strip()
+            if not badge:
+                continue
+
+            row_idx = existing_rows_by_badge.get(badge)
+            if not row_idx:
+                row_idx = ws.max_row + 1
+                existing_rows_by_badge[badge] = row_idx
+
+            if variant == "RGM":
+                ws.cell(row=row_idx, column=header_map["NAME"], value=name)
+                ws.cell(row=row_idx, column=header_map["ROLE"], value=role)
+                ws.cell(row=row_idx, column=header_map["BADGE"], value=badge)
             else:
-                cell.value = None
-                cell.fill = PatternFill(fill_type=None)
-                cell.comment = None
+                last, first = split_name(name)
+                ws.cell(row=row_idx, column=header_map["Last Name"], value=last)
+                ws.cell(row=row_idx, column=header_map["First Name"], value=first)
+                ws.cell(row=row_idx, column=header_map["Discipline"], value=role)
+                ws.cell(row=row_idx, column=header_map["Company ID"], value=badge)
+
+            # Rellenar días
+            # Fechas ordenadas por las que ya existen en plantilla
+            dates_sorted = sorted(date_map.keys())
+            for d in dates_sorted:
+                col_idx = date_map[d]
+                cell = ws.cell(row=row_idx, column=col_idx)
+                info = sched_by_badge.get(badge, {}).get(d.isoformat(), None)
+                if info:
+                    st = (info.get('status') or '').strip().upper() if info.get('status') else None
+                    cell.value = st
+                    cell.fill = _fill_for(st) or PatternFill(fill_type=None)
+                    # comentario para personalizados si tenemos HH:MM
+                    if st and st not in ("ON", "ON NS", "OFF"):
+                        it = (info.get('in_time') or '').strip()
+                        ot = (info.get('out_time') or '').strip()
+                        if it and ot:
+                            cell.comment = Comment(f"{it}-{ot}", "ShiftType")
+                        else:
+                            cell.comment = None
+                else:
+                    cell.value = None
+                    cell.fill = PatternFill(fill_type=None)
+                    cell.comment = None
+
+        # Expandir columnas si hay fechas en BD que no existían en plantilla
+        # (opcional; se puede agregar al final)
+        all_sched_dates: Set[date] = set()
+        for b, per_day in sched_by_badge.items():
+            for d_str in per_day.keys():
+                try:
+                    y, m, dy = d_str.split("-")
+                    all_sched_dates.add(date(int(y), int(m), int(dy)))
+                except Exception:
+                    pass
+        missing_dates = sorted([d for d in all_sched_dates if d not in date_map])
+        for d in missing_dates:
+            new_col = ws.max_column + 1
+            ws.cell(row=1, column=new_col, value=datetime(d.year, d.month, d.day))
+            date_map[d] = new_col
+            # escribir valores para cada usuario
+            for u in users:
+                badge = str(u.get('badge', '')).strip()
+                if not badge:
+                    continue
+                row_idx = existing_rows_by_badge.get(badge)
+                if not row_idx:
+                    continue
+                info = sched_by_badge.get(badge, {}).get(d.isoformat(), None)
+                cell = ws.cell(row=row_idx, column=new_col)
+                if info:
+                    st = (info.get('status') or '').strip().upper() if info.get('status') else None
+                    cell.value = st
+                    cell.fill = _fill_for(st) or PatternFill(fill_type=None)
+                    if st and st not in ("ON", "ON NS", "OFF"):
+                        it = info.get('in_time')
+                        ot = info.get('out_time')
+                        if it and ot:
+                            cell.comment = Comment(f"{it}-{ot}", "ShiftType")
+                        else:
+                            cell.comment = None
+                else:
+                    cell.value = None
+                    cell.fill = PatternFill(fill_type=None)
+                    cell.comment = None
 
         wb.save(output_path)
         return True, f"Plan successfully exported to '{os.path.basename(output_path)}'."
@@ -574,10 +700,9 @@ def export_plan_from_db(
         return False, f"Export error: {e}"
 
 
-# ---------------------------------------
-# Generar reporte de transporte (sin cambios en lógica base)
-# ---------------------------------------
-
+# ============================================================
+# Reporte de transporte (IN/OUT) — sin cambios en lógica base
+# ============================================================
 
 def generate_transport_report(plan_staff_file: str, start_date: date, end_date: date) -> Tuple[bytes, str]:
     """
@@ -594,25 +719,24 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
     Si no hay IN dentro del rango, se agrega la primera ENTRADA > end_date detectada.
     Si no hay OUT dentro del rango, se agrega la primera SALIDA  > end_date detectada.
     """
-    # ---- 1) Inferir source por nombre de archivo (no requiere cambiar main_window) ----
+    # ---- 1) Inferir source por nombre de archivo ----
     fname = os.path.basename(plan_staff_file).lower()
     source = "Newmont" if "newmont" in fname else "RGM"
 
     # ---- 2) Cargar mapping de tipos personalizados desde BD ----
     try:
         from database_logic import get_shift_type_map  # import diferido para evitar ciclos
-        custom_map: Dict[str, Dict] = get_shift_type_map(source)  # code -> {in_time, out_time, ...}
-        # normalizar claves a upper por seguridad
+        custom_map: Dict[str, Dict] = get_shift_type_map(source)  # code -> {in_time, out_time, .}
         custom_map = {k.strip().upper(): v for k, v in custom_map.items()}
     except Exception:
         custom_map = {}
 
-    # ---- 3) Abrir plan staff con openpyxl (necesitamos comentarios de celdas) ----
+    # ---- 3) Abrir plan staff ----
     try:
         wb_src = openpyxl.load_workbook(plan_staff_file, data_only=True)
         ws_src = wb_src.active
     except Exception:
-        # Devuelve un archivo vacío con hoja 'travel list' (comportamiento actual cuando no hay formato soportado)
+        # Retornar archivo vacío con la hoja 'travel list'
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "travel list"
@@ -642,14 +766,13 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
         out.seek(0)
         return out.read(), "Unsupported Plan Staff format."
 
-    # Orden de fechas (todas las disponibles en la planilla)
+    # Orden de fechas
     dates_sorted: List[Tuple[int, date]] = sorted(date_cols.items(), key=lambda x: x[1])
 
-    # ---- 5) Helpers de normalización ----
+    # ---- 5) Helpers ----
     OFF_LIKE = {"OFF", "BREAK", "KO", "LEAVE"}
 
     def _norm_status(cell_val: Optional[str]) -> Optional[str]:
-        """Normaliza el valor de celda a un status/código usable."""
         if cell_val is None:
             return None
         s = str(cell_val).strip()
@@ -660,61 +783,47 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
             return "OFF"
         if su in ("ON", "ON NS"):
             return su
-        # Valores legacy tipo "1", "OK", etc. trátalos como ON (día)
         if su.isdigit() or su == "OK" or "DAY" in su:
             return "ON"
-        # Cualquier otro texto lo tratamos como código personalizado
-        return su
+        return su  # personalizado
 
     def _is_working(status: Optional[str]) -> bool:
-        """Retorna True si el estado cuenta como 'trabajando'."""
         if not status:
             return False
         if status in ("ON", "ON NS"):
             return True
         if status == "OFF":
             return False
-        # Para personalizados: si está en BD lo consideramos working; si no, asumimos working.
-        return True
+        return True  # personalizado -> cuenta como trabajando
 
     def _hhmm_to_hhmmss(t: str) -> str:
         t = (t or "").strip()
-        # admite "HH:MM" o "HH:MM:SS"
         if len(t) == 5:
             return t + ":00"
         return t
 
     def _times_for(status: str, io_kind: str, cell_comment: Optional[str]) -> str:
-        """
-        Devuelve 'HH:MM:SS' para el status dado:
-          - base: ON / ON NS -> horarios fijos
-          - personalizado: primero BD (shift_types), luego comentario de celda 'IN-OUT'
-        """
         su = (status or "").strip().upper()
         if su == "ON":
             return "06:00:00" if io_kind == "IN" else "12:00:00"
         if su == "ON NS":
             return "12:00:00" if io_kind == "IN" else "06:00:00"
 
-        # Personalizados -> BD
         info = custom_map.get(su)
         if info:
             t = info.get("in_time") if io_kind == "IN" else info.get("out_time")
             if t:
                 return _hhmm_to_hhmmss(t)
 
-        # Fallback -> comentario de la celda "HH:MM-HH:MM"
         if cell_comment:
             txt = str(cell_comment).strip()
             if "-" in txt:
                 left, right = txt.split("-", 1)
                 t = left if io_kind == "IN" else right
                 return _hhmm_to_hhmmss(t.strip())
-
-        # Último recurso: como ON (día)
         return "06:00:00" if io_kind == "IN" else "12:00:00"
 
-    # ---- 6) Preparar workbook de salida (layout legacy) ----
+    # ---- 6) Workbook de salida ----
     company_default = "PLGims"
     site_code = "PBO"
 
@@ -735,93 +844,122 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
     for i, h in enumerate(headers_out, start=11):
         ws.cell(row=6, column=i, value=h)
 
+    # ---- 7) Recorrer filas (personas) y detectar IN/OUT ----
     r_in = 7
     r_out = 7
     idx_in = 1
     idx_out = 1
 
-    # ---- 7) Por cada fila (persona) analizar entradas/salidas ----
-    last_name_col = header_map.get("Last Name")
-    first_name_col = header_map.get("First Name")
-    role_col = header_map.get("ROLE") or header_map.get("Discipline")
-    badge_col = header_map.get("BADGE") or header_map.get("Company ID")
-    name_col = header_map.get("NAME")
+    # Campos de identificación
+    if is_rgm:
+        name_col = header_map["NAME"]
+        role_col = header_map["ROLE"]
+        badge_col = header_map["BADGE"]
+        def get_name(row):  # Last, First (no tenemos split exacto, usamos todo como 'NAME')
+            nm = ws_src.cell(row=row, column=name_col).value
+            nm = str(nm).strip() if nm else ""
+            # Heurística: si viene "Last, First" lo separamos; si no, ponemos todo en NAME y FIRST vacio
+            if "," in nm:
+                last, first = nm.split(",", 1)
+                return last.strip(), first.strip()
+            parts = nm.split()
+            if len(parts) >= 2:
+                return parts[-1], " ".join(parts[:-1])
+            return nm, ""
+    else:
+        ln_col = header_map["Last Name"]
+        fn_col = header_map["First Name"]
+        role_col = header_map["Discipline"]
+        badge_col = header_map["Company ID"]
+        def get_name(row):
+            ln = ws_src.cell(row=row, column=ln_col).value
+            fn = ws_src.cell(row=row, column=fn_col).value
+            return (str(ln).strip() if ln else ""), (str(fn).strip() if fn else "")
 
-    for row_idx in range(2, ws_src.max_row + 1):
-        # Identidad
-        if is_new:
-            last = str(ws_src.cell(row=row_idx, column=last_name_col).value or "").strip()
-            first = str(ws_src.cell(row=row_idx, column=first_name_col).value or "").strip()
-        else:
-            full_name = str(ws_src.cell(row=row_idx, column=name_col).value or "").strip()
-            if "," in full_name:
-                last, first = [p.strip() for p in full_name.split(",", 1)]
-            else:
-                parts = full_name.split()
-                first = parts[0] if parts else ""
-                last = " ".join(parts[1:]) if len(parts) > 1 else ""
-        role = str(ws_src.cell(row=row_idx, column=role_col).value or "").strip()
-        badge = str(ws_src.cell(row=row_idx, column=badge_col).value or "").strip()
-        if not badge and not first and not last:
-            continue  # fila vacía
+    for r in range(2, ws_src.max_row + 1):
+        badge = ws_src.cell(row=r, column=badge_col).value
+        if not badge:
+            continue
+        badge = str(badge).strip()
+        role = ws_src.cell(row=r, column=role_col).value
+        role = str(role).strip() if role else ""
+        last, first = get_name(r)
 
-        # Construir secuencia (fecha -> status + comentario) para TODAS las fechas del archivo
-        seq: List[Tuple[date, Optional[str], Optional[str], int]] = []  # (d, status, comment_text, col)
-        for col, d in dates_sorted:
-            cell = ws_src.cell(row=row_idx, column=col)
-            st = _norm_status(cell.value)
-            cmt = cell.comment.text if cell.comment else None
-            seq.append((d, st, cmt, col))
+        # Construir secuencia de estados por fecha
+        per_day: Dict[date, Tuple[Optional[str], Optional[str]]] = {}  # date -> (status, comment_text)
+        for c_idx, d in dates_sorted:
+            v = ws_src.cell(row=r, column=c_idx).value
+            st = _norm_status(v)
+            if st:
+                # comentario (si hay)
+                cm = ws_src.cell(row=r, column=c_idx).comment
+                per_day[d] = (st, cm.text if cm else None)
 
-        if not seq:
+        if not per_day:
             continue
 
-        # Flags para “próxima” entrada/salida fuera del rango
+        # Detectar IN/OUT dentro del rango
         had_entry_in_range = False
         had_exit_in_range = False
-        next_entry_after_range: Optional[Tuple[date, str, Optional[str]]] = None
-        next_exit_after_range: Optional[Tuple[date, str, Optional[str]]] = None
+        next_entry_after_range = None
+        next_exit_after_range = None
 
-        for i in range(len(seq)):
-            d, st, cmt, col = seq[i]
-            prev_st = seq[i - 1][1] if i > 0 else None
-            next_st = seq[i + 1][1] if i + 1 < len(seq) else None
+        # Fechas ordenadas completas
+        all_dates = [d for _, d in dates_sorted]
+        n = len(all_dates)
+        for i, d in enumerate(all_dates):
+            if d < start_date:
+                continue
+            # status(d-1), status(d), status(d+1)
+            st_d = per_day.get(d, (None, None))[0]
+            if not _is_working(st_d):
+                # No IN/OUT si ese día no se trabaja
+                continue
 
-            # Entrada
-            if _is_working(st) and (prev_st != st):
+            prev_d = all_dates[i - 1] if i - 1 >= 0 else None
+            next_d = all_dates[i + 1] if i + 1 < n else None
+            st_prev = per_day.get(prev_d, (None, None))[0] if prev_d else None
+            st_next = per_day.get(next_d, (None, None))[0] if next_d else None
+
+            # Entrada si cambia respecto al anterior
+            if st_prev != st_d:
                 if start_date <= d <= end_date:
+                    had_entry_in_range = True
+                    cmt = per_day.get(d, (None, None))[1]
                     ws.cell(row=r_in, column=1, value=idx_in)
                     ws.cell(row=r_in, column=2, value=last)
                     ws.cell(row=r_in, column=3, value=first)
                     ws.cell(row=r_in, column=4, value=badge)
                     ws.cell(row=r_in, column=5, value=company_default)
                     ws.cell(row=r_in, column=6, value=role)
-                    ws.cell(row=r_in, column=7, value=site_code)               # FROM
-                    ws.cell(row=r_in, column=8, value=d.strftime("%Y-%m-%d"))  # DATE
-                    ws.cell(row=r_in, column=9, value=_times_for(st, "IN", cmt))
+                    ws.cell(row=r_in, column=7, value=site_code)
+                    ws.cell(row=r_in, column=8, value=d.strftime("%Y-%m-%d"))
+                    ws.cell(row=r_in, column=9, value=_times_for(st_d, "IN", cmt))
                     r_in += 1
                     idx_in += 1
-                    had_entry_in_range = True
                 elif d > end_date and next_entry_after_range is None:
-                    next_entry_after_range = (d, st or "", cmt)
+                    cmt = per_day.get(d, (None, None))[1]
+                    next_entry_after_range = (d, st_d, cmt)
 
-            # Salida
-            if _is_working(st) and (next_st != st):
+            # Salida si cambia respecto al siguiente
+            if st_next != st_d:
                 if start_date <= d <= end_date:
+                    had_exit_in_range = True
+                    cmt = per_day.get(d, (None, None))[1]
                     ws.cell(row=r_out, column=11, value=idx_out)
                     ws.cell(row=r_out, column=12, value=last)
                     ws.cell(row=r_out, column=13, value=first)
                     ws.cell(row=r_out, column=14, value=badge)
                     ws.cell(row=r_out, column=15, value=company_default)
                     ws.cell(row=r_out, column=16, value=role)
-                    ws.cell(row=r_out, column=17, value=site_code)             # TO
+                    ws.cell(row=r_out, column=17, value=site_code)
                     ws.cell(row=r_out, column=18, value=d.strftime("%Y-%m-%d"))
-                    ws.cell(row=r_out, column=19, value=_times_for(st, "OUT", cmt))
+                    ws.cell(row=r_out, column=19, value=_times_for(st_d, "OUT", cmt))
                     r_out += 1
                     idx_out += 1
-                    had_exit_in_range = True
                 elif d > end_date and next_exit_after_range is None:
-                    next_exit_after_range = (d, st or "", cmt)
+                    cmt = per_day.get(d, (None, None))[1]
+                    next_exit_after_range = (d, st_d, cmt)
 
         # Si no hubo ENTRADA en el rango, agrega la próxima > end_date
         if not had_entry_in_range and next_entry_after_range:
@@ -858,9 +996,11 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
     out.seek(0)
     return out.read(), "Transportation report generated."
 
-# ---------------------------------------
-# Utilidad: Propagar cambios de código/color a Excel (inmediato en preview)
-# ---------------------------------------
+
+# ============================================================
+# Utilidad: Propagar cambios de código/color a Excel (inmediato)
+# ============================================================
+
 def apply_shift_type_update_to_excel(plan_staff_file: str, source: str, old_code: str, new_code: str, color_hex: str) -> Tuple[bool, str]:
     """
     Reemplaza en TODO el archivo Excel el código viejo por el nuevo y aplica el color indicado.
@@ -894,3 +1034,246 @@ def apply_shift_type_update_to_excel(plan_staff_file: str, source: str, old_code
         return True, "Excel updated with new shift code/color."
     except Exception as e:
         return False, f"Excel update error: {e}"
+
+
+# ============================================================
+# VALIDACIÓN de estructura y salud del archivo (SSoT guardrails)
+# ============================================================
+
+def validate_excel_structure(plan_staff_file: str) -> Tuple[bool, List[str], Dict]:
+    """
+    Valida que el Excel sea una planilla soportada (RGM o Newmont) y que posea columnas de fecha.
+    Devuelve: (ok, errors, meta) con meta['variant'] = 'RGM' | 'Newmont' | None y meta['date_columns'].
+    """
+    errors: List[str] = []
+    meta: Dict = {'variant': None, 'date_columns': 0, 'headers': []}
+
+    if not os.path.exists(plan_staff_file):
+        errors.append(f"File not found: {plan_staff_file}")
+        return False, errors, meta
+
+    try:
+        wb = openpyxl.load_workbook(plan_staff_file, read_only=True, data_only=True)
+        ws = wb.active
+    except Exception as e:
+        errors.append(f"Cannot open workbook: {e}")
+        return False, errors, meta
+
+    header_map: Dict[str, int] = {}
+    date_count = 0
+    for c in ws[1]:
+        v = c.value
+        if isinstance(v, str):
+            header_map[v] = c.column
+        elif isinstance(v, datetime):
+            date_count += 1
+
+    meta['headers'] = list(header_map.keys())
+    meta['date_columns'] = int(date_count)
+
+    # Detectar variante
+    variant: Optional[str] = None
+    if all(h in header_map for h in ("NAME", "ROLE", "BADGE")):
+        variant = "RGM"
+    elif all(h in header_map for h in ("Last Name", "First Name", "Discipline", "Company ID")):
+        variant = "Newmont"
+    else:
+        errors.append("Unsupported format. Expected headers for RGM (NAME/ROLE/BADGE) or Newmont (Last Name/First Name/Discipline/Company ID).")
+
+    meta['variant'] = variant  # <- SIEMPRE definido en meta (corrige Pylance)
+
+    if variant is None:
+        # Sin variante, no seguimos validando otras reglas
+        return False, errors, meta
+
+    if meta['date_columns'] == 0:
+        errors.append("No date columns detected in first row (datetime cells).")
+
+    # Confirmar headers mínimos por variante
+    if variant == "RGM":
+        for h in ("NAME", "ROLE", "BADGE"):
+            if h not in header_map:
+                errors.append(f"Required header '{h}' missing.")
+    else:
+        for h in ("Last Name", "First Name", "Discipline", "Company ID"):
+            if h not in header_map:
+                errors.append(f"Required header '{h}' missing.")
+
+    return (len(errors) == 0), errors, meta
+
+
+# ============================================================
+# Comparación Excel ↔ BD (coherencia con SSoT)
+# ============================================================
+
+def check_db_sync_with_excel(plan_staff_file: str, source: str) -> Dict:
+    """
+    Compara usuarios y schedules entre Excel y BD.
+    Retorna:
+      {
+        'users_in_excel': int,
+        'users_in_db': int,
+        'missing_badges_in_db': [badge,...],     # En Excel pero NO en BD
+        'extra_badges_in_db': [badge,...],       # En BD pero NO en Excel
+        'schedule_mismatches': [
+            {'badge':..., 'date':'YYYY-MM-DD', 'excel': 'ON', 'db':'OFF'}, ...
+        ]
+      }
+    """
+    report = {
+        'users_in_excel': 0,
+        'users_in_db': 0,
+        'missing_badges_in_db': [],
+        'extra_badges_in_db': [],
+        'schedule_mismatches': []
+    }
+
+    ok, _errors, _meta = validate_excel_structure(plan_staff_file)
+    if not ok:
+        return report
+
+    # --- BD
+    try:
+        from database_logic import get_all_users, get_schedules_for_source
+        users_db = get_all_users(source)
+        sched_db = get_schedules_for_source(source)
+    except Exception:
+        users_db = []
+        sched_db = []
+
+    db_badges = {str(u.get('badge', '')).strip() for u in users_db if u.get('badge')}
+    report['users_in_db'] = len(db_badges)
+
+    sched_db_map: Dict[str, Dict[str, str]] = {}
+    for s in sched_db:
+        b = str(s.get('badge', '')).strip()
+        d = str(s.get('date', '')).strip()
+        st = (s.get('status') or '').strip().upper() if s.get('status') else None
+        if not b or not d:
+            continue
+        sched_db_map.setdefault(b, {})[d] = st
+
+    # --- Excel
+    try:
+        wb = openpyxl.load_workbook(plan_staff_file, data_only=True)
+        ws = wb.active
+    except Exception:
+        return report
+
+    header_map: Dict[str, int] = {}
+    date_cols: Dict[int, date] = {}
+    for c in ws[1]:
+        v = c.value
+        if isinstance(v, str):
+            header_map[v] = c.column
+        elif isinstance(v, datetime):
+            date_cols[c.column] = v.date()
+
+    # Determine variant & badge column
+    if all(h in header_map for h in ("NAME", "ROLE", "BADGE")):
+        badge_col = header_map["BADGE"]
+    elif all(h in header_map for h in ("Last Name", "First Name", "Discipline", "Company ID")):
+        badge_col = header_map["Company ID"]
+    else:
+        # No soportado
+        return report
+
+    excel_badges: Set[str] = set()
+    sched_excel_map: Dict[str, Dict[str, str]] = {}
+
+    def _norm_for_compare(val: object) -> Optional[str]:
+        if val is None:
+            return None
+        s = str(val).strip()
+        if s == "":
+            return None
+        u = s.upper()
+        if u in ("OFF", "BREAK", "KO", "LEAVE"):
+            return "OFF"
+        if u in ("ON", "ON NS"):
+            return u
+        if u.isdigit() or u == "OK" or "DAY" in u:
+            return "ON"
+        return u  # personalizado
+
+    for r in range(2, ws.max_row + 1):
+        b = ws.cell(row=r, column=badge_col).value
+        if not b:
+            continue
+        b = str(b).strip()
+        if not b:
+            continue
+        excel_badges.add(b)
+
+        # Por fecha
+        for c_idx, d in date_cols.items():
+            val = ws.cell(row=r, column=c_idx).value
+            st = _norm_for_compare(val)
+            if st is not None:
+                sched_excel_map.setdefault(b, {})[d.isoformat()] = st
+
+    report['users_in_excel'] = len(excel_badges)
+
+    # Diferencias en usuarios
+    report['missing_badges_in_db'] = sorted(list(excel_badges - db_badges))
+    report['extra_badges_in_db'] = sorted(list(db_badges - excel_badges))
+
+    # Mismatches de schedule (solo comparar cuando ambos tienen valor)
+    mismatches: List[Dict] = []
+    for b, per_day in sched_excel_map.items():
+        for d_str, st_excel in per_day.items():
+            st_db = sched_db_map.get(b, {}).get(d_str)
+            if st_db is None:
+                continue
+            if (st_excel or '').upper() != (st_db or '').upper():
+                mismatches.append({
+                    'badge': b,
+                    'date': d_str,
+                    'excel': st_excel,
+                    'db': st_db
+                })
+    report['schedule_mismatches'] = mismatches
+
+    return report
+
+
+# ============================================================
+# REGENERACIÓN desde BD (SSoT) — independiente del archivo
+# ============================================================
+
+def regenerate_plan_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]:
+    """
+    Regenera el archivo PlanStaff (en la ruta indicada) a partir de la BD (SSoT).
+    - Si el archivo NO existe o su estructura es inválida, crea una plantilla mínima RGM (NAME/ROLE/BADGE).
+    - Luego exporta el estado actual (usuarios+schedules) a dicho archivo.
+    """
+    try:
+        from database_logic import get_all_users, get_schedules_for_source
+        users = get_all_users(source)
+        schedules = get_schedules_for_source(source)
+    except Exception as e:
+        return False, f"DB error: {e}"
+
+    # Validar si la plantilla actual es utilizable
+    ok, _errors, _meta = validate_excel_structure(plan_staff_file)
+
+    if not ok:
+        # Crear plantilla mínima (RGM-like compatible con export_plan_from_db)
+        try:
+            os.makedirs(os.path.dirname(plan_staff_file), exist_ok=True) if os.path.dirname(plan_staff_file) else None
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Operations_best_opt"
+            headers = ["TEAM", "ROLE", "NAME", "BADGE"]
+            for col_idx, h in enumerate(headers, start=1):
+                ws.cell(row=1, column=col_idx, value=h)
+            wb.save(plan_staff_file)
+        except Exception as e:
+            return False, f"Cannot create template: {e}"
+
+    # Exportar desde BD usando la plantilla (soporta RGM y Newmont si ya existe)
+    ok2, msg = export_plan_from_db(plan_staff_file, users, schedules, plan_staff_file, source)
+    if ok2:
+        return True, f"PlanStaff file regenerated from DB (SSoT): {os.path.basename(plan_staff_file)}"
+    else:
+        return False, msg

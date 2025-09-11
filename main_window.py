@@ -1,10 +1,18 @@
+# -*- coding: utf-8 -*-
+# Ventanas principales con SSoT, validación, regeneración y detección de archivo.
+# Integra la UI con database_logic.py y excel_logic.py para:
+# - DB como SSoT
+# - Validación de estructura de Excel antes de importar
+# - Regeneración completa del PlanStaff (RGM o Newmont) desde BD
+# - Detección de movimiento/eliminación/renombrado del Excel con QTimer
+
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QComboBox, QDateEdit, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QGroupBox, QMessageBox, QFileDialog,
     QTabWidget, QApplication, QColorDialog, QTimeEdit
 )
-from PyQt6.QtCore import QDate, Qt, pyqtSignal, QTime
+from PyQt6.QtCore import QDate, Qt, pyqtSignal, QTime, QTimer
 from PyQt6.QtGui import QColor
 from datetime import datetime
 import os
@@ -47,8 +55,29 @@ class PlanStaffWidget(QWidget):
         self.source = source              # "RGM" | "Newmont"
         self.excel_file = excel_file
         self.logged_username = logged_username or "Unknown"
+        self._last_excel_mtime = None
+        self._missing_prompt_shown = False
 
         root = QVBoxLayout(self)
+
+        # --- Estado del Excel (salud / SSoT) ---
+        status_layout = QHBoxLayout()
+        self.excel_health_label = QLabel("Excel status: checking...")
+        self.excel_health_label.setStyleSheet("font-weight: bold;")
+        self.regen_button = QPushButton("🛠️ Regenerar PlanStaff desde BD")
+        self.regen_button.clicked.connect(self.regenerate_excel_from_db)
+        self.validate_button = QPushButton("🧪 Validar Estructura Excel")
+        self.validate_button.clicked.connect(self.validate_excel_structure_ui)
+        self.compare_button = QPushButton("🔎 Comparar Excel vs BD")
+        self.compare_button.clicked.connect(self.compare_excel_db_ui)
+        status_layout.addWidget(self.excel_health_label)
+        status_layout.addStretch()
+        status_layout.addWidget(self.validate_button)
+        status_layout.addWidget(self.compare_button)
+        status_layout.addWidget(self.regen_button)
+
+        # ❗️FIX: agregar QGroupBox con addWidget (no addLayout)
+        root.addWidget(create_group_box("Estado del Archivo & SSoT", status_layout))
 
         # --- Schedule preview ---
         preview_container = QVBoxLayout()
@@ -71,7 +100,7 @@ class PlanStaffWidget(QWidget):
         # --- Registro + Historial lado a lado ---
         forms_db_layout = QHBoxLayout()
         # Registro
-        self.registration_groupbox = create_group_box("1. Register Employee Schedule", self._build_registration_form())
+        self.registration_groupbox = create_group_box("1. Register Employee Schedule (DB is SSoT)", self._build_registration_form())
         forms_db_layout.addWidget(self.registration_groupbox, 1)
         # Historial (operations)
         db_view_layout = QVBoxLayout()
@@ -99,15 +128,22 @@ class PlanStaffWidget(QWidget):
         report_button.clicked.connect(self.generate_report)
         report_layout.addWidget(report_button)
 
-        export_button = QPushButton("📤 Export Plan Staff (.xlsx)")
+        export_button = QPushButton("📤 Export Plan Staff (.xlsx) desde BD")
         export_button.clicked.connect(self.export_plan_from_db)
         report_layout.addWidget(export_button)
 
-        report_title = f"2. Generate Transportation Report (from {os.path.basename(self.excel_file)})"
+        report_title = f"2. Transportation Report & Export (from {os.path.basename(self.excel_file)})"
         root.addWidget(create_group_box(report_title, report_layout))
 
         # Cargar datos iniciales
         self.refresh_ui_data()
+
+        # --- Monitor del archivo: detecta mover/eliminar/renombrar ---
+        self.file_watch_timer = QTimer(self)
+        self.file_watch_timer.setInterval(2000)  # 2s
+        self.file_watch_timer.timeout.connect(self.check_excel_health)
+        self.file_watch_timer.start()
+        self.check_excel_health()
 
     # ---------- sub-UIs ----------
     def _build_registration_form(self):
@@ -163,9 +199,14 @@ class PlanStaffWidget(QWidget):
                 label = f"{t['name']} [{t['code']}]  {t['in_time']}-{t['out_time']}"
                 self.status_selector.addItem(
                     label,
-                    {"kind": "custom", "code": t['code'], "name": t['name'], "in_time": t['in_time'], "out_time": t['out_time']}
+                    {
+                        "kind": "custom",
+                        "code": t['code'],
+                        "name": t['name'],
+                        "in_time": t['in_time'],
+                        "out_time": t['out_time']
+                    }
                 )
-
         self.status_selector.setCurrentIndex(0)
         self.status_selector.blockSignals(False)
 
@@ -194,7 +235,7 @@ class PlanStaffWidget(QWidget):
 
         for i, row in df.iterrows():
             for j, val in enumerate(row):
-                text = _clean(val)  # FR-07
+                text = _clean(val)
                 item = QTableWidgetItem(text)
 
                 if j < actual_frozen_count:
@@ -271,57 +312,41 @@ class PlanStaffWidget(QWidget):
         end_date = self.end_date_edit.date().toPyDate()
 
         if not username or username == "-- Select a user --":
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Incomplete Data")
-            box.setText("Please select an employee.")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
-            return
+            box = QMessageBox(self); box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Incomplete Data"); box.setText("Please select an employee.")
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole); box.exec(); return
 
         if not role:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Incomplete Data")
-            box.setText("Please select a role/department.")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
-            return
+            box = QMessageBox(self); box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Incomplete Data"); box.setText("Please select a role/department.")
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole); box.exec(); return
 
         if start_date > end_date:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Date Error")
-            box.setText("Start date cannot be after end date.")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
-            return
+            box = QMessageBox(self); box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Date Error"); box.setText("Start date cannot be after end date.")
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole); box.exec(); return
 
         # Interpretar selección de estado/turno
         sel = self.status_selector.currentData()
         if not sel or sel.get("kind") == "none":
-            schedule_status = None
-            shift_type = None
-            in_time = None
-            out_time = None
+            schedule_status = None; shift_type = None; in_time = None; out_time = None
+        elif sel["kind"] == "separator":
+            schedule_status = None; shift_type = None; in_time = None; out_time = None
         elif sel["kind"] == "base":
             schedule_status = sel["status"]           # 'ON'|'ON NS'|'OFF'
             shift_type = sel["shift_type"]            # 'Day Shift'|'Night Shift'|None
-            in_time = None
-            out_time = None
+            in_time = None; out_time = None
         else:
             # custom
             schedule_status = sel["code"]             # código
             shift_type = sel["name"]                  # nombre del tipo
-            in_time = sel.get("in_time")
-            out_time = sel.get("out_time")
+            in_time = sel.get("in_time"); out_time = sel.get("out_time")
 
         # --- FR-01: Confirmación de sobrescritura (Excel + BD) ---
         conflicts_excel = excel.find_conflicts(self.excel_file, username, badge, start_date, end_date)
         conflicts_db_map = db.get_schedule_map_for_range(badge, start_date, end_date, self.source)
         if conflicts_excel or conflicts_db_map:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
+            box = QMessageBox(self); box.setIcon(QMessageBox.Icon.Warning)
             box.setWindowTitle("Overwrite Shift Confirmation")
             box.setText("Are you sure you want to modify the existing shift?")
             accept_btn = box.addButton("Accept", QMessageBox.ButtonRole.AcceptRole)
@@ -333,7 +358,7 @@ class PlanStaffWidget(QWidget):
         # --- Datos previos para auditoría (FR-04) ---
         prev_map = db.get_schedule_map_for_range(badge, start_date, end_date, self.source)
 
-        # --- Persistencia en BD ---
+        # --- Persistencia en BD (SSoT) ---
         if schedule_status in ("ON", "OFF", "ON NS") or (schedule_status and isinstance(schedule_status, str)):
             # histórico de rango
             if schedule_status is not None:
@@ -350,7 +375,7 @@ class PlanStaffWidget(QWidget):
             # limpiar estado día a día en BD cuando se elige "Do Not Mark Days"
             db.clear_schedule_range(badge, start_date, end_date, self.source)
 
-        # --- Actualizar Excel
+        # --- Excel (artefacto derivado; si no existe, se crea)
         success, message = excel.update_plan_staff_excel(
             self.excel_file, username, role, badge,
             schedule_status, shift_type, start_date, end_date, self.source,
@@ -376,6 +401,7 @@ class PlanStaffWidget(QWidget):
 
         # Refrescar preview/combos/tabla
         self.refresh_ui_data()
+        self.check_excel_health()
 
     def generate_report(self):
         s = self.report_start_date.date().toPyDate()
@@ -394,22 +420,14 @@ class PlanStaffWidget(QWidget):
         try:
             with open(file_path, 'wb') as f:
                 f.write(excel_data)
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Information)
-            box.setWindowTitle("Success")
-            box.setText(f"{message}\n\nReport saved to:\n{file_path}")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
-
-            # FR-04: log exportación
+            box = QMessageBox(self); box.setIcon(QMessageBox.Icon.Information)
+            box.setWindowTitle("Success"); box.setText(f"{message}\n\nReport saved to:\n{file_path}")
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole); box.exec()
             db.log_event(self.logged_username, self.source, "DATA_EXPORT", f"TRANSPORT -> {file_path}")
         except Exception as e:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Critical)
-            box.setWindowTitle("Save Error")
-            box.setText(f"Could not save the file.\nError: {e}")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
+            box = QMessageBox(self); box.setIcon(QMessageBox.Icon.Critical)
+            box.setWindowTitle("Save Error"); box.setText(f"Could not save the file.\nError: {e}")
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole); box.exec()
 
     def export_plan_from_db(self):
         """FR-03: Exporta una planilla desde el estado actual en la BD (incluye tipos personalizados)."""
@@ -417,12 +435,9 @@ class PlanStaffWidget(QWidget):
         schedules = db.get_schedules_for_source(self.source)
 
         if not users:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("No Data")
-            box.setText("There are no users to export.")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
+            box = QMessageBox(self); box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("No Data"); box.setText("There are no users to export.")
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole); box.exec()
             return
 
         default_name = f"PlanStaff_{self.source}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
@@ -442,10 +457,109 @@ class PlanStaffWidget(QWidget):
             db.log_event(self.logged_username, self.source, "DATA_EXPORT", f"PLAN_EXPORT -> {dest_path}")
 
     def refresh_ui_data(self):
-        self.load_shift_type_options()  # <- refresca opciones
+        self.load_shift_type_options()
         self.load_schedule_data()
         self.load_db_data()
         self.load_users_to_selector()
+
+    # ---------- NUEVO: Salud/Monitoreo del Excel  ----------
+    def check_excel_health(self):
+        exists = os.path.exists(self.excel_file)
+        if not exists:
+            self.excel_health_label.setText("Excel status: ❌ No encontrado (puede haber sido movido, eliminado o renombrado).")
+            self.excel_health_label.setStyleSheet("color: #B00020; font-weight: bold;")
+            if not self._missing_prompt_shown:
+                self._missing_prompt_shown = True
+                self.prompt_regenerate_or_locate()
+            return
+
+        # Existe -> validar estructura y detectar cambios
+        try:
+            mtime = os.path.getmtime(self.excel_file)
+            structure_ok, errors, meta = excel.validate_excel_structure(self.excel_file)
+            if structure_ok:
+                self.excel_health_label.setText(f"Excel status: ✅ Correcto ({meta.get('variant','?')}) — {os.path.basename(self.excel_file)}")
+                self.excel_health_label.setStyleSheet("color: #1B5E20; font-weight: bold;")
+            else:
+                self.excel_health_label.setText("Excel status: ⚠️ Estructura inválida. Use 'Regenerar' o corrija el archivo.")
+                self.excel_health_label.setStyleSheet("color: #E65100; font-weight: bold;")
+
+            # Si cambió el archivo (mtime), refrescar preview
+            if self._last_excel_mtime is None or mtime != self._last_excel_mtime:
+                self._last_excel_mtime = mtime
+                self.load_schedule_data()
+        except Exception:
+            self.excel_health_label.setText("Excel status: ⚠️ Error validando archivo.")
+            self.excel_health_label.setStyleSheet("color: #E65100; font-weight: bold;")
+
+    def prompt_regenerate_or_locate(self):
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("Archivo PlanStaff no disponible")
+        msg.setText(f"No se encuentra el archivo:\n{self.excel_file}\n\n"
+                    f"El sistema puede regenerarlo desde la BD (SSoT) o puede localizarlo manualmente.")
+        regen_btn = msg.addButton("🛠️ Regenerar ahora", QMessageBox.ButtonRole.AcceptRole)
+        locate_btn = msg.addButton("📂 Localizar archivo…", QMessageBox.ButtonRole.ActionRole)
+        msg.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+
+        if msg.clickedButton() == regen_btn:
+            self.regenerate_excel_from_db()
+        elif msg.clickedButton() == locate_btn:
+            new_path, _ = QFileDialog.getOpenFileName(self, "Seleccionar PlanStaff", "", "Excel Files (*.xlsx)")
+            if new_path:
+                self.excel_file = new_path
+                self._missing_prompt_shown = False
+                self.check_excel_health()
+                self.refresh_ui_data()
+
+    def regenerate_excel_from_db(self):
+        ok, msg = excel.regenerate_plan_from_db(self.excel_file, self.source)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information if ok else QMessageBox.Icon.Critical)
+        box.setWindowTitle("Regeneración" if ok else "Error")
+        box.setText(msg)
+        box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+        box.exec()
+        if ok:
+            db.log_event(self.logged_username, self.source, "DATA_EXPORT", f"PLAN_REGENERATE -> {self.excel_file}")
+            self._missing_prompt_shown = False
+            self.check_excel_health()
+            self.refresh_ui_data()
+
+    def validate_excel_structure_ui(self):
+        ok, errors, meta = excel.validate_excel_structure(self.excel_file)
+        box = QMessageBox(self)
+        if ok:
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setWindowTitle("Estructura válida")
+            box.setText(f"Plantilla: {meta.get('variant','?')} | Columnas de fecha: {meta.get('date_columns',0)}")
+        else:
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Estructura inválida")
+            box.setText("Se detectaron problemas:\n\n" + "\n".join(f"- {e}" for e in errors))
+        box.addButton("OK", QMessageBox.ButtonRole.AcceptRole); box.exec()
+
+    def compare_excel_db_ui(self):
+        report = excel.check_db_sync_with_excel(self.excel_file, self.source)
+        mismatches = report.get('schedule_mismatches', [])
+        text = []
+        text.append(f"Users in Excel: {report.get('users_in_excel',0)}")
+        text.append(f"Users in DB:    {report.get('users_in_db',0)}")
+        if report.get('missing_badges_in_db'):
+            text.append(f"\nMissing in DB (badges): {', '.join(report['missing_badges_in_db'])}")
+        if report.get('extra_badges_in_db'):
+            text.append(f"Extra in DB (badges not in Excel): {', '.join(report['extra_badges_in_db'])}")
+        text.append(f"\nSchedule mismatches: {len(mismatches)}")
+        preview = "\n".join(text[:1000])
+
+        # Mostrar en cuadro informativo (resumen)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Comparación Excel vs BD")
+        box.setText(preview if len(preview) < 1500 else (preview[:1500] + "\n..."))
+        box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+        box.exec()
 
 
 # -------------------------------------------------------------
@@ -478,7 +592,7 @@ class CrudWidget(QWidget):
         self.crud_delete_button = QPushButton("❌ Delete User")
         self.crud_delete_button.clicked.connect(self.delete_crud_user)
 
-        self.import_button = QPushButton("📥 Import from Excel")
+        self.import_button = QPushButton("📥 Import from Excel → DB (validado)")
         self.import_button.clicked.connect(self.import_users_from_excel)
 
         form_layout.addWidget(QLabel("Full Name:"), 0, 0)
@@ -604,29 +718,40 @@ class CrudWidget(QWidget):
     def import_users_from_excel(self):
         """
         FR-02: Import users and day-by-day schedules from Excel to DB.
-        Sincroniza UI en caliente (emite señal users_changed + import_done).
+        Con validación previa de estructura. Si inválido -> no escribe y muestra error detallado.
         """
-        inserted, skipped, upserts = excel.import_excel_to_db(self.excel_file, self.source)
+        try:
+            inserted, skipped, upserts = excel.import_excel_to_db(self.excel_file, self.source)
 
-        # Log de auditoría (FR-04)
-        db.log_event(self.logged_username, self.source, "DATA_IMPORT",
-                     f"users_inserted={inserted}; users_skipped={skipped}; schedule_upserts={upserts}")
+            # Log de auditoría (FR-04)
+            db.log_event(self.logged_username, self.source, "DATA_IMPORT",
+                         f"users_inserted={inserted}; users_skipped={skipped}; schedule_upserts={upserts}")
 
-        # Mensaje al usuario
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Information)
-        box.setWindowTitle("Import Complete")
-        box.setText(f"Imported {inserted} new users.\n"
-                    f"Skipped {skipped} users that already existed.\n"
-                    f"Upserted {upserts} schedule day-entries.")
-        box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-        box.exec()
+            # Mensaje al usuario
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setWindowTitle("Import Complete")
+            box.setText(f"Imported {inserted} new users.\n"
+                        f"Skipped {skipped} users that already existed.\n"
+                        f"Upserted {upserts} schedule day-entries.")
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+            box.exec()
 
-        # Refrescar tabla de usuarios inmediatamente
-        self.refresh_ui_data()
-        # 🔔 Señales para refrescar el combo "Select Employee" en Plan Staff
-        self.users_changed.emit(self.source)
-        self.import_done.emit(self.source)
+            # Refrescar tabla de usuarios inmediatamente
+            self.refresh_ui_data()
+            # 🔔 Señales para refrescar el combo "Select Employee" en Plan Staff
+            self.users_changed.emit(self.source)
+            self.import_done.emit(self.source)
+        except ValueError as ve:
+            # Error de estructura -> NO guardar nada
+            db.log_event(self.logged_username, self.source, "DATA_IMPORT",
+                         f"ERROR: {str(ve).replace(chr(10),' | ')}")
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Critical)
+            box.setWindowTitle("Invalid Excel")
+            box.setText(str(ve))
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+            box.exec()
 
     def refresh_ui_data(self):
         self.load_users_table()
@@ -733,13 +858,9 @@ class ShiftTypeAdminWidget(QWidget):
         out_time = self.out_time_edit.time().toString("HH:mm")
 
         if not name or not code:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Incomplete Data")
-            box.setText("Name and Code are required.")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
-            return
+            box = QMessageBox(self); box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Incomplete Data"); box.setText("Name and Code are required.")
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole); box.exec(); return
 
         if self.current_type_id:
             ok, msg, old_code, new_code = db.update_shift_type(self.current_type_id, self.source, name, code, color_hex, in_time, out_time)
@@ -793,7 +914,6 @@ class ShiftTypeAdminWidget(QWidget):
             if ok:
                 db.log_event(self.logged_username, self.source, "SHIFT_TYPE_DELETE", f"{code}")
                 self.types_changed.emit(self.source)
-            # Si está en uso, el mensaje ya indica por qué no se puede eliminar
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Information if ok else QMessageBox.Icon.Warning)
             box.setWindowTitle("Delete" if ok else "Cannot delete")
@@ -832,7 +952,7 @@ class MainWindow(QMainWindow):
         self.user_role = user_role  # RGM or Newmont. Used as 'source'
         self.excel_file = excel_file
         self.logged_username = logged_username or "Unknown"
-        self.can_manage_shift_types = bool(can_manage_shift_types)  # <— NUEVO
+        self.can_manage_shift_types = bool(can_manage_shift_types)
 
         db.setup_database()
         db.log_event(self.logged_username, self.user_role, "USER_LOGIN", f"Excel={self.excel_file}")

@@ -1,3 +1,4 @@
+# Pantalla de login (sin cambios en credenciales por defecto). Referencia: :contentReference[oaicite:4]{index=4}
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QLineEdit, QMessageBox, QDialog,
     QProgressBar, QDialogButtonBox
@@ -42,7 +43,7 @@ class LoginWindow(QDialog):
         self.username = None
         self.user_role = None
         self.excel_file = None
-        self.can_manage_shift_types = False  # <— NUEVO
+        self.can_manage_shift_types = False
 
         layout = QVBoxLayout(self)
 
@@ -73,7 +74,7 @@ class LoginWindow(QDialog):
             self.username = typed_username if typed_username else username_lookup
             self.user_role = user_data["role"]
             self.excel_file = user_data["excel_file"]
-            self.can_manage_shift_types = bool(user_data.get("can_manage_shift_types", False))  # <— NUEVO
+            self.can_manage_shift_types = bool(user_data.get("can_manage_shift_types", False))
             self.accept()
         else:
             QMessageBox.warning(self, "Login Error", "Invalid username or password.")
