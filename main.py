@@ -1,15 +1,11 @@
-# main.py  (PyQt6, fix HiDPI attrs)
+# main.py  (PyQt6, sin AA_UseHighDpiPixmaps y con splash no bloqueante)
 import sys
 from PyQt6.QtWidgets import QApplication, QDialog, QWidget, QVBoxLayout, QPushButton, QLabel
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, QTimer
 from datetime import datetime
 
-# Ventanas principales
 from main_window import MainWindow, AdminMainWindow
 from ui_login import LoginWindow, LoadingWindow
-
-# Tema UI
 from ui.theme import apply_app_theme
 
 
@@ -22,6 +18,8 @@ class LauncherWindow(QWidget):
         self.setWindowTitle("Inbound - Outbound PLG")
         self.setMinimumSize(420, 220)
         self.main_app_window = None
+        self._login_payload = None
+        self._loading = None
 
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -34,7 +32,7 @@ class LauncherWindow(QWidget):
 
         login_button = QPushButton("Sign In")
         login_button.setFixedSize(220, 48)
-        login_button.setProperty("variant", "primary")  # << estilo coherente
+        login_button.setProperty("variant", "primary")
 
         layout.addWidget(title, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addSpacing(20)
@@ -45,47 +43,48 @@ class LauncherWindow(QWidget):
 
     def start_login_process(self):
         """
-        Handles the complete sign-in flow and opens the main window
-        depending on the user's role.
+        Handles the sign-in flow and opens the main window depending on the user's role.
         """
         login_dialog = LoginWindow(self)
-
         if login_dialog.exec() == QDialog.DialogCode.Accepted:
-            # Data returned by the login dialog
-            user_role = login_dialog.user_role
-            excel_file = login_dialog.excel_file
-            logged_username = login_dialog.username
-            can_manage_shift_types = getattr(login_dialog, "can_manage_shift_types", False)
+            # Cache login data
+            self._login_payload = {
+                "user_role": login_dialog.user_role,
+                "excel_file": login_dialog.excel_file,
+                "logged_username": login_dialog.username,
+                "can_manage_shift_types": bool(getattr(login_dialog, "can_manage_shift_types", False)),
+            }
 
             self.hide()
 
-            loading_screen = LoadingWindow(role=user_role)
-            loading_screen.show()
+            # Non-blocking splash (no bucles con processEvents)
+            self._loading = LoadingWindow(role=self._login_payload["user_role"])
+            self._loading.show()
+            QTimer.singleShot(1200, self._open_main_after_loading)  # ~1.2s de splash
 
-            start_time = datetime.now()
-            # Small non-blocking splash
-            while (datetime.now() - start_time).total_seconds() < 1.8:
-                QApplication.instance().processEvents()
+    def _open_main_after_loading(self):
+        if self._loading:
+            self._loading.close()
+            self._loading = None
 
-            loading_screen.close()
+        p = self._login_payload or {}
+        role = p.get("user_role")
+        if role == "Administrator":
+            self.main_app_window = AdminMainWindow(
+                logged_username=p.get("logged_username") or "",
+                rgm_excel="PlanStaffRGM.xlsx",
+                newmont_excel="PlanStaffNewmont.xlsx",
+            )
+        else:
+            self.main_app_window = MainWindow(
+                user_role=role,
+                excel_file=p.get("excel_file") or "",
+                logged_username=p.get("logged_username") or "",
+                can_manage_shift_types=p.get("can_manage_shift_types", False),
+            )
 
-            # Open the appropriate main window
-            if user_role == "Administrator":
-                self.main_app_window = AdminMainWindow(
-                    logged_username=logged_username,
-                    rgm_excel="PlanStaffRGM.xlsx",
-                    newmont_excel="PlanStaffNewmont.xlsx"
-                )
-            else:
-                self.main_app_window = MainWindow(
-                    user_role=user_role,
-                    excel_file=excel_file,
-                    logged_username=logged_username,
-                    can_manage_shift_types=can_manage_shift_types
-                )
-
-            self.main_app_window.logout_signal.connect(self.handle_logout)
-            self.main_app_window.show()
+        self.main_app_window.logout_signal.connect(self.handle_logout)
+        self.main_app_window.show()
 
     def handle_logout(self):
         """Shows the launcher again after signing out."""
@@ -94,7 +93,7 @@ class LauncherWindow(QWidget):
 
 
 if __name__ == '__main__':
-    # Qt6 ya maneja HiDPI por defecto; solo ajustamos la política de redondeo (si está disponible)
+    # Qt6 ya maneja HiDPI por defecto; solo ajustamos la política de redondeo si está disponible
     try:
         QApplication.setHighDpiScaleFactorRoundingPolicy(
             Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
@@ -105,7 +104,6 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     app.setApplicationName("Inbound - Outbound PLG")
 
-    # Aplicar tema global
     apply_app_theme(app)
 
     launcher = LauncherWindow()

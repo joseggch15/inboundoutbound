@@ -706,7 +706,7 @@ def export_plan_from_db(
 
 def generate_transport_report(plan_staff_file: str, start_date: date, end_date: date) -> Tuple[bytes, str]:
     """
-    Genera el Excel de transporte 'legacy' considerando:
+    Genera el Excel de transporte considerando:
       - Estados base: 'ON' (IN=06:00:00, OUT=12:00:00) y 'ON NS' (IN=12:00:00, OUT=06:00:00).
       - Códigos personalizados: usa las horas configuradas en shift_types (BD). Si no hay, toma
         el comentario de la celda 'HH:MM-HH:MM' como fallback.
@@ -716,8 +716,14 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
       - SALIDA  (OUT / TRAVEL FROM SITE): día d 'trabaja' y status(d+1) != status(d)
       (Se consideran cambios ON↔ON NS y también cambios entre códigos personalizados.)
 
-    Si no hay IN dentro del rango, se agrega la primera ENTRADA > end_date detectada.
-    Si no hay OUT dentro del rango, se agrega la primera SALIDA  > end_date detectada.
+    ✅ RF-TR-01 / RF-TR-02 (ajuste):
+      Además de los eventos dentro del rango, **siempre** se incluyen los primeros
+      eventos **posteriores** a end_date:
+        • la primera ENTRADA (> end_date)
+        • la primera SALIDA  (> end_date)
+      Esto se hace aunque ya existan entradas/salidas dentro del rango para el empleado,
+      y se evita la duplicidad por fecha.
+
     """
     # ---- 1) Inferir source por nombre de archivo ----
     fname = os.path.basename(plan_staff_file).lower()
@@ -855,10 +861,9 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
         name_col = header_map["NAME"]
         role_col = header_map["ROLE"]
         badge_col = header_map["BADGE"]
-        def get_name(row):  # Last, First (no tenemos split exacto, usamos todo como 'NAME')
+        def get_name(row):  # Last, First (heurística)
             nm = ws_src.cell(row=row, column=name_col).value
             nm = str(nm).strip() if nm else ""
-            # Heurística: si viene "Last, First" lo separamos; si no, ponemos todo en NAME y FIRST vacio
             if "," in nm:
                 last, first = nm.split(",", 1)
                 return last.strip(), first.strip()
@@ -891,16 +896,16 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
             v = ws_src.cell(row=r, column=c_idx).value
             st = _norm_status(v)
             if st:
-                # comentario (si hay)
                 cm = ws_src.cell(row=r, column=c_idx).comment
                 per_day[d] = (st, cm.text if cm else None)
 
         if not per_day:
             continue
 
-        # Detectar IN/OUT dentro del rango
-        had_entry_in_range = False
-        had_exit_in_range = False
+        # Conjuntos para evitar filas duplicadas por fecha
+        added_in_dates: Set[date] = set()
+        added_out_dates: Set[date] = set()
+
         next_entry_after_range = None
         next_exit_after_range = None
 
@@ -910,10 +915,9 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
         for i, d in enumerate(all_dates):
             if d < start_date:
                 continue
-            # status(d-1), status(d), status(d+1)
+
             st_d = per_day.get(d, (None, None))[0]
             if not _is_working(st_d):
-                # No IN/OUT si ese día no se trabaja
                 continue
 
             prev_d = all_dates[i - 1] if i - 1 >= 0 else None
@@ -923,9 +927,8 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
 
             # Entrada si cambia respecto al anterior
             if st_prev != st_d:
-                if start_date <= d <= end_date:
-                    had_entry_in_range = True
-                    cmt = per_day.get(d, (None, None))[1]
+                cmt = per_day.get(d, (None, None))[1]
+                if start_date <= d <= end_date and d not in added_in_dates:
                     ws.cell(row=r_in, column=1, value=idx_in)
                     ws.cell(row=r_in, column=2, value=last)
                     ws.cell(row=r_in, column=3, value=first)
@@ -935,17 +938,16 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
                     ws.cell(row=r_in, column=7, value=site_code)
                     ws.cell(row=r_in, column=8, value=d.strftime("%Y-%m-%d"))
                     ws.cell(row=r_in, column=9, value=_times_for(st_d, "IN", cmt))
+                    added_in_dates.add(d)
                     r_in += 1
                     idx_in += 1
                 elif d > end_date and next_entry_after_range is None:
-                    cmt = per_day.get(d, (None, None))[1]
                     next_entry_after_range = (d, st_d, cmt)
 
             # Salida si cambia respecto al siguiente
             if st_next != st_d:
-                if start_date <= d <= end_date:
-                    had_exit_in_range = True
-                    cmt = per_day.get(d, (None, None))[1]
+                cmt = per_day.get(d, (None, None))[1]
+                if start_date <= d <= end_date and d not in added_out_dates:
                     ws.cell(row=r_out, column=11, value=idx_out)
                     ws.cell(row=r_out, column=12, value=last)
                     ws.cell(row=r_out, column=13, value=first)
@@ -955,46 +957,48 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
                     ws.cell(row=r_out, column=17, value=site_code)
                     ws.cell(row=r_out, column=18, value=d.strftime("%Y-%m-%d"))
                     ws.cell(row=r_out, column=19, value=_times_for(st_d, "OUT", cmt))
+                    added_out_dates.add(d)
                     r_out += 1
                     idx_out += 1
                 elif d > end_date and next_exit_after_range is None:
-                    cmt = per_day.get(d, (None, None))[1]
                     next_exit_after_range = (d, st_d, cmt)
 
-        # Si no hubo ENTRADA en el rango, agrega la próxima > end_date
-        if not had_entry_in_range and next_entry_after_range:
+        # ✅ SIEMPRE agregar el primer IN/OUT posterior al rango, si existen
+        if next_entry_after_range:
             d, st, cmt = next_entry_after_range
-            ws.cell(row=r_in, column=1, value=idx_in)
-            ws.cell(row=r_in, column=2, value=last)
-            ws.cell(row=r_in, column=3, value=first)
-            ws.cell(row=r_in, column=4, value=badge)
-            ws.cell(row=r_in, column=5, value=company_default)
-            ws.cell(row=r_in, column=6, value=role)
-            ws.cell(row=r_in, column=7, value=site_code)
-            ws.cell(row=r_in, column=8, value=d.strftime("%Y-%m-%d"))
-            ws.cell(row=r_in, column=9, value=_times_for(st, "IN", cmt))
-            r_in += 1
-            idx_in += 1
+            if d not in added_in_dates:
+                ws.cell(row=r_in, column=1, value=idx_in)
+                ws.cell(row=r_in, column=2, value=last)
+                ws.cell(row=r_in, column=3, value=first)
+                ws.cell(row=r_in, column=4, value=badge)
+                ws.cell(row=r_in, column=5, value=company_default)
+                ws.cell(row=r_in, column=6, value=role)
+                ws.cell(row=r_in, column=7, value=site_code)
+                ws.cell(row=r_in, column=8, value=d.strftime("%Y-%m-%d"))
+                ws.cell(row=r_in, column=9, value=_times_for(st, "IN", cmt))
+                r_in += 1
+                idx_in += 1
 
-        # Si no hubo SALIDA en el rango, agrega la próxima > end_date
-        if not had_exit_in_range and next_exit_after_range:
+        if next_exit_after_range:
             d, st, cmt = next_exit_after_range
-            ws.cell(row=r_out, column=11, value=idx_out)
-            ws.cell(row=r_out, column=12, value=last)
-            ws.cell(row=r_out, column=13, value=first)
-            ws.cell(row=r_out, column=14, value=badge)
-            ws.cell(row=r_out, column=15, value=company_default)
-            ws.cell(row=r_out, column=16, value=role)
-            ws.cell(row=r_out, column=17, value=site_code)
-            ws.cell(row=r_out, column=18, value=d.strftime("%Y-%m-%d"))
-            ws.cell(row=r_out, column=19, value=_times_for(st, "OUT", cmt))
-            r_out += 1
-            idx_out += 1
+            if d not in added_out_dates:
+                ws.cell(row=r_out, column=11, value=idx_out)
+                ws.cell(row=r_out, column=12, value=last)
+                ws.cell(row=r_out, column=13, value=first)
+                ws.cell(row=r_out, column=14, value=badge)
+                ws.cell(row=r_out, column=15, value=company_default)
+                ws.cell(row=r_out, column=16, value=role)
+                ws.cell(row=r_out, column=17, value=site_code)
+                ws.cell(row=r_out, column=18, value=d.strftime("%Y-%m-%d"))
+                ws.cell(row=r_out, column=19, value=_times_for(st, "OUT", cmt))
+                r_out += 1
+                idx_out += 1
 
     out = io.BytesIO()
     wb_out.save(out)
     out.seek(0)
     return out.read(), "Transportation report generated."
+
 
 
 # ============================================================
