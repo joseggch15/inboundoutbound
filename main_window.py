@@ -1,25 +1,26 @@
 # -*- coding: utf-8 -*-
-# Ventanas principales con SSoT, validación, regeneración y detección de archivo.
-# Integra la UI con database_logic.py y excel_logic.py para:
-# - DB como SSoT
-# - Validación de estructura de Excel antes de importar
-# - Regeneración completa del PlanStaff (RGM o Newmont) desde BD
-# - Detección de movimiento/eliminación/renombrado del Excel con QTimer
+# main_window.py — versión modernizada UI/UX (QSplitter, variantes de botones, alternancia de filas,
+# resaltado de errores con mark_error, monitoreo de archivo, y administración de tipos de turno).
+# Basado en la estructura funcional original e integrado con la lógica existente.
+# Referencias: database_logic.py :contentReference[oaicite:0]{index=0}, excel_logic.py :contentReference[oaicite:1]{index=1}, versión anterior de main_window.py :contentReference[oaicite:2]{index=2}
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QComboBox, QDateEdit, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QGroupBox, QMessageBox, QFileDialog,
-    QTabWidget, QApplication, QColorDialog, QTimeEdit
+    QTabWidget, QApplication, QColorDialog, QTimeEdit, QSplitter
 )
 from PyQt6.QtCore import QDate, Qt, pyqtSignal, QTime, QTimer
 from PyQt6.QtGui import QColor
 from datetime import datetime
 import os
 
-# App logic
+# App logic (sin cambios funcionales)
 import database_logic as db
 import excel_logic as excel
+
+# Helpers de tema (estado visual de error)
+from ui.theme import mark_error
 
 
 # -------------------------------------------------------------
@@ -70,13 +71,18 @@ class PlanStaffWidget(QWidget):
         self.validate_button.clicked.connect(self.validate_excel_structure_ui)
         self.compare_button = QPushButton("🔎 Comparar Excel vs BD")
         self.compare_button.clicked.connect(self.compare_excel_db_ui)
+
+        # Variantes de botones (tema)
+        self.regen_button.setProperty("variant", "secondary")
+        self.validate_button.setProperty("variant", "text")
+        self.compare_button.setProperty("variant", "text")
+
         status_layout.addWidget(self.excel_health_label)
         status_layout.addStretch()
         status_layout.addWidget(self.validate_button)
         status_layout.addWidget(self.compare_button)
         status_layout.addWidget(self.regen_button)
 
-        # ❗️FIX: agregar QGroupBox con addWidget (no addLayout)
         root.addWidget(create_group_box("Estado del Archivo & SSoT", status_layout))
 
         # --- Schedule preview ---
@@ -91,24 +97,37 @@ class PlanStaffWidget(QWidget):
         self.schedule_table.verticalScrollBar().valueChanged.connect(self.frozen_table.verticalScrollBar().setValue)
         self.frozen_table.verticalScrollBar().valueChanged.connect(self.schedule_table.verticalScrollBar().setValue)
 
+        # Densidad y alternancia de filas para lectura rápida
+        self.frozen_table.setAlternatingRowColors(True)
+        self.schedule_table.setAlternatingRowColors(True)
+        self.frozen_table.setObjectName("FrozenTable")
+        self.schedule_table.setObjectName("ScheduleTable")
+
         tables_layout.addWidget(self.frozen_table)
         tables_layout.addWidget(self.schedule_table, 1)
         preview_container.addLayout(tables_layout)
         preview_title = f"🗓️ Schedule Preview ({os.path.basename(self.excel_file)})"
         root.addWidget(create_group_box(preview_title, preview_container))
 
-        # --- Registro + Historial lado a lado ---
-        forms_db_layout = QHBoxLayout()
-        # Registro
-        self.registration_groupbox = create_group_box("1. Register Employee Schedule (DB is SSoT)", self._build_registration_form())
-        forms_db_layout.addWidget(self.registration_groupbox, 1)
-        # Historial (operations)
+        # --- Registro + Historial con QSplitter (responsivo) ---
+        self.registration_groupbox = create_group_box(
+            "1. Register Employee Schedule (DB is SSoT)",
+            self._build_registration_form()
+        )
+
         db_view_layout = QVBoxLayout()
         self.db_table = QTableWidget()
+        self.db_table.setAlternatingRowColors(True)
         db_view_layout.addWidget(self.db_table)
         self.db_view_groupbox = create_group_box("Rotation History", db_view_layout)
-        forms_db_layout.addWidget(self.db_view_groupbox, 2)
-        root.addLayout(forms_db_layout)
+
+        forms_splitter = QSplitter(Qt.Orientation.Horizontal)
+        forms_splitter.addWidget(self.registration_groupbox)
+        forms_splitter.addWidget(self.db_view_groupbox)
+        forms_splitter.setCollapsible(0, False)
+        forms_splitter.setStretchFactor(0, 1)
+        forms_splitter.setStretchFactor(1, 2)
+        root.addWidget(forms_splitter)
 
         # --- Reportes / Export ---
         report_layout = QHBoxLayout()
@@ -126,10 +145,12 @@ class PlanStaffWidget(QWidget):
 
         report_button = QPushButton("🚀 Generate Report")
         report_button.clicked.connect(self.generate_report)
+        report_button.setProperty("variant", "primary")
         report_layout.addWidget(report_button)
 
         export_button = QPushButton("📤 Export Plan Staff (.xlsx) desde BD")
         export_button.clicked.connect(self.export_plan_from_db)
+        export_button.setProperty("variant", "secondary")
         report_layout.addWidget(export_button)
 
         report_title = f"2. Transportation Report & Export (from {os.path.basename(self.excel_file)})"
@@ -138,7 +159,7 @@ class PlanStaffWidget(QWidget):
         # Cargar datos iniciales
         self.refresh_ui_data()
 
-        # --- Monitor del archivo: detecta mover/eliminar/renombrar ---
+        # --- Monitor del archivo: detecta mover/eliminar/renombrado ---
         self.file_watch_timer = QTimer(self)
         self.file_watch_timer.setInterval(2000)  # 2s
         self.file_watch_timer.timeout.connect(self.check_excel_health)
@@ -155,7 +176,7 @@ class PlanStaffWidget(QWidget):
         self.role_display = QLineEdit(); self.role_display.setReadOnly(True)
         self.badge_display = QLineEdit(); self.badge_display.setReadOnly(True)
 
-        # NUEVO: selector unificado de estado/turno (base + personalizados)
+        # Selector unificado de estado/turno (base + personalizados)
         self.status_selector = QComboBox()
 
         self.start_date_edit = QDateEdit(QDate.currentDate()); self.start_date_edit.setCalendarPopup(True); self.start_date_edit.setDisplayFormat("dd/MM/yyyy")
@@ -163,6 +184,7 @@ class PlanStaffWidget(QWidget):
 
         save_button = QPushButton("✅ Save Changes to DB & Excel")
         save_button.clicked.connect(self.save_plan_changes)
+        save_button.setProperty("variant", "primary")
 
         form_layout.addWidget(QLabel("Select Employee:"), 0, 0); form_layout.addWidget(self.user_selector_combo, 0, 1)
         form_layout.addWidget(QLabel("Role/Department:"), 1, 0); form_layout.addWidget(self.role_display, 1, 1)
@@ -305,6 +327,12 @@ class PlanStaffWidget(QWidget):
 
     # ---------- actions ----------
     def save_plan_changes(self):
+        # Limpia estados previos de error visual
+        mark_error(self.user_selector_combo, False)
+        mark_error(self.role_display, False)
+        mark_error(self.start_date_edit, False)
+        mark_error(self.end_date_edit, False)
+
         username = self.user_selector_combo.currentText()
         badge = self.badge_display.text()
         role = self.role_display.text()
@@ -312,25 +340,27 @@ class PlanStaffWidget(QWidget):
         end_date = self.end_date_edit.date().toPyDate()
 
         if not username or username == "-- Select a user --":
+            mark_error(self.user_selector_combo, True)
             box = QMessageBox(self); box.setIcon(QMessageBox.Icon.Warning)
             box.setWindowTitle("Incomplete Data"); box.setText("Please select an employee.")
             box.addButton("OK", QMessageBox.ButtonRole.AcceptRole); box.exec(); return
 
         if not role:
+            mark_error(self.role_display, True)
             box = QMessageBox(self); box.setIcon(QMessageBox.Icon.Warning)
             box.setWindowTitle("Incomplete Data"); box.setText("Please select a role/department.")
             box.addButton("OK", QMessageBox.ButtonRole.AcceptRole); box.exec(); return
 
         if start_date > end_date:
+            mark_error(self.start_date_edit, True)
+            mark_error(self.end_date_edit, True)
             box = QMessageBox(self); box.setIcon(QMessageBox.Icon.Warning)
             box.setWindowTitle("Date Error"); box.setText("Start date cannot be after end date.")
             box.addButton("OK", QMessageBox.ButtonRole.AcceptRole); box.exec(); return
 
         # Interpretar selección de estado/turno
         sel = self.status_selector.currentData()
-        if not sel or sel.get("kind") == "none":
-            schedule_status = None; shift_type = None; in_time = None; out_time = None
-        elif sel["kind"] == "separator":
+        if not sel or sel.get("kind") == "none" or sel.get("kind") == "separator":
             schedule_status = None; shift_type = None; in_time = None; out_time = None
         elif sel["kind"] == "base":
             schedule_status = sel["status"]           # 'ON'|'ON NS'|'OFF'
@@ -595,6 +625,12 @@ class CrudWidget(QWidget):
         self.import_button = QPushButton("📥 Import from Excel → DB (validado)")
         self.import_button.clicked.connect(self.import_users_from_excel)
 
+        # Variantes de botones
+        self.crud_save_button.setProperty("variant", "primary")
+        self.crud_new_button.setProperty("variant", "secondary")
+        self.crud_delete_button.setProperty("danger", True)
+        self.import_button.setProperty("variant", "secondary")
+
         form_layout.addWidget(QLabel("Full Name:"), 0, 0)
         form_layout.addWidget(self.crud_name_input, 0, 1)
         form_layout.addWidget(QLabel("Role/Department:"), 1, 0)
@@ -616,6 +652,7 @@ class CrudWidget(QWidget):
         table_layout = QVBoxLayout()
         self.users_table = QTableWidget()
         self.users_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.users_table.setAlternatingRowColors(True)
         self.users_table.itemClicked.connect(self.load_user_to_crud_form)
         table_layout.addWidget(self.users_table)
 
@@ -638,7 +675,7 @@ class CrudWidget(QWidget):
             self.users_table.setItem(row, 1, QTableWidgetItem(user['name']))
             self.users_table.setItem(row, 2, QTableWidgetItem(user['role']))
             self.users_table.setItem(row, 3, QTableWidgetItem(user['badge']))
-        self.users_table.setColumnHidden(0, True) # El '0' es el índice de la columna 'ID'
+        self.users_table.setColumnHidden(0, True)  # el '0' es la columna ID
         self.users_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
     def load_user_to_crud_form(self, item):
@@ -792,6 +829,11 @@ class ShiftTypeAdminWidget(QWidget):
         self.delete_btn = QPushButton("❌ Delete")
         self.delete_btn.clicked.connect(self.delete_type)
 
+        # Variantes de botones
+        self.new_btn.setProperty("variant", "secondary")
+        self.save_btn.setProperty("variant", "primary")
+        self.delete_btn.setProperty("danger", True)
+
         form_layout.addWidget(QLabel("Name:"), 0, 0); form_layout.addWidget(self.name_input, 0, 1)
         form_layout.addWidget(QLabel("Code (short):"), 1, 0); form_layout.addWidget(self.code_input, 1, 1)
         form_layout.addWidget(QLabel("Color:"), 2, 0)
@@ -809,6 +851,7 @@ class ShiftTypeAdminWidget(QWidget):
         table_layout = QVBoxLayout()
         self.types_table = QTableWidget()
         self.types_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.types_table.setAlternatingRowColors(True)
         self.types_table.itemClicked.connect(self.load_type_to_form)
         table_layout.addWidget(self.types_table)
 
@@ -975,6 +1018,7 @@ class MainWindow(QMainWindow):
 
         logout_button = QPushButton("🔒 Sign Out")
         logout_button.setFixedWidth(150)
+        logout_button.setProperty("variant", "text")
         logout_button.clicked.connect(self.handle_logout)
 
         top_layout.addWidget(title_label)
@@ -1048,6 +1092,7 @@ class AdminMainWindow(QMainWindow):
 
         logout_button = QPushButton("🔒 Sign Out")
         logout_button.setFixedWidth(150)
+        logout_button.setProperty("variant", "text")
         logout_button.clicked.connect(self.handle_logout)
 
         top_layout.addWidget(title_label)
@@ -1114,6 +1159,7 @@ class AuditLogWidget(QWidget):
         layout.addWidget(self.audit_table)
 
         refresh_btn = QPushButton("🔄 Refresh")
+        refresh_btn.setProperty("variant", "secondary")
         refresh_btn.clicked.connect(self.load_audit_log_data)
         layout.addWidget(refresh_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
@@ -1133,4 +1179,5 @@ class AuditLogWidget(QWidget):
             self.audit_table.setItem(r, 3, QTableWidgetItem(ev.get('action_type', '')))
             self.audit_table.setItem(r, 4, QTableWidgetItem(ev.get('detail', '')))
 
+        self.audit_table.setAlternatingRowColors(True)
         self.audit_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)

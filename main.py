@@ -1,12 +1,16 @@
-# Ventana lanzadora sin cambios de flujo, con base en la versión original. Referencia: :contentReference[oaicite:2]{index=2}
+# main.py  (PyQt6, fix HiDPI attrs)
 import sys
 from PyQt6.QtWidgets import QApplication, QDialog, QWidget, QVBoxLayout, QPushButton, QLabel
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
 from datetime import datetime
 
 # Ventanas principales
 from main_window import MainWindow, AdminMainWindow
 from ui_login import LoginWindow, LoadingWindow
+
+# Tema UI
+from ui.theme import apply_app_theme
 
 
 class LauncherWindow(QWidget):
@@ -15,31 +19,29 @@ class LauncherWindow(QWidget):
     """
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Welcome to Operations Manager")
-        self.setGeometry(400, 400, 400, 200)
+        self.setWindowTitle("Inbound - Outbound PLG")
+        self.setMinimumSize(420, 220)
         self.main_app_window = None
 
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 24, 24, 24)
 
         title = QLabel("Transport & Operations Manager")
-        font = title.font()
-        font.setPointSize(16)
-        font.setBold(True)
+        font = title.font(); font.setPointSize(20); font.setBold(True)
         title.setFont(font)
 
-        login_button = QPushButton("▶️ Sign In")
-        login_button.setFixedSize(200, 50)
-        font = login_button.font()
-        font.setPointSize(12)
-        login_button.setFont(font)
-        login_button.clicked.connect(self.start_login_process)
+        login_button = QPushButton("Sign In")
+        login_button.setFixedSize(220, 48)
+        login_button.setProperty("variant", "primary")  # << estilo coherente
 
-        layout.addWidget(title)
+        layout.addWidget(title, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addSpacing(20)
         layout.addWidget(login_button, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.setLayout(layout)
+        login_button.clicked.connect(self.start_login_process)
 
     def start_login_process(self):
         """
@@ -62,7 +64,7 @@ class LauncherWindow(QWidget):
 
             start_time = datetime.now()
             # Small non-blocking splash
-            while (datetime.now() - start_time).total_seconds() < 3:
+            while (datetime.now() - start_time).total_seconds() < 1.8:
                 QApplication.instance().processEvents()
 
             loading_screen.close()
@@ -92,7 +94,20 @@ class LauncherWindow(QWidget):
 
 
 if __name__ == '__main__':
+    # Qt6 ya maneja HiDPI por defecto; solo ajustamos la política de redondeo (si está disponible)
+    try:
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
+    except Exception:
+        pass
+
     app = QApplication(sys.argv)
+    app.setApplicationName("Inbound - Outbound PLG")
+
+    # Aplicar tema global
+    apply_app_theme(app)
+
     launcher = LauncherWindow()
     launcher.show()
     sys.exit(app.exec())

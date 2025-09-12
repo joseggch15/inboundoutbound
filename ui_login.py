@@ -1,4 +1,7 @@
-# Pantalla de login (sin cambios en credenciales por defecto). Referencia: :contentReference[oaicite:4]{index=4}
+# ui_login.py — pantalla de login con variantes de botones coherentes con el tema (primary/text).
+# Mantiene el flujo y credenciales; solo aplica mejoras de UI/UX en QDialogButtonBox.
+# Basado en la versión original de ui_login.py :contentReference[oaicite:3]{index=3}
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QLineEdit, QMessageBox, QDialog,
     QProgressBar, QDialogButtonBox
@@ -56,8 +59,16 @@ class LoginWindow(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.check_login)
         buttons.rejected.connect(self.reject)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Sign in")
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancel")
+
+        # Etiquetas y variantes (tema)
+        ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if ok_btn:
+            ok_btn.setText("Sign in")
+            ok_btn.setProperty("variant", "primary")
+        if cancel_btn:
+            cancel_btn.setText("Cancel")
+            cancel_btn.setProperty("variant", "text")
 
         layout.addWidget(QLabel("Please enter your credentials:"))
         layout.addWidget(self.username_input)
