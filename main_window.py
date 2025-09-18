@@ -1,7 +1,7 @@
 # main_window.py
-# Implements REQ‑001 (OFF→ON inline confirmation & warning highlight),
-# REQ‑002 (auto-center today in Schedule Preview),
-# REQ‑003 (date headers with weekday), and the requested fixes:
+# Implements REQ-001 (OFF→ON inline confirmation & warning highlight),
+# REQ-002 (auto-center today in Schedule Preview),
+# REQ-003 (date headers with weekday), and the requested fixes:
 #  - Excel status shows the signed-in site (RGM/Newmont)
 #  - Weekday abbreviations: Mon., Tues., Wed., Thurs., Fri., Sat., Sun.
 # UI content is in English end-to-end.
@@ -123,18 +123,18 @@ class PlanStaffWidget(QWidget):
 
     def __init__(self, source: str, excel_file: str, logged_username: str):
         super().__init__()
-        self.source = source              # "RGM" | "Newmont"
+        self.source = source          # "RGM" | "Newmont"
         self.excel_file = excel_file
         self.logged_username = logged_username or "Unknown"
         self._last_excel_mtime = None
         self._missing_prompt_shown = False
 
-        # For REQ‑001 tracking
+        # For REQ-001 tracking
         self._loading_preview = False
-        self._cell_original_values = {}     # (row, col) -> original text
-        self._row_identities = []           # index -> {"name":..., "badge":...}
-        self._date_col_dates = []           # schedule_table column index -> pydate
-        self._warn_highlight_keys = set()   # {"<badge>|YYYY-MM-DD", ...}
+        self._cell_original_values = {}   # (row, col) -> original text
+        self._row_identities = []         # index -> {"name":..., "badge":...}
+        self._date_col_dates = []         # schedule_table column index -> pydate
+        self._warn_highlight_keys = set() # {"<badge>|YYYY-MM-DD", ...}
 
         # ---------- root layout ----------
         root = QVBoxLayout(self)
@@ -196,7 +196,7 @@ class PlanStaffWidget(QWidget):
         self.frozen_table.setObjectName("FrozenTable")
         self.schedule_table.setObjectName("ScheduleTable")
 
-        # REQ‑001: detect inline edits
+        # REQ-001: detect inline edits
         self.schedule_table.itemChanged.connect(self._on_schedule_cell_changed)
 
         # Center headers
@@ -204,6 +204,13 @@ class PlanStaffWidget(QWidget):
             Qt.AlignmentFlag.AlignCenter
         )
 
+        # --- Frozen panel width policy (ensure 3 fixed columns visible) ---
+        self.frozen_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.frozen_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.frozen_table.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self.schedule_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         tables_layout.addWidget(self.frozen_table)
         tables_layout.addWidget(self.schedule_table, 1)
         preview_container.addLayout(tables_layout)
@@ -212,7 +219,7 @@ class PlanStaffWidget(QWidget):
         preview_group = create_group_box(preview_title, preview_container)
         root.addWidget(preview_group, 12)  # give the preview most of the space
 
-        # --- Register Employee Schedule (compact, multi‑column, collapsible) ---
+        # --- Register Employee Schedule (compact, multi-column, collapsible) ---
         self.registration_section = CollapsibleGroupBox(
             "1. Register Employee Schedule (DB is SSoT)", collapsed=True
         )
@@ -269,7 +276,7 @@ class PlanStaffWidget(QWidget):
     # ---------- registration form (compact) ----------
     def _build_registration_form(self) -> QGridLayout:
         """
-        Compact two‑row multi‑column grid:
+        Compact two-row multi-column grid:
             Row 1: Select Employee | Role / Department | Badge (ID)
             Row 2: Status / Shift | Period Start Date | Period End Date
         """
@@ -317,7 +324,7 @@ class PlanStaffWidget(QWidget):
             field("Period End Date", self.end_date_edit),
         ]
 
-        # Base grid (we will re‑pack it responsively in _rebuild_registration_grid)
+        # Base grid (we will re-pack it responsively in _rebuild_registration_grid)
         self._register_grid = QGridLayout()
         self._register_grid.setContentsMargins(8, 6, 8, 6)
         self._register_grid.setHorizontalSpacing(12)
@@ -356,7 +363,7 @@ class PlanStaffWidget(QWidget):
             if w:
                 self._register_grid.removeWidget(w)
 
-        # Re‑add fields in row-major order
+        # Re-add fields in row-major order
         rows = (len(self._fields) + columns - 1) // columns
         idx = 0
         for r in range(rows):
@@ -502,7 +509,7 @@ class PlanStaffWidget(QWidget):
                             item.setBackground(QColor(custom_map[val_str]["color_hex"]))
 
                     self.schedule_table.setItem(i, col_index, item)
-                    # Track original value for REQ‑001
+                    # Track original value for REQ-001
                     self._cell_original_values[(i, col_index)] = val_str
 
                     # Re-apply warning highlight if previously set
@@ -512,13 +519,14 @@ class PlanStaffWidget(QWidget):
 
         self.frozen_table.resizeColumnsToContents()
         self.schedule_table.resizeColumnsToContents()
+        self._update_frozen_width()
         self._loading_preview = False
 
-        # REQ‑002: focus today's date
+        # REQ-002: focus today's date
         self._center_today_column()
 
     def _center_today_column(self):
-        """Scroll horizontally so today's date is visible and centered (REQ‑002)."""
+        """Scroll horizontally so today's date is visible and centered (REQ-002)."""
         try:
             if not self._date_col_dates:
                 return
@@ -533,10 +541,33 @@ class PlanStaffWidget(QWidget):
         except Exception:
             pass
 
+    def _update_frozen_width(self):
+        """
+        Compute and lock the exact width needed by the left (frozen) panel so
+        ROLE, NAME, and BADGE are fully visible without horizontal scrolling.
+        """
+        try:
+            # Make sure columns have been measured
+            self.frozen_table.resizeColumnsToContents()
+
+            vheader_w = self.frozen_table.verticalHeader().width()
+            frame_w = self.frozen_table.frameWidth() * 2
+            columns_w = sum(self.frozen_table.columnWidth(c) for c in range(self.frozen_table.columnCount()))
+            padding = 6
+            total = vheader_w + frame_w + columns_w + padding
+            if total < 240:
+                total = 240
+
+            self.frozen_table.setMinimumWidth(total)
+            self.frozen_table.setMaximumWidth(total)
+        except Exception:
+            pass
+
     def showEvent(self, event):
         super().showEvent(event)
         # Also center on show (e.g. when user navigates to the tab)
         self._center_today_column()
+        self._update_frozen_width()
 
     def _warn_key_for(self, row: int, col: int) -> str:
         """Build a stable session key for a schedule cell using badge + date."""
@@ -562,7 +593,7 @@ class PlanStaffWidget(QWidget):
             # leave as-is (could be a custom code already colored on load)
             pass
 
-    # ---------- REQ‑001: inline OFF→ON/ON NS guard ----------
+    # ---------- REQ-001: inline OFF→ON/ON NS guard ----------
     def _on_schedule_cell_changed(self, item: QTableWidgetItem):
         if self._loading_preview:
             return
@@ -679,14 +710,14 @@ class PlanStaffWidget(QWidget):
             in_time = None
             out_time = None
         elif sel.get("kind") == "base":
-            schedule_status = sel["status"]              # OFF / ON / ON NS
-            shift_type = sel["shift_type"]               # Day Shift / Night Shift / None
+            schedule_status = sel["status"]          # OFF / ON / ON NS
+            shift_type = sel["shift_type"]           # Day Shift / Night Shift / None
             in_time = sel.get("in_time")
             out_time = sel.get("out_time")
         else:
             # custom type selected
-            schedule_status = "ON"                        # ON with custom type code, e.g. 'SOP'
-            shift_type = sel["name"]                      # display name
+            schedule_status = "ON"                   # ON with custom type code, e.g. 'SOP'
+            shift_type = sel["name"]                 # display name
             in_time = sel.get("in_time")
             out_time = sel.get("out_time")
 
