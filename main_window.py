@@ -1,12 +1,10 @@
 # main_window.py
 # Implements REQ‑001 (OFF→ON inline confirmation & warning highlight),
-# REQ‑002 (auto-center today in Schedule Preview), and
-# REQ‑003 (two-line date headers with weekday).
-# Also keeps Rotation History in its own tab and hides the ID column there.
-# Built over the working baseline without changing business logic. :contentReference[oaicite:1]{index=1}
-#
-# Uses existing DB and Excel helpers. :contentReference[oaicite:2]{index=2} :contentReference[oaicite:3]{index=3}
-# Launcher and login remain unchanged. :contentReference[oaicite:4]{index=4} :contentReference[oaicite:5]{index=5}
+# REQ‑002 (auto-center today in Schedule Preview),
+# REQ‑003 (date headers with weekday), and the requested fixes:
+#  - Excel status shows the signed-in site (RGM/Newmont)
+#  - Weekday abbreviations: Mon., Tues., Wed., Thurs., Fri., Sat., Sun.
+# UI content is in English end-to-end.
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
@@ -28,7 +26,7 @@ import excel_logic as excel
 from ui.theme import mark_error
 
 # ---------- constants ----------
-WARN_BG_HEX = "#FFFBEA"  # soft warning highlight for REQ-001 (also in ui/theme.py)
+WARN_BG_HEX = "#FFFBEA"  # soft warning highlight
 FROZEN_COLUMN_COUNT = 3  # ROLE, NAME, BADGE
 
 
@@ -54,10 +52,12 @@ def _clean(value) -> str:
     return s
 
 
-def _weekday_en(d: pydate) -> str:
-    """English weekday name for headers."""
-    # Monday=0 ... Sunday=6
-    names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+def _weekday_abbrev_en(d: pydate) -> str:
+    """
+    English weekday abbreviations with trailing period for Schedule Preview headers.
+    Monday=0 ... Sunday=6
+    """
+    names = ["Mon", "Tues", "Wed", "Thurs", "Fri", "Sat", "Sun"]
     return names[d.weekday()]
 
 
@@ -145,7 +145,7 @@ class PlanStaffWidget(QWidget):
         status_layout = QHBoxLayout()
         status_layout.setContentsMargins(8, 4, 8, 4)
 
-        self.excel_health_label = QLabel("Excel status: checking...")
+        self.excel_health_label = QLabel("Excel status: checking.")
         self.excel_health_label.setStyleSheet("font-weight: bold;")
 
         self.validate_button = QPushButton("🧪 Validate Excel Structure")
@@ -199,7 +199,7 @@ class PlanStaffWidget(QWidget):
         # REQ‑001: detect inline edits
         self.schedule_table.itemChanged.connect(self._on_schedule_cell_changed)
 
-        # Nice centered multi-line headers for dates
+        # Center headers
         self.schedule_table.horizontalHeader().setDefaultAlignment(
             Qt.AlignmentFlag.AlignCenter
         )
@@ -210,17 +210,15 @@ class PlanStaffWidget(QWidget):
 
         preview_title = f"🗓️ Schedule Preview ({os.path.basename(self.excel_file)})"
         preview_group = create_group_box(preview_title, preview_container)
-        root.addWidget(preview_group, 12)  # << Give Schedule Preview most of the vertical space
+        root.addWidget(preview_group, 12)  # give the preview most of the space
 
         # --- Register Employee Schedule (compact, multi‑column, collapsible) ---
-        #     Default collapsed to maximize space for the preview on first load.
         self.registration_section = CollapsibleGroupBox(
             "1. Register Employee Schedule (DB is SSoT)", collapsed=True
         )
-        # Build the inner form layout
         register_layout = self._build_registration_form()
         self.registration_section.setContentLayout(register_layout)
-        root.addWidget(self.registration_section, 1)  # small stretch
+        root.addWidget(self.registration_section, 1)
 
         # --- Transportation Report & Export ---
         report_layout = QHBoxLayout()
@@ -271,10 +269,9 @@ class PlanStaffWidget(QWidget):
     # ---------- registration form (compact) ----------
     def _build_registration_form(self) -> QGridLayout:
         """
-        Compact two‑row multi‑column grid (follows the mockup):
+        Compact two‑row multi‑column grid:
             Row 1: Select Employee | Role / Department | Badge (ID)
             Row 2: Status / Shift | Period Start Date | Period End Date
-        A save bar spans the full width below the grid.
         """
         # Controls
         self.user_selector_combo = QComboBox()
@@ -300,7 +297,7 @@ class PlanStaffWidget(QWidget):
         self.save_button.clicked.connect(self.save_plan_changes)
         self.save_button.setProperty("variant", "primary")
 
-        # Field containers (label on top of control)
+        # Field containers (label on top)
         def field(title: str, w: QWidget) -> QWidget:
             cont = QWidget()
             v = QVBoxLayout(cont)
@@ -437,6 +434,7 @@ class PlanStaffWidget(QWidget):
         # Identify date columns (right side)
         date_cols = []
         for c in cols:
+            # pandas may give Timestamp-like objects; keep them as date
             if hasattr(c, "to_pydatetime"):
                 date_cols.append(c.to_pydatetime().date())
             elif isinstance(c, datetime):
@@ -449,11 +447,10 @@ class PlanStaffWidget(QWidget):
         actual_frozen_count = min(df.shape[1], FROZEN_COLUMN_COUNT)
         frozen_headers = [str(c) for c in cols[:actual_frozen_count]]
 
-        # Schedule (date) headers -> one line with date + weekday
+        # Schedule (date) headers -> one line with date + weekday (abbrev)
         schedule_headers = []
         for d in date_cols:
-            # ✅ CAMBIO 1: Se reemplaza el salto de línea por un espacio.
-            schedule_headers.append(f"{d.isoformat()} {_weekday_en(d)}")
+            schedule_headers.append(f"{d.isoformat()} {_weekday_abbrev_en(d)}")
         self._date_col_dates = list(date_cols)  # keep exact order
 
         # Build tables
@@ -463,7 +460,6 @@ class PlanStaffWidget(QWidget):
 
         self.schedule_table.setRowCount(df.shape[0])
         self.schedule_table.setColumnCount(len(schedule_headers))
-        # Set one-line header items
         for idx, header_text in enumerate(schedule_headers):
             self.schedule_table.setHorizontalHeaderItem(idx, QTableWidgetItem(header_text))
 
@@ -489,10 +485,10 @@ class PlanStaffWidget(QWidget):
                     # Schedule table
                     col_index = j - actual_frozen_count
                     val_str = text.upper().strip()
-                    
-                    # ✅ CAMBIO 2: Se centra el texto de la celda.
+
+                    # center text in day cells
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    
+
                     # Base colors
                     if 'ON NS' in val_str or 'NIGHT' in val_str:
                         item.setBackground(QColor("#FFFF99"))
@@ -509,7 +505,7 @@ class PlanStaffWidget(QWidget):
                     # Track original value for REQ‑001
                     self._cell_original_values[(i, col_index)] = val_str
 
-                    # Re-apply warning highlight if it was previously set (persist during the session)
+                    # Re-apply warning highlight if previously set
                     key = self._warn_key_for(i, col_index)
                     if key in self._warn_highlight_keys:
                         item.setBackground(QColor(WARN_BG_HEX))
@@ -539,7 +535,7 @@ class PlanStaffWidget(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        # Also center on show (e.g., when user navigates to the tab)
+        # Also center on show (e.g. when user navigates to the tab)
         self._center_today_column()
 
     def _warn_key_for(self, row: int, col: int) -> str:
@@ -580,13 +576,12 @@ class PlanStaffWidget(QWidget):
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Warning)
             box.setWindowTitle("Confirm Change")
-            box.setText("The employee is on a day off. Are you sure you want to assign a shift?")
-            yes_btn = box.addButton("Yes, assign shift", QMessageBox.ButtonRole.AcceptRole)
-            no_btn = box.addButton("No, cancel", QMessageBox.ButtonRole.RejectRole)
+            box.setText("The employee is on a day off. Do you want to set it to ON?")
+            accept_btn = box.addButton("Accept", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
             box.exec()
-
-            if box.clickedButton() == yes_btn:
-                # Accept change and mark warning background (session‑persistent highlight)
+            if box.clickedButton() == accept_btn:
+                # Keep the typed new value (normalize) and mark cell with a soft warning color
                 with QSignalBlocker(self.schedule_table):
                     item.setText(new_text)  # normalize casing
                 item.setBackground(QColor(WARN_BG_HEX))
@@ -683,15 +678,15 @@ class PlanStaffWidget(QWidget):
             shift_type = None
             in_time = None
             out_time = None
-        elif sel["kind"] == "base":
-            schedule_status = sel["status"]           # 'ON'|'ON NS'|'OFF'
-            shift_type = sel["shift_type"]            # 'Day Shift'|'Night Shift'|None
-            in_time = None
-            out_time = None
+        elif sel.get("kind") == "base":
+            schedule_status = sel["status"]              # OFF / ON / ON NS
+            shift_type = sel["shift_type"]               # Day Shift / Night Shift / None
+            in_time = sel.get("in_time")
+            out_time = sel.get("out_time")
         else:
-            # custom
-            schedule_status = sel["code"]             # e.g., 'SOP'
-            shift_type = sel["name"]                  # display name
+            # custom type selected
+            schedule_status = "ON"                        # ON with custom type code, e.g. 'SOP'
+            shift_type = sel["name"]                      # display name
             in_time = sel.get("in_time")
             out_time = sel.get("out_time")
 
@@ -742,7 +737,7 @@ class PlanStaffWidget(QWidget):
             self.logged_username,
             self.source,
             "SHIFT_MODIFICATION",
-            f"{username} ({badge}) {start_date}..{end_date} prev={prev_map} new={new_map}; Excel={'OK' if success else 'ERR'}"
+            f"{username} ({badge}) {start_date}.{end_date} prev={prev_map} new={new_map}; Excel={'OK' if success else 'ERR'}"
         )
 
         # --- Message
@@ -766,8 +761,7 @@ class PlanStaffWidget(QWidget):
 
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Save Transportation Report",
-            f"Transport_Request_{s.strftime('%Y%m%d')}_to_{e.strftime('%Y%m%d')}.xlsx",
+            f"Transport_Report_{self.source}_{datetime.now().strftime('%Y%m%d')}.xlsx",
             "Excel Files (*.xlsx)"
         )
 
@@ -842,10 +836,15 @@ class PlanStaffWidget(QWidget):
             mtime = os.path.getmtime(self.excel_file)
             structure_ok, errors, meta = excel.validate_excel_structure(self.excel_file)
             if structure_ok:
-                self.excel_health_label.setText(f"Excel status: ✅ OK ({meta.get('variant','?')}) — {os.path.basename(self.excel_file)}")
+                # ✅ Show the signed-in site (RGM/Newmont), not the structural variant
+                self.excel_health_label.setText(
+                    f"Excel status: ✅ OK ({self.source}) — {os.path.basename(self.excel_file)}"
+                )
                 self.excel_health_label.setStyleSheet("color: #1B5E20; font-weight: bold;")
             else:
-                self.excel_health_label.setText("Excel status: ⚠️ Invalid structure. Use 'Regenerate' or fix the file.")
+                self.excel_health_label.setText(
+                    "Excel status: ⚠️ Invalid structure. Use 'Regenerate' or fix the file."
+                )
                 self.excel_health_label.setStyleSheet("color: #E65100; font-weight: bold;")
 
             # If file changed (mtime) -> refresh preview
@@ -923,7 +922,7 @@ class PlanStaffWidget(QWidget):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Information)
         box.setWindowTitle("Excel vs DB Comparison")
-        box.setText(preview if len(preview) < 1500 else (preview[:1500] + "\n..."))
+        box.setText(preview if len(preview) < 1500 else (preview[:1500] + "\n."))
         box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
         box.exec()
 
@@ -1089,7 +1088,7 @@ class CrudWidget(QWidget):
         box.exec()
 
         self.refresh_ui_data()
-        # 🔔 sync "Select Employee" combo in Plan Staff
+        # sync "Select Employee" combo in Plan Staff
         self.users_changed.emit(self.source)
 
     def delete_crud_user(self):
@@ -1119,13 +1118,13 @@ class CrudWidget(QWidget):
             box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
             box.exec()
             self.refresh_ui_data()
-            # 🔔 sync "Select Employee" combo in Plan Staff
+            # sync "Select Employee" combo in Plan Staff
             self.users_changed.emit(self.source)
 
     def import_users_from_excel(self):
         """
         FR-02: Import users and day-by-day schedules from Excel to DB.
-        With strict structure validation first. If invalid -> do not write & show detailed error.
+        With strict structure validation first.
         """
         try:
             inserted, skipped, upserts = excel.import_excel_to_db(self.excel_file, self.source)
@@ -1148,7 +1147,7 @@ class CrudWidget(QWidget):
 
             # Refresh users table immediately
             self.refresh_ui_data()
-            # 🔔 Signals to refresh "Select Employee" in Plan Staff
+            # Signals to refresh "Select Employee" in Plan Staff
             self.users_changed.emit(self.source)
             self.import_done.emit(self.source)
         except ValueError as ve:
@@ -1230,41 +1229,38 @@ class ShiftTypeAdminWidget(QWidget):
         actions.addWidget(self.delete_btn)
         form_layout.addLayout(actions, 5, 0, 1, 2)
 
-        form_group = create_group_box(f"Configure Shift Types ({self.source})", form_layout)
-        form_group.setFixedWidth(450)
+        form_group = create_group_box("Shift Type", form_layout)
+        form_group.setFixedWidth(420)
 
         # Right: table
         table_layout = QVBoxLayout()
         self.types_table = QTableWidget()
         self.types_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.types_table.setAlternatingRowColors(True)
-        self.types_table.itemClicked.connect(self.load_type_to_form)
+        self.types_table.itemClicked.connect(self.load_to_form)
         table_layout.addWidget(self.types_table)
 
-        table_group = create_group_box("Defined Shift Types", table_layout)
-
+        table_group = create_group_box(f"{self.source} Shift Types", table_layout)
         layout.addWidget(form_group)
         layout.addWidget(table_group)
 
         self.refresh_table()
 
     def pick_color(self):
-        initial = QColor(self.color_display.text() or "#FFC000")
-        color = QColorDialog.getColor(initial, self, "Pick Color")
+        color = QColorDialog.getColor(QColor(self.color_display.text() or "#FFC000"), self, "Pick a Color")
         if color.isValid():
             self.color_display.setText(color.name())
 
-    def load_type_to_form(self, item):
+    def load_to_form(self, item):
         row = item.row()
         self.current_type_id = int(self.types_table.item(row, 0).text())
-        name = self.types_table.item(row, 1).text()
+        self.name_input.setText(self.types_table.item(row, 1).text())
         code = self.types_table.item(row, 2).text()
-        color = self.types_table.item(row, 3).text()
+        self.code_input.setText(code)
+        color_hex = self.types_table.item(row, 3).text()
+        self.color_display.setText(color_hex)
         in_time = self.types_table.item(row, 4).text()
         out_time = self.types_table.item(row, 5).text()
-        self.name_input.setText(name)
-        self.code_input.setText(code)
-        self.color_display.setText(color)
         self.in_time_edit.setTime(QTime.fromString(in_time, "HH:mm"))
         self.out_time_edit.setTime(QTime.fromString(out_time, "HH:mm"))
         self.current_old_code = code
@@ -1459,7 +1455,7 @@ class MainWindow(QMainWindow):
             # Refresh combos/preview when shift types change
             self.shift_types_widget.types_changed.connect(lambda src: self.plan_widget.refresh_ui_data())
 
-        # 🔗 Connections to instantly refresh "Select Employee"
+        # Hot sync
         self.crud_widget.users_changed.connect(self._sync_after_users_changed)
         self.crud_widget.import_done.connect(self._sync_after_users_changed)
 
@@ -1561,7 +1557,7 @@ class AdminMainWindow(QMainWindow):
         self.nm_types = ShiftTypeAdminWidget("Newmont", newmont_excel, self.logged_username)
         self.tabs.addTab(self.nm_types, "⚙️ Newmont Shift Types")
 
-        # 🔗 Hot sync
+        # Hot sync
         self.rgm_crud.users_changed.connect(lambda src: self.rgm_plan.refresh_users_only())
         self.rgm_crud.import_done.connect(lambda src: self.rgm_plan.refresh_users_only())
 
