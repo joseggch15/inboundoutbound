@@ -449,10 +449,11 @@ class PlanStaffWidget(QWidget):
         actual_frozen_count = min(df.shape[1], FROZEN_COLUMN_COUNT)
         frozen_headers = [str(c) for c in cols[:actual_frozen_count]]
 
-        # Schedule (date) headers -> two lines date + weekday (REQ‑003)
+        # Schedule (date) headers -> one line with date + weekday
         schedule_headers = []
         for d in date_cols:
-            schedule_headers.append(f"{d.isoformat()}\n{_weekday_en(d)}")
+            # ✅ CAMBIO 1: Se reemplaza el salto de línea por un espacio.
+            schedule_headers.append(f"{d.isoformat()} {_weekday_en(d)}")
         self._date_col_dates = list(date_cols)  # keep exact order
 
         # Build tables
@@ -462,7 +463,7 @@ class PlanStaffWidget(QWidget):
 
         self.schedule_table.setRowCount(df.shape[0])
         self.schedule_table.setColumnCount(len(schedule_headers))
-        # Set two-line header items
+        # Set one-line header items
         for idx, header_text in enumerate(schedule_headers):
             self.schedule_table.setHorizontalHeaderItem(idx, QTableWidgetItem(header_text))
 
@@ -488,6 +489,10 @@ class PlanStaffWidget(QWidget):
                     # Schedule table
                     col_index = j - actual_frozen_count
                     val_str = text.upper().strip()
+                    
+                    # ✅ CAMBIO 2: Se centra el texto de la celda.
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    
                     # Base colors
                     if 'ON NS' in val_str or 'NIGHT' in val_str:
                         item.setBackground(QColor("#FFFF99"))
