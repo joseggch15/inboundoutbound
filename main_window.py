@@ -1,32 +1,23 @@
-# -*- coding: utf-8 -*-
-# main_window.py — UI/UX optimization focused on maximizing the vertical space
-# for "Schedule Preview" and moving "Rotation History" to its own tab.
+# main_window.py
+# Implements REQ‑001 (OFF→ON inline confirmation & warning highlight),
+# REQ‑002 (auto-center today in Schedule Preview), and
+# REQ‑003 (two-line date headers with weekday).
+# Also keeps Rotation History in its own tab and hides the ID column there.
+# Built over the working baseline without changing business logic. :contentReference[oaicite:1]{index=1}
 #
-# What this refactor delivers (without touching your working business logic):
-#   • A compact, multi‑column layout for "Register Employee Schedule"
-#     (3 columns on wide screens, 2 on medium, 1 on narrow), following your mockup.
-#   • A collapsible panel for the register section (collapsed by default) so the
-#     initial viewport prioritizes "Schedule Preview".
-#   • "Rotation History" in a dedicated tab, and the ID column is hidden there.
-#   • All end‑user strings are in English.
-#   • Schedule Preview area is explicitly given a larger stretch factor.
-#
-# Integrates with your existing modules and styles:
-#   - Theme / QSS helpers (mark_error): :contentReference[oaicite:0]{index=0}
-#   - Database layer (users, schedules, shift types, audit): :contentReference[oaicite:1]{index=1}
-#   - Excel logic (preview/validation/export/import/report): :contentReference[oaicite:2]{index=2}
-#   - Launcher / login flow (window bootstrap): :contentReference[oaicite:3]{index=3}
-#   - Previous main_window baseline (structure & signals): :contentReference[oaicite:4]{index=4}
+# Uses existing DB and Excel helpers. :contentReference[oaicite:2]{index=2} :contentReference[oaicite:3]{index=3}
+# Launcher and login remain unchanged. :contentReference[oaicite:4]{index=4} :contentReference[oaicite:5]{index=5}
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QComboBox, QDateEdit, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QGroupBox, QMessageBox, QFileDialog,
-    QTabWidget, QApplication, QColorDialog, QTimeEdit, QSizePolicy, QToolButton
+    QTabWidget, QApplication, QColorDialog, QTimeEdit, QSizePolicy, QToolButton,
+    QAbstractItemView
 )
-from PyQt6.QtCore import QDate, Qt, pyqtSignal, QTime, QTimer
+from PyQt6.QtCore import QDate, Qt, pyqtSignal, QTime, QTimer, QSignalBlocker
 from PyQt6.QtGui import QColor
-from datetime import datetime
+from datetime import datetime, date as pydate
 import os
 
 # App logic (unchanged)
@@ -35,6 +26,10 @@ import excel_logic as excel
 
 # Theme helper (for visual error state)
 from ui.theme import mark_error
+
+# ---------- constants ----------
+WARN_BG_HEX = "#FFFBEA"  # soft warning highlight for REQ-001 (also in ui/theme.py)
+FROZEN_COLUMN_COUNT = 3  # ROLE, NAME, BADGE
 
 
 # -------------------------------------------------------------
@@ -57,6 +52,13 @@ def _clean(value) -> str:
     if s.lower() in ("nan", "none", "null"):
         return ""
     return s
+
+
+def _weekday_en(d: pydate) -> str:
+    """English weekday name for headers."""
+    # Monday=0 ... Sunday=6
+    names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    return names[d.weekday()]
 
 
 # -------------------------------------------------------------
@@ -127,6 +129,13 @@ class PlanStaffWidget(QWidget):
         self._last_excel_mtime = None
         self._missing_prompt_shown = False
 
+        # For REQ‑001 tracking
+        self._loading_preview = False
+        self._cell_original_values = {}     # (row, col) -> original text
+        self._row_identities = []           # index -> {"name":..., "badge":...}
+        self._date_col_dates = []           # schedule_table column index -> pydate
+        self._warn_highlight_keys = set()   # {"<badge>|YYYY-MM-DD", ...}
+
         # ---------- root layout ----------
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -169,6 +178,9 @@ class PlanStaffWidget(QWidget):
         self.frozen_table = QTableWidget()
         self.schedule_table = QTableWidget()
 
+        # Freeze (left) table is read-only; main table is editable for inline changes
+        self.frozen_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
         # Scroll lock between frozen & main tables
         self.frozen_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.schedule_table.verticalScrollBar().valueChanged.connect(
@@ -183,6 +195,14 @@ class PlanStaffWidget(QWidget):
         self.schedule_table.setAlternatingRowColors(True)
         self.frozen_table.setObjectName("FrozenTable")
         self.schedule_table.setObjectName("ScheduleTable")
+
+        # REQ‑001: detect inline edits
+        self.schedule_table.itemChanged.connect(self._on_schedule_cell_changed)
+
+        # Nice centered multi-line headers for dates
+        self.schedule_table.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
 
         tables_layout.addWidget(self.frozen_table)
         tables_layout.addWidget(self.schedule_table, 1)
@@ -251,7 +271,7 @@ class PlanStaffWidget(QWidget):
     # ---------- registration form (compact) ----------
     def _build_registration_form(self) -> QGridLayout:
         """
-        Creates a compact, two‑row multi‑column grid that follows your mockup:
+        Compact two‑row multi‑column grid (follows the mockup):
             Row 1: Select Employee | Role / Department | Badge (ID)
             Row 2: Status / Shift | Period Start Date | Period End Date
         A save bar spans the full width below the grid.
@@ -329,7 +349,6 @@ class PlanStaffWidget(QWidget):
         if self._register_grid is None:
             return
         if self._current_form_cols == columns:
-            # Nothing to do
             pass
         self._current_form_cols = columns
 
@@ -396,41 +415,80 @@ class PlanStaffWidget(QWidget):
         self.status_selector.blockSignals(False)
 
     def load_schedule_data(self):
-        FROZEN_COLUMN_COUNT = 3
         df = excel.get_schedule_preview(self.excel_file)
+        self._loading_preview = True
+        self._cell_original_values.clear()
+        self._row_identities.clear()
+        self._date_col_dates.clear()
+
         if df.empty:
             self.frozen_table.clear()
             self.schedule_table.clear()
             self.frozen_table.setRowCount(0)
             self.schedule_table.setRowCount(0)
+            self._loading_preview = False
             return
 
         # color mapping for custom codes
         custom_map = db.get_shift_type_map(self.source)
 
-        actual_frozen_count = min(df.shape[1], FROZEN_COLUMN_COUNT)
-        headers = [str(col.strftime('%Y-%m-%d')) if hasattr(col, "strftime") else str(col) for col in df.columns]
+        # Prepare headers
+        cols = list(df.columns)
+        # Identify date columns (right side)
+        date_cols = []
+        for c in cols:
+            if hasattr(c, "to_pydatetime"):
+                date_cols.append(c.to_pydatetime().date())
+            elif isinstance(c, datetime):
+                date_cols.append(c.date())
+            else:
+                # not a date header
+                pass
 
+        # Frozen
+        actual_frozen_count = min(df.shape[1], FROZEN_COLUMN_COUNT)
+        frozen_headers = [str(c) for c in cols[:actual_frozen_count]]
+
+        # Schedule (date) headers -> two lines date + weekday (REQ‑003)
+        schedule_headers = []
+        for d in date_cols:
+            schedule_headers.append(f"{d.isoformat()}\n{_weekday_en(d)}")
+        self._date_col_dates = list(date_cols)  # keep exact order
+
+        # Build tables
         self.frozen_table.setRowCount(df.shape[0])
         self.frozen_table.setColumnCount(actual_frozen_count)
-        self.frozen_table.setHorizontalHeaderLabels(headers[:actual_frozen_count])
+        self.frozen_table.setHorizontalHeaderLabels(frozen_headers)
 
         self.schedule_table.setRowCount(df.shape[0])
-        self.schedule_table.setColumnCount(max(0, df.shape[1] - actual_frozen_count))
-        if df.shape[1] - actual_frozen_count > 0:
-            self.schedule_table.setHorizontalHeaderLabels(headers[actual_frozen_count:])
+        self.schedule_table.setColumnCount(len(schedule_headers))
+        # Set two-line header items
+        for idx, header_text in enumerate(schedule_headers):
+            self.schedule_table.setHorizontalHeaderItem(idx, QTableWidgetItem(header_text))
 
+        # Load rows
         for i, row in df.iterrows():
+            # identity
+            badge_val = row.get('BADGE') if hasattr(row, "get") else (row['BADGE'] if 'BADGE' in df.columns else "")
+            name_val = row.get('NAME') if hasattr(row, "get") else (row['NAME'] if 'NAME' in df.columns else "")
+            self._row_identities.append({
+                "badge": str(badge_val) if badge_val is not None else "",
+                "name": str(name_val) if name_val is not None else "",
+            })
+
             for j, val in enumerate(row):
                 text = _clean(val)
                 item = QTableWidgetItem(text)
 
                 if j < actual_frozen_count:
+                    # Frozen table
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     self.frozen_table.setItem(i, j, item)
                 else:
+                    # Schedule table
                     col_index = j - actual_frozen_count
                     val_str = text.upper().strip()
-                    # base colors
+                    # Base colors
                     if 'ON NS' in val_str or 'NIGHT' in val_str:
                         item.setBackground(QColor("#FFFF99"))
                     elif val_str == 'ON' or 'DAY' in val_str or val_str.isdigit():
@@ -441,10 +499,106 @@ class PlanStaffWidget(QWidget):
                         # custom code?
                         if val_str in custom_map and custom_map[val_str].get("color_hex"):
                             item.setBackground(QColor(custom_map[val_str]["color_hex"]))
+
                     self.schedule_table.setItem(i, col_index, item)
+                    # Track original value for REQ‑001
+                    self._cell_original_values[(i, col_index)] = val_str
+
+                    # Re-apply warning highlight if it was previously set (persist during the session)
+                    key = self._warn_key_for(i, col_index)
+                    if key in self._warn_highlight_keys:
+                        item.setBackground(QColor(WARN_BG_HEX))
 
         self.frozen_table.resizeColumnsToContents()
         self.schedule_table.resizeColumnsToContents()
+        self._loading_preview = False
+
+        # REQ‑002: focus today's date
+        self._center_today_column()
+
+    def _center_today_column(self):
+        """Scroll horizontally so today's date is visible and centered (REQ‑002)."""
+        try:
+            if not self._date_col_dates:
+                return
+            today = QDate.currentDate().toPyDate()
+            if today in self._date_col_dates:
+                col = self._date_col_dates.index(today)
+                if self.schedule_table.rowCount() > 0:
+                    self.schedule_table.scrollToItem(
+                        self.schedule_table.item(0, col),
+                        QAbstractItemView.ScrollHint.PositionAtCenter
+                    )
+        except Exception:
+            pass
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Also center on show (e.g., when user navigates to the tab)
+        self._center_today_column()
+
+    def _warn_key_for(self, row: int, col: int) -> str:
+        """Build a stable session key for a schedule cell using badge + date."""
+        badge = ""
+        if 0 <= row < len(self._row_identities):
+            badge = self._row_identities[row].get("badge", "") or self._row_identities[row].get("name", "")
+        d = ""
+        if 0 <= col < len(self._date_col_dates):
+            d = self._date_col_dates[col].isoformat()
+        return f"{badge}|{d}"
+
+    def _apply_base_background(self, item: QTableWidgetItem, value_upper: str):
+        """Apply default background based on the cell value."""
+        if value_upper == 'ON':
+            item.setBackground(QColor("#C6EFCE"))
+        elif value_upper in ('ON NS', 'NIGHT'):
+            item.setBackground(QColor("#FFFF99"))
+        elif value_upper in ('OFF', 'BREAK', 'KO', 'LEAVE'):
+            item.setBackground(QColor("#FFC7CE"))
+        elif value_upper == '':
+            item.setBackground(QColor(255, 255, 255, 0))  # transparent/no fill
+        else:
+            # leave as-is (could be a custom code already colored on load)
+            pass
+
+    # ---------- REQ‑001: inline OFF→ON/ON NS guard ----------
+    def _on_schedule_cell_changed(self, item: QTableWidgetItem):
+        if self._loading_preview:
+            return
+        r = item.row()
+        c = item.column()
+        new_text = (item.text() or "").strip().upper()
+        old_text = (self._cell_original_values.get((r, c), "") or "").strip().upper()
+
+        # If original was OFF or blank and new is ON / ON NS -> confirm
+        if old_text in ("OFF", "") and new_text in ("ON", "ON NS"):
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Confirm Change")
+            box.setText("The employee is on a day off. Are you sure you want to assign a shift?")
+            yes_btn = box.addButton("Yes, assign shift", QMessageBox.ButtonRole.AcceptRole)
+            no_btn = box.addButton("No, cancel", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+
+            if box.clickedButton() == yes_btn:
+                # Accept change and mark warning background (session‑persistent highlight)
+                with QSignalBlocker(self.schedule_table):
+                    item.setText(new_text)  # normalize casing
+                item.setBackground(QColor(WARN_BG_HEX))
+                self._warn_highlight_keys.add(self._warn_key_for(r, c))
+            else:
+                # Revert to original value and color
+                with QSignalBlocker(self.schedule_table):
+                    item.setText(old_text)
+                self._apply_base_background(item, old_text)
+        else:
+            # No special guard; just set the appropriate base color and manage warn set
+            self._apply_base_background(item, new_text)
+            key = self._warn_key_for(r, c)
+            if new_text not in ("ON", "ON NS"):
+                # remove warn if reverted to OFF/blank/other
+                if key in self._warn_highlight_keys:
+                    self._warn_highlight_keys.discard(key)
 
     def load_users_to_selector(self):
         self.user_selector_combo.blockSignals(True)
