@@ -460,7 +460,7 @@ class PlanStaffWidget(QWidget):
         self.dropoff_combo.clear()
         self.pickup_combo.addItem("— Select location —", None)
         self.dropoff_combo.addItem("— Select location —", None)
-        for loc in db.get_locations():
+        for loc in db.get_locations(self.source):
             self.pickup_combo.addItem(loc["pickup_location"], loc["pickup_location"])
             self.dropoff_combo.addItem(loc["pickup_location"], loc["pickup_location"])
         self.pickup_combo.setCurrentIndex(0)
@@ -484,7 +484,7 @@ class PlanStaffWidget(QWidget):
             return
 
         # color mapping for custom codes
-        custom_map = db.get_shift_type_map(self.source)
+        custom_map = {st['code']: st for st in db.get_shift_types(self.source)}
 
         # Prepare headers
         cols = list(df.columns)
@@ -764,14 +764,14 @@ class PlanStaffWidget(QWidget):
             in_time = None
             out_time = None
         elif sel.get("kind") == "base":
-            schedule_status = sel["Fstatus"]      # OFF / ON / ON NS
-            shift_type = sel["shift_type"]        # Day Shift / Night Shift / None
+            schedule_status = sel["status"]      # OFF / ON / ON NS
+            shift_type = sel["shift_type"]       # Day Shift / Night Shift / None
             in_time = sel.get("in_time")
             out_time = sel.get("out_time")
         else:
             # custom type selected
-            schedule_status = sel["code"]               # ON with custom type code, e.g. 'SOP'
-            shift_type = sel["name"]              # display name
+            schedule_status = sel["code"]            # ON with custom type code, e.g. 'SOP'
+            shift_type = sel["name"]             # display name
             in_time = sel.get("in_time")
             out_time = sel.get("out_time")
 
@@ -1491,43 +1491,77 @@ class ShiftTypeAdminWidget(QWidget):
 # NEW Widget: Location Admin
 # -------------------------------------------------------------
 class LocationAdminWidget(QWidget):
+    """
+    Si scope_source es 'RGM' o 'Newmont' -> modo estándar (solo su empresa).
+    Si scope_source es None -> modo Admin (todas, con filtro y selector de dueño).
+    """
     locations_changed = pyqtSignal()
 
-    def __init__(self):
+    def __init__(self, scope_source: str | None = None):
         super().__init__()
+        self.scope_source = scope_source  # None = admin; "RGM"/"Newmont" = normal
+        self.loc_id = None
+
         layout = QHBoxLayout(self)
 
-        # --- Edit Form ---
+        # --- Formulario ---
         form = QGridLayout()
-        self.loc_id = None
+        row = 0
+
         self.loc_input = QLineEdit()
+        form.addWidget(QLabel("Location name:"), row, 0)
+        form.addWidget(self.loc_input, row, 1)
+        row += 1
+
+        # En modo admin, permitir elegir dueño (source) del registro
+        self.owner_combo = None
+        if self.scope_source is None:
+            self.owner_combo = QComboBox()
+            self.owner_combo.addItems(["RGM", "Newmont"])
+            form.addWidget(QLabel("Owner (Source):"), row, 0)
+            form.addWidget(self.owner_combo, row, 1)
+            row += 1
+
         btn_new = QPushButton("✨ New")
         btn_save = QPushButton("💾 Save")
         btn_del = QPushButton("❌ Delete")
         btn_save.setProperty("variant", "primary")
         btn_del.setProperty("danger", True)
-
-        form.addWidget(QLabel("Location name:"), 0, 0)
-        form.addWidget(self.loc_input, 0, 1)
         h = QHBoxLayout()
-        h.addWidget(btn_new)
-        h.addWidget(btn_save)
-        h.addWidget(btn_del)
-        form.addLayout(h, 1, 0, 1, 2)
-        form_group = create_group_box("Location", form)
-        form_group.setFixedWidth(360)
+        h.addWidget(btn_new); h.addWidget(btn_save); h.addWidget(btn_del)
+        form.addLayout(h, row, 0, 1, 2)
 
-        # --- Table ---
+        form_group = create_group_box("Location", form)
+        form_group.setFixedWidth(420)
+
+        # --- Tabla ---
+        table_box = QVBoxLayout()
+        controls_row = QHBoxLayout()
+
+        # Filtro por empresa (solo en Admin)
+        self.filter_combo = None
+        if self.scope_source is None:
+            self.filter_combo = QComboBox()
+            self.filter_combo.addItem("All", None)
+            self.filter_combo.addItem("RGM", "RGM")
+            self.filter_combo.addItem("Newmont", "Newmont")
+            self.filter_combo.currentIndexChanged.connect(self._reload_table)
+            controls_row.addWidget(QLabel("Filter:"))
+            controls_row.addWidget(self.filter_combo)
+            controls_row.addStretch()
+
+        table_box.addLayout(controls_row)
+
         self.loc_table = QTableWidget()
         self.loc_table.setAlternatingRowColors(True)
-        table_box = QVBoxLayout()
         table_box.addWidget(self.loc_table)
+
         table_group = create_group_box("Locations", table_box)
 
         layout.addWidget(form_group)
         layout.addWidget(table_group)
 
-        # --- Signals ---
+        # Eventos
         btn_new.clicked.connect(self._new_loc)
         btn_save.clicked.connect(self._save_loc)
         btn_del.clicked.connect(self._delete_loc)
@@ -1535,32 +1569,63 @@ class LocationAdminWidget(QWidget):
 
         self._reload_table()
 
+    # --- helpers ---
+    def _effective_filter_source(self) -> str | None:
+        if self.scope_source is not None:
+            return self.scope_source  # perfil normal
+        # admin
+        if self.filter_combo is None:
+            return None
+        return self.filter_combo.currentData()
+
     def _reload_table(self):
-        rows = db.get_locations()
+        src = self._effective_filter_source()
+        rows = db.get_locations(source=src)
+        # Admin ve la columna Source; usuario normal, solo Location
+        if self.scope_source is None:
+            headers = ["ID", "Source", "Location"]
+        else:
+            headers = ["ID", "Location"]
         self.loc_table.setRowCount(len(rows))
-        self.loc_table.setColumnCount(2)
-        self.loc_table.setHorizontalHeaderLabels(["ID", "Location"])
+        self.loc_table.setColumnCount(len(headers))
+        self.loc_table.setHorizontalHeaderLabels(headers)
         for r, row in enumerate(rows):
             self.loc_table.setItem(r, 0, QTableWidgetItem(str(row["id"])))
-            self.loc_table.setItem(r, 1, QTableWidgetItem(row["pickup_location"]))
+            if self.scope_source is None:
+                self.loc_table.setItem(r, 1, QTableWidgetItem(row["source"]))
+                self.loc_table.setItem(r, 2, QTableWidgetItem(row["pickup_location"]))
+            else:
+                self.loc_table.setItem(r, 1, QTableWidgetItem(row["pickup_location"]))
         self.loc_table.setColumnHidden(0, True)
         self.loc_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
     def _new_loc(self):
         self.loc_id = None
         self.loc_input.clear()
+        if self.owner_combo is not None:
+            self.owner_combo.setCurrentIndex(0)
         self.loc_table.clearSelection()
 
     def _save_loc(self):
-        name = self.loc_input.text().strip()
+        name = (self.loc_input.text() or "").strip()
         if not name:
             QMessageBox.warning(self, "Input Error", "Location name cannot be empty.")
             return
 
-        if self.loc_id:
-            ok, msg = db.update_location(self.loc_id, name)
+        # Determinar 'source' destino del registro
+        if self.scope_source is None:
+            dest_source = self.owner_combo.currentText() if self.owner_combo else "RGM"
         else:
-            ok, msg = db.create_location(name)
+            dest_source = self.scope_source
+
+        if self.loc_id:
+            if self.scope_source is None:
+                ok, msg = db.update_location_admin(self.loc_id, name, dest_source)
+            else:
+                ok, msg = db.update_location(self.loc_id, name, dest_source)
+        else:
+            ok, msg = db.create_location(name, dest_source)
+
         QMessageBox.information(self, "Location", msg)
         self._reload_table()
         self.locations_changed.emit()
@@ -1570,7 +1635,10 @@ class LocationAdminWidget(QWidget):
         if not self.loc_id:
             QMessageBox.warning(self, "Location", "Please select a row.")
             return
-        ok, msg = db.delete_location(self.loc_id)
+        if self.scope_source is None:
+            ok, msg = db.delete_location_admin(self.loc_id)
+        else:
+            ok, msg = db.delete_location(self.loc_id, self.scope_source)
         QMessageBox.information(self, "Location", msg)
         self._reload_table()
         self.locations_changed.emit()
@@ -1579,7 +1647,17 @@ class LocationAdminWidget(QWidget):
     def _load_to_form(self, item):
         row = item.row()
         self.loc_id = int(self.loc_table.item(row, 0).text())
-        self.loc_input.setText(self.loc_table.item(row, 1).text())
+        if self.scope_source is None:
+            # Admin: columnas = ID | Source | Location
+            self.loc_input.setText(self.loc_table.item(row, 2).text())
+            if self.owner_combo is not None:
+                src = self.loc_table.item(row, 1).text()
+                idx = self.owner_combo.findText(src)
+                if idx >= 0:
+                    self.owner_combo.setCurrentIndex(idx)
+        else:
+            # Normal: columnas = ID | Location
+            self.loc_input.setText(self.loc_table.item(row, 1).text())
 
 
 # -------------------------------------------------------------
@@ -1692,7 +1770,7 @@ class MainWindow(QMainWindow):
             self.shift_types_widget.types_changed.connect(lambda src: self.plan_widget.refresh_ui_data())
 
         # 5) Locations admin
-        self.location_widget = LocationAdminWidget()
+        self.location_widget = LocationAdminWidget(scope_source=self.user_role)  # "RGM" | "Newmont"
         tabs.addTab(self.location_widget, "📍 Location")
         # Refresh Pick Up / Drop Off dropdowns when locations change
         self.location_widget.locations_changed.connect(self.plan_widget.load_location_options)
@@ -1800,7 +1878,7 @@ class AdminMainWindow(QMainWindow):
         self.tabs.addTab(self.nm_types, "⚙️ Newmont Shift Types")
 
         # 8) Locations (global admin)
-        self.location_admin = LocationAdminWidget()
+        self.location_admin = LocationAdminWidget(scope_source=None)  # modo admin (todas las empresas)
         self.tabs.addTab(self.location_admin, "📍 Locations")
         # refresh dropdowns on both plan tabs when the master list changes
         self.location_admin.locations_changed.connect(lambda: self.rgm_plan.load_location_options())

@@ -1,6 +1,6 @@
-# Basado y extendido a partir del módulo original. Referencia: :contentReference[oaicite:0]{index=0}
+# Basado y extendido a partir del módulo original. Referencia: :contentReference(resource_id=oaicite:0){index=0}
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from typing import Tuple, List, Dict, Optional
 
 DB_FILE = "transporte_operaciones.db"
@@ -27,15 +27,43 @@ def setup_database():
     )
 
     # -------------------------
-    # Locations (maestro de puntos)
+    # Locations (maestro de puntos) — ahora multi-tenant por 'source'
     # -------------------------
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS location (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            pickup_location TEXT UNIQUE NOT NULL
+            source TEXT NOT NULL,                -- RGM | Newmont
+            pickup_location TEXT NOT NULL,
+            UNIQUE (source, pickup_location)
         )"""
     )
+    # --- Migración desde esquema antiguo (sin 'source') ---
+    try:
+        cols = [r[1] for r in cursor.execute("PRAGMA table_info(location)").fetchall()]
+        # Si encontramos una tabla 'location' sin 'source', la migramos:
+        if "source" not in cols:  # tabla vieja
+            cursor.execute("ALTER TABLE location RENAME TO location_old")
+            cursor.execute(
+                """
+                CREATE TABLE location (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    pickup_location TEXT NOT NULL,
+                    UNIQUE (source, pickup_location)
+                )
+                """
+            )
+            # Duplicamos el catálogo previo para ambas empresas para no perder nada:
+            cursor.execute("INSERT INTO location (source, pickup_location) SELECT 'RGM', pickup_location FROM location_old")
+            cursor.execute("INSERT OR IGNORE INTO location (source, pickup_location) SELECT 'Newmont', pickup_location FROM location_old")
+            cursor.execute("DROP TABLE location_old")
+    except sqlite3.OperationalError:
+        pass
+    # Índices útiles (los nuevos reemplazan al antiguo idx_location_name)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_location_source ON location(source)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_location_src_name ON location(source, pickup_location)")
+
 
     # -------------------------
     # Asignación de ubicaciones por usuario y rango
@@ -64,9 +92,8 @@ def setup_database():
         )
     except sqlite3.OperationalError:
         pass
-
-    # Índices útiles
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_location_name ON location(pickup_location)")
+    
+    # Índices para user_locations
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ul_badge ON user_locations(badge)")
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_ul_range ON user_locations(start_date, end_date)"
@@ -321,67 +348,101 @@ def delete_user(user_id: int) -> Tuple[bool, str]:
         conn.close()
 
 
-
-
 # -------------------------
-# Locations (CRUD)
+# Locations (CRUD) — con ámbito por 'source'
 # -------------------------
-def get_locations() -> List[Dict]:
+def get_locations(source: Optional[str] = None) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute("SELECT id, pickup_location FROM location ORDER BY pickup_location")
+    if source:
+        cur.execute("SELECT id, source, pickup_location FROM location WHERE source=? ORDER BY pickup_location", (source,))
+    else:
+        cur.execute("SELECT id, source, pickup_location FROM location ORDER BY source, pickup_location")
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
 
-def create_location(pickup_location: str) -> Tuple[bool, str]:
+def create_location(pickup_location: str, source: str) -> Tuple[bool, str]:
     pickup_location = (pickup_location or "").strip()
     if not pickup_location:
         return False, "Location name cannot be empty."
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     try:
-        cur.execute("INSERT INTO location (pickup_location) VALUES (?)", (pickup_location,))
+        cur.execute("INSERT INTO location (source, pickup_location) VALUES (?,?)", (source, pickup_location))
         conn.commit()
-        return True, "Location created."
+        return True, f"Location created for {source}."
     except sqlite3.IntegrityError:
-        return False, "This location already exists."
+        return False, f"This location already exists for {source}."
     finally:
         conn.close()
 
-def update_location(loc_id: int, pickup_location: str) -> Tuple[bool, str]:
+def update_location(loc_id: int, pickup_location: str, source: str) -> Tuple[bool, str]:
     pickup_location = (pickup_location or "").strip()
     if not pickup_location:
         return False, "Location name cannot be empty."
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     try:
-        cur.execute("UPDATE location SET pickup_location = ? WHERE id = ?", (pickup_location, loc_id))
+        # Solo actualiza si el registro pertenece al 'source' (seguridad por ámbito)
+        cur.execute("UPDATE location SET pickup_location=? WHERE id=? AND source=?", (pickup_location, loc_id, source))
         conn.commit()
         if cur.rowcount:
             return True, "Location updated."
-        return False, "Location not found."
+        return False, "Location not found for this company."
+    except sqlite3.IntegrityError:
+        return False, f"Another location with the same name already exists for {source}."
     finally:
         conn.close()
 
-def delete_location(loc_id: int) -> Tuple[bool, str]:
+def delete_location(loc_id: int, source: str) -> Tuple[bool, str]:
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     try:
-        cur.execute("DELETE FROM location WHERE id = ?", (loc_id,))
+        cur.execute("DELETE FROM location WHERE id=? AND source=?", (loc_id, source))
         conn.commit()
         if cur.rowcount:
             return True, "Location deleted."
+        return False, "Location not found for this company."
+    finally:
+        conn.close()
+
+# --- Variantes para Administrador (pueden cambiar 'source' o operar sin ámbito) ---
+def update_location_admin(loc_id: int, pickup_location: str, new_source: str) -> Tuple[bool, str]:
+    pickup_location = (pickup_location or "").strip()
+    if not pickup_location:
+        return False, "Location name cannot be empty."
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE location SET pickup_location=?, source=? WHERE id=?", (pickup_location, new_source, loc_id))
+        conn.commit()
+        if cur.rowcount:
+            return True, "Location updated (admin)."
+        return False, "Location not found."
+    except sqlite3.IntegrityError:
+        return False, f"Another location with the same name already exists for {new_source}."
+    finally:
+        conn.close()
+
+def delete_location_admin(loc_id: int) -> Tuple[bool, str]:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM location WHERE id=?", (loc_id,))
+        conn.commit()
+        if cur.rowcount:
+            return True, "Location deleted (admin)."
         return False, "Location not found."
     finally:
         conn.close()
 
 
-
-from datetime import date as _date
-
-def assign_user_location_range(badge: str, start_date: _date, end_date: _date,
+# ---------------------------------------------------------------------
+# User Locations
+# ---------------------------------------------------------------------
+def assign_user_location_range(badge: str, start_date: date, end_date: date,
                                pickup: Optional[str], dropoff: Optional[str],
                                is_default: int = 0) -> None:
     """Inserta una asignación de pickup/dropoff para un rango de fechas."""
@@ -412,7 +473,7 @@ def set_user_default_locations(badge: str, pickup: Optional[str], dropoff: Optio
     conn.commit()
     conn.close()
 
-def get_user_location_for_date(badge: str, d: _date) -> Tuple[Optional[str], Optional[str]]:
+def get_user_location_for_date(badge: str, d: date) -> Tuple[Optional[str], Optional[str]]:
     """Busca primero una asignación de rango que cubra la fecha; si no existe, cae al default."""
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
@@ -460,7 +521,6 @@ def list_user_default_locations(source: str) -> List[Dict]:
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
-
 
 
 # ---------------------------------------------------------------------
