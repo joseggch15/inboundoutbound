@@ -107,6 +107,54 @@ def _fill_for_base_status(status: Optional[str]) -> Optional[PatternFill]:
         return yel
     return None
 
+# =================================================================
+# SHARED REPORTING HELPERS
+# =================================================================
+
+def _hhmmss(t: Optional[str]) -> Optional[str]:
+    """Ensure time string is in HH:MM:SS format."""
+    if t and len(t) == 5:
+        return t + ":00"
+    return t
+
+def _get_transport_time_str(
+    status: Optional[str],
+    kind: str,
+    comment: Optional[str],
+    custom_map: Dict
+) -> str:
+    """
+    Determines the transport time ('HH:MM:SS') based on shift status.
+    'kind' is either 'IN' or 'OUT'.
+    """
+    su = (status or "").strip().upper()
+    
+    # Priority 1: Custom shift types from DB
+    info = custom_map.get(su)
+    if info:
+        time_key = "in_time" if kind == "IN" else "out_time"
+        t = info.get(time_key)
+        if t:
+            return _hhmmss(t) or "00:00:00"
+
+    # Priority 2: Standard shifts
+    if su == "ON":
+        return "06:00:00" if kind == "IN" else "12:00:00"
+    if su == "ON NS":
+        return "12:00:00" if kind == "IN" else "06:00:00"
+
+    # Priority 3: Fallback from cell comment (e.g., "08:00-17:00")
+    if comment and "-" in str(comment):
+        try:
+            parts = str(comment).split("-", 1)
+            t = parts[0].strip() if kind == "IN" else parts[1].strip()
+            return _hhmmss(t) or "00:00:00"
+        except (IndexError, AttributeError):
+            pass
+
+    # Final fallback
+    return "06:00:00" if kind == "IN" else "12:00:00"
+
 
 # ============================================================
 # Lecturas auxiliares / previews
@@ -754,6 +802,7 @@ def generate_transport_report(
 ) -> Tuple[bytes, str]:
     """
     Generates the transport Excel report using xlsxwriter to apply custom formatting.
+    This now defaults to the new layout for Newmont as per the image.
     """
     # ---- 1) Inferir source por nombre de archivo ----
     fname = os.path.basename(plan_staff_file).lower()
@@ -798,20 +847,6 @@ def generate_transport_report(
         if su.isdigit() or su == "OK" or "DAY" in su: return "ON"
         return su
     def _is_working(s): return bool(s and s not in ("OFF", "BREAK", "KO", "LEAVE"))
-    def _hhmmss(t): return t + ":00" if t and len(t) == 5 else t
-    def _times_for(status, kind, comment):
-        su = (status or "").strip().upper()
-        if su == "ON": return "06:00:00" if kind == "IN" else "12:00:00"
-        if su == "ON NS": return "12:00:00" if kind == "IN" else "06:00:00"
-        info = custom_map.get(su)
-        if info:
-            t = info.get("in_time") if kind == "IN" else info.get("out_time")
-            if t: return _hhmmss(t)
-        if comment and "-" in str(comment):
-            parts = str(comment).split("-", 1)
-            t = parts[0] if kind == "IN" else parts[1]
-            return _hhmmss(t.strip())
-        return "06:00:00" if kind == "IN" else "12:00:00"
 
     # ---- 6) Data processing: Collect IN/OUT rows ----
     in_rows_data, out_rows_data = [], []
@@ -853,72 +888,104 @@ def generate_transport_report(
             st_prev, _ = per_day.get(prev_d, (None,None)) if prev_d else (None,None)
             st_next, _ = per_day.get(next_d, (None,None)) if next_d else (None,None)
 
+            time_in_str = _get_transport_time_str(st_d, "IN", cmt_d, custom_map)
+            time_out_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map)
+
             if st_prev != st_d: # Entry event
                 if start_date <= d <= end_date and d not in added_in:
                     pu, _ = get_user_location_for_date(badge, d)
-                    in_rows_data.append([last, first, badge, company_default, role, pu or "", d, _times_for(st_d, "IN", cmt_d)])
+                    in_rows_data.append([last, first, badge, company_default, role, pu or "", d, time_in_str])
                     added_in.add(d)
                 elif d > end_date and next_in is None:
                     next_in = (d, st_d, cmt_d)
             if st_next != st_d: # Exit event
                 if start_date <= d <= end_date and d not in added_out:
                     _, do = get_user_location_for_date(badge, d)
-                    out_rows_data.append([last, first, badge, company_default, role, do or "", d, _times_for(st_d, "OUT", cmt_d)])
+                    out_rows_data.append([last, first, badge, company_default, role, do or "", d, time_out_str])
                     added_out.add(d)
                 elif d > end_date and next_out is None:
                     next_out = (d, st_d, cmt_d)
 
         if next_in and next_in[0] not in added_in:
             d, st, cmt = next_in; pu, _ = get_user_location_for_date(badge, d)
-            in_rows_data.append([last, first, badge, company_default, role, pu or "", d, _times_for(st, "IN", cmt)])
+            time_in_str = _get_transport_time_str(st, "IN", cmt, custom_map)
+            in_rows_data.append([last, first, badge, company_default, role, pu or "", d, time_in_str])
         if next_out and next_out[0] not in added_out:
             d, st, cmt = next_out; _, do = get_user_location_for_date(badge, d)
-            out_rows_data.append([last, first, badge, company_default, role, do or "", d, _times_for(st, "OUT", cmt)])
+            time_out_str = _get_transport_time_str(st, "OUT", cmt, custom_map)
+            out_rows_data.append([last, first, badge, company_default, role, do or "", d, time_out_str])
 
     # ---- 7) Write to xlsxwriter workbook ----
     output = io.BytesIO()
-    workbook = xlsxwriter.Workbook(output, {'in_memory': True, 'default_date_format': 'yyyy-mm-dd'})
+    workbook = xlsxwriter.Workbook(output, {'in_memory': True})
     ws = workbook.add_worksheet("travel list")
 
     # --- Formats ---
-    f_bold = workbook.add_format({'bold': True})
-    f_default = workbook.add_format({'font_name': settings.get('font_name'), 'font_color': settings.get('font_color'), 'valign': 'vcenter'})
-    f_header = workbook.add_format({'bold': True, 'font_name': settings.get('font_name'), 'font_color': settings.get('header_font_color'), 'bg_color': settings.get('header_bg_color'), 'align': 'center', 'valign': 'vcenter'})
-    f_col_colors = {
-        h: workbook.add_format({'bold': True, 'font_name': settings.get('font_name'), 'font_color': settings.get('header_font_color'), 'bg_color': c, 'align': 'center', 'valign': 'vcenter'})
-        for h, c in settings.get('column_colors', {}).items()
-    }
+    base_font_settings = {'font_name': settings.get('font_name', 'Calibri'), 'valign': 'vcenter'}
+    
+    f_title = workbook.add_format({'bold': True, 'font_name': base_font_settings['font_name'], 'underline': True, 'font_size': 11})
+    
+    f_header = workbook.add_format({
+        'bold': True, 
+        'font_name': base_font_settings['font_name'], 
+        'font_color': settings.get('header_font_color'), 
+        'bg_color': settings.get('header_bg_color'), 
+        'align': 'center', 'valign': 'vcenter', 'border': 1
+    })
+    
+    f_default = workbook.add_format({**base_font_settings, 'border': 1})
+    f_date = workbook.add_format({**base_font_settings, 'border': 1, 'num_format': settings.get('date_format', 'dd-mmm-yy'), 'font_color': 'red'})
+    f_time = workbook.add_format({**base_font_settings, 'border': 1, 'num_format': 'hh:mm', 'font_color': 'red'})
 
-    # --- Write ---
-    ws.write('A2', "MERIAN TRANSPORTATION REQUEST", f_bold)
-    ws.write('A5', "IN", f_bold); ws.write('B5', "TRAVEL TO SITE", f_bold)
-    ws.write('K5', "OUT", f_bold); ws.write('L5', "TRAVEL FROM SITE", f_bold)
+    # --- Write Content ---
+    ws.write('A1', "MERIAN TRANSPORTATION REQUEST", f_title)
+    ws.write('A3', "IN", workbook.add_format({'bold': True}))
+    ws.write('B3', "TRAVEL TO SITE", workbook.add_format({'bold': True}))
+    ws.write('K3', "OUT", workbook.add_format({'bold': True}))
+    ws.write('L3', "TRAVEL FROM SITE", workbook.add_format({'bold': True}))
 
     headers_in = ["#", "NAME", "FIRST NAME", "GID", "COMPANY", "DEPT", "FROM", "DATE", "TIME"]
     headers_out = ["#", "NAME", "FIRST NAME", "GID", "COMPANY", "DEPT", "TO", "DATE", "TIME"]
-    for i, h in enumerate(headers_in): ws.write(5, i, h, f_col_colors.get(h, f_header))
-    for i, h in enumerate(headers_out): ws.write(5, i + 10, h, f_col_colors.get(h, f_header))
+    for i, h in enumerate(headers_in): ws.write(3, i, h, f_header)
+    for i, h in enumerate(headers_out): ws.write(3, i + 10, h, f_header)
 
+    row_start_index = 4
     for i, row_data in enumerate(in_rows_data):
-        ws.write(i + 6, 0, i + 1, f_default)
+        ws.write(i + row_start_index, 0, i + 1, f_default)
         for j, cell_data in enumerate(row_data):
-            ws.write(i + 6, j + 1, cell_data, f_default)
+            col = j + 1
+            if headers_in[col] == "DATE":
+                ws.write_datetime(i + row_start_index, col, cell_data, f_date)
+            elif headers_in[col] == "TIME":
+                time_obj = datetime.strptime(cell_data, '%H:%M:%S')
+                ws.write_datetime(i + row_start_index, col, time_obj, f_time)
+            else:
+                ws.write(i + row_start_index, col, cell_data, f_default)
+                
     for i, row_data in enumerate(out_rows_data):
-        ws.write(i + 6, 10, i + 1, f_default)
+        ws.write(i + row_start_index, 10, i + 1, f_default)
         for j, cell_data in enumerate(row_data):
-            ws.write(i + 6, j + 11, cell_data, f_default)
+            col = j + 11
+            if headers_out[col - 10] == "DATE":
+                ws.write_datetime(i + row_start_index, col, cell_data, f_date)
+            elif headers_out[col - 10] == "TIME":
+                time_obj = datetime.strptime(cell_data, '%H:%M:%S')
+                ws.write_datetime(i + row_start_index, col, time_obj, f_time)
+            else:
+                 ws.write(i + row_start_index, col, cell_data, f_default)
     
     ws.autofit()
     workbook.close()
     output.seek(0)
     return output.read(), "Transportation report generated."
 
+
 # ============================================================
 # NEW RGM-specific Report
 # ============================================================
 def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_date: date, settings: Dict) -> Tuple[bytes, str]:
     output = io.BytesIO()
-    workbook = xlsxwriter.Workbook(output, {'in_memory': True, 'default_date_format': 'dddd, mmmm dd, yyyy'})
+    workbook = xlsxwriter.Workbook(output, {'in_memory': True})
     worksheet = workbook.add_worksheet("Sheet1")
 
     # Formats
@@ -927,14 +994,15 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
     yellow_header_format = workbook.add_format({'bold': True, 'bg_color': 'yellow', 'align': 'center', 'valign': 'vcenter', 'border': 1})
     data_format = workbook.add_format({'align': 'left', 'valign': 'vcenter', 'border': 1})
     time_format = workbook.add_format({'align': 'left', 'valign': 'vcenter', 'border': 1, 'num_format': 'h:mm AM/PM'})
+    date_format = workbook.add_format({'align': 'left', 'valign': 'vcenter', 'border': 1, 'num_format': settings.get('date_format', 'dd/mm/yyyy')})
     
     # Set column widths
     worksheet.set_column('A:A', 5)
     worksheet.set_column('B:B', 25) # NAME
     worksheet.set_column('C:D', 15) # DEPARTMENT, BADGE
     worksheet.set_column('E:F', 20) # POSITION, CREW
-    worksheet.set_column('G:I', 25) # PICKUP, INBOUND DATE, METHOD
-    worksheet.set_column('J:K', 15) # LOCATION, DEPT TIME
+    worksheet.set_column('G:H', 25) # PICKUP, INBOUND DATE
+    worksheet.set_column('I:K', 15) # METHOD, LOCATION, DEPT TIME
 
     worksheet.set_column('M:M', 25) # NAME
     worksheet.set_column('N:P', 15) # DEPARTMENT, BADGE, POSITION
@@ -1002,36 +1070,57 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
         department = str(ws_src.cell(row=r_idx, column=header_map["ROLE"]).value or "")
         position = "Technician" # Placeholder
         
-        per_day: Dict[date, Optional[str]] = {d: _norm_status(ws_src.cell(r_idx, c).value) for c, d in date_cols.items()}
+        per_day: Dict[date, Tuple[Optional[str], Optional[str]]] = {}
+        for c, d in date_cols.items():
+            cell = ws_src.cell(row=r_idx, column=c)
+            per_day[d] = (_norm_status(cell.value), (cell.comment.text if cell.comment else None))
 
         for i, d in enumerate(dates_sorted):
             if not (start_date <= d <= end_date): continue
             
-            st_d = per_day.get(d)
+            st_d, cmt_d = per_day.get(d, (None, None))
             if not _is_working(st_d): continue
 
             prev_d = dates_sorted[i-1] if i > 0 else None
-            st_prev = per_day.get(prev_d)
+            st_prev, _ = per_day.get(prev_d, (None, None))
             
             # INBOUND event
             if st_prev != st_d:
                 pu, _ = get_user_location_for_date(badge, d)
                 crew = _get_crew_from_name(st_d if st_d else "")
-                in_data = [in_row - 2, name, department, badge, position, crew, pu or "N/A", d, "RGM TRANSPORT", "PARAMARIBO", datetime.strptime("7:00", "%H:%M")]
+                time_str = _get_transport_time_str(st_d, "IN", cmt_d, custom_map)
+                dept_time = datetime.strptime(time_str, "%H:%M:%S")
+                
+                in_data = [in_row - 2, name, department, badge, position, crew, pu or "N/A", d, "RGM TRANSPORT", "PARAMARIBO", dept_time]
                 for col, val in enumerate(in_data):
-                    worksheet.write(in_row, col, val, data_format if col != 10 else time_format)
+                    header_name = inbound_headers[col]
+                    if header_name == "IN BOUND DATE":
+                        worksheet.write_datetime(in_row, col, val, date_format)
+                    elif header_name == "DEPT TIME":
+                        worksheet.write_datetime(in_row, col, val, time_format)
+                    else:
+                        worksheet.write(in_row, col, val, data_format)
                 in_row += 1
 
             # OUTBOUND event
             next_d = dates_sorted[i+1] if i < len(dates_sorted) - 1 else None
-            st_next = per_day.get(next_d)
+            st_next, _ = per_day.get(next_d, (None, None))
 
             if st_next != st_d:
                 _, do = get_user_location_for_date(badge, d)
                 crew = _get_crew_from_name(st_d if st_d else "")
-                out_data = [name, department, badge, position, crew, d, "RGM TRANSPORT", do or "PARAMARIBO", datetime.strptime("7:00", "%H:%M")]
+                time_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map)
+                dept_time = datetime.strptime(time_str, "%H:%M:%S")
+
+                out_data = [name, department, badge, position, crew, d, "RGM TRANSPORT", do or "PARAMARIBO", dept_time]
                 for col, val in enumerate(out_data):
-                     worksheet.write(out_row, col + 12, val, data_format if col != 8 else time_format)
+                    header_name = outbound_headers[col]
+                    if header_name == "ROSEBEL SITE OUT BOUND DATE":
+                        worksheet.write_datetime(out_row, col + 12, val, date_format)
+                    elif header_name == "DEPT TIME":
+                        worksheet.write_datetime(out_row, col + 12, val, time_format)
+                    else:
+                         worksheet.write(out_row, col + 12, val, data_format)
                 out_row += 1
 
 
@@ -1432,4 +1521,3 @@ def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]
 
     except Exception as e:
         return False, f"Refresh error: {e}"
-

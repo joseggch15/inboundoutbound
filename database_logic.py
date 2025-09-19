@@ -216,13 +216,28 @@ def setup_database():
 # ---------------------------------------------------------------------
 def get_report_settings(username: str, source: str) -> Dict:
     """Get report settings for a user and source, providing defaults if none exist."""
-    defaults = {
-        "font_name": "Arial",
-        "font_color": "#000000",
-        "header_bg_color": "#4472C4",
-        "header_font_color": "#FFFFFF",
-        "column_colors": {}
-    }
+    
+    # Default for Newmont based on the provided image
+    if source == "Newmont":
+        defaults = {
+            "font_name": "Calibri",
+            "font_color": "#000000",
+            "header_bg_color": "#70AD47",  # Green from image
+            "header_font_color": "#FFFFFF", # White
+            "date_format": "dd-mmm-yy",     # Default date format for Newmont
+            "column_colors": {}
+        }
+    # Default for RGM or any other source
+    else:
+        defaults = {
+            "font_name": "Arial",
+            "font_color": "#000000",
+            "header_bg_color": "#4472C4",
+            "header_font_color": "#FFFFFF",
+            "date_format": "dd/mm/yyyy",      # Default date format for RGM
+            "column_colors": {}
+        }
+        
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
@@ -234,6 +249,7 @@ def get_report_settings(username: str, source: str) -> Dict:
     if row and row[0]:
         try:
             settings = json.loads(row[0])
+            # User's saved settings will override the defaults
             defaults.update(settings)
             return defaults
         except (json.JSONDecodeError, TypeError):

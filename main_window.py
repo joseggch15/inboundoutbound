@@ -136,6 +136,9 @@ class CollapsibleGroupBox(QWidget):
 # -------------------------------------------------------------
 # NEW Widget: Report Layout Settings
 # -------------------------------------------------------------
+# -------------------------------------------------------------
+# NEW Widget: Report Layout Settings
+# -------------------------------------------------------------
 class ReportSettingsWidget(QWidget):
     def __init__(self, username: str, source: str):
         super().__init__()
@@ -158,15 +161,21 @@ class ReportSettingsWidget(QWidget):
         layout.addWidget(QLabel("Body Font Color:"), 1, 0)
         layout.addWidget(self.font_color_btn, 1, 1)
 
+        # NEW: Date Format
+        self.date_format_input = QLineEdit()
+        self.date_format_input.setPlaceholderText("e.g., dd/mm/yyyy, yyyy-mm-dd, etc.")
+        layout.addWidget(QLabel("Report Date Format:"), 2, 0)
+        layout.addWidget(self.date_format_input, 2, 1)
+
         # Header BG Color
         self.header_bg_btn = self._create_color_button('header_bg_color')
-        layout.addWidget(QLabel("Default Header Background:"), 2, 0)
-        layout.addWidget(self.header_bg_btn, 2, 1)
+        layout.addWidget(QLabel("Default Header Background:"), 3, 0)
+        layout.addWidget(self.header_bg_btn, 3, 1)
 
         # Header Font Color
         self.header_font_btn = self._create_color_button('header_font_color')
-        layout.addWidget(QLabel("Header Font Color:"), 3, 0)
-        layout.addWidget(self.header_font_btn, 3, 1)
+        layout.addWidget(QLabel("Header Font Color:"), 4, 0)
+        layout.addWidget(self.header_font_btn, 4, 1)
 
         # Column specific colors
         self.col_table = QTableWidget(0, 2)
@@ -175,8 +184,8 @@ class ReportSettingsWidget(QWidget):
         self.col_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.col_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.col_table.cellDoubleClicked.connect(self._pick_column_color)
-        layout.addWidget(QLabel("Column-specific Header Colors (double-click to change):"), 4, 0, 1, 2)
-        layout.addWidget(self.col_table, 5, 0, 1, 2)
+        layout.addWidget(QLabel("Column-specific Header Colors (double-click to change):"), 5, 0, 1, 2)
+        layout.addWidget(self.col_table, 6, 0, 1, 2)
 
         # Action Buttons
         self.save_btn = QPushButton("💾 Save Report Settings")
@@ -193,7 +202,7 @@ class ReportSettingsWidget(QWidget):
         button_layout.addWidget(self.save_btn)
         button_layout.addStretch()
 
-        layout.addLayout(button_layout, 6, 0, 1, 2)
+        layout.addLayout(button_layout, 7, 0, 1, 2)
 
         self.load_settings()
 
@@ -234,6 +243,7 @@ class ReportSettingsWidget(QWidget):
         settings = db.get_report_settings(self.username, self.source)
         self.font_name_combo.setCurrentFont(QFont(settings['font_name']))
         self._update_button_color(self.font_color_btn, settings['font_color'])
+        self.date_format_input.setText(settings.get('date_format', 'dd/mm/yyyy'))
         self._update_button_color(self.header_bg_btn, settings['header_bg_color'])
         self._update_button_color(self.header_font_btn, settings['header_font_color'])
 
@@ -260,6 +270,7 @@ class ReportSettingsWidget(QWidget):
         settings = {
             'font_name': self.font_name_combo.currentFont().family(),
             'font_color': self.font_color_btn.text(),
+            'date_format': self.date_format_input.text().strip(),
             'header_bg_color': self.header_bg_btn.text(),
             'header_font_color': self.header_font_btn.text(),
             'column_colors': col_colors
