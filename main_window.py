@@ -10,15 +10,16 @@
 #
 # UI content is in English end-to-end.
 
+import json
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QLineEdit, QComboBox, QDateEdit, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QGroupBox, QMessageBox, QFileDialog,
     QTabWidget, QApplication, QColorDialog, QTimeEdit, QSizePolicy, QToolButton,
-    QAbstractItemView
+    QAbstractItemView, QFontComboBox
 )
 from PyQt6.QtCore import QDate, Qt, pyqtSignal, QTime, QTimer, QSignalBlocker
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QFont
 from datetime import datetime, date as pydate
 import os
 
@@ -32,6 +33,7 @@ from ui.theme import mark_error
 # ---------- constants ----------
 WARN_BG_HEX = "#FFFBEA"  # soft warning highlight
 FROZEN_COLUMN_COUNT = 3  # ROLE, NAME, BADGE
+REPORT_HEADERS = ["#", "NAME", "FIRST NAME", "GID", "COMPANY", "DEPT", "FROM", "TO", "DATE", "TIME"]
 
 
 # -------------------------------------------------------------
@@ -102,7 +104,7 @@ class CollapsibleGroupBox(QWidget):
         self._content = QWidget()
         self._content.setVisible(not self._collapsed)
         self._content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        self._content_layout = None
+        self._content_layout = QVBoxLayout(self._content) # Use a layout that can hold a widget
         self._root.addWidget(self._content)
 
     def _on_toggle(self, checked: bool):
@@ -113,9 +115,140 @@ class CollapsibleGroupBox(QWidget):
         self._content.setVisible(not self._collapsed)
         self.toggle_btn.setArrowType(Qt.ArrowType.RightArrow if self._collapsed else Qt.ArrowType.DownArrow)
 
-    def setContentLayout(self, layout):
-        self._content_layout = layout
-        self._content.setLayout(layout)
+    def setContentWidget(self, widget: QWidget):
+        # Clear existing content
+        while self._content_layout.count():
+            item = self._content_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._content_layout.addWidget(widget)
+
+    def content(self) -> QWidget:
+        return self._content
+
+
+# -------------------------------------------------------------
+# NEW Widget: Report Layout Settings
+# -------------------------------------------------------------
+class ReportSettingsWidget(QWidget):
+    def __init__(self, username: str, source: str):
+        super().__init__()
+        self.username = username
+        self.source = source
+        self._color_buttons = {}
+
+        layout = QGridLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setHorizontalSpacing(15)
+        layout.setVerticalSpacing(10)
+
+        # Font Name
+        self.font_name_combo = QFontComboBox()
+        layout.addWidget(QLabel("Font Name:"), 0, 0)
+        layout.addWidget(self.font_name_combo, 0, 1)
+
+        # Font Color
+        self.font_color_btn = self._create_color_button('font_color')
+        layout.addWidget(QLabel("Body Font Color:"), 1, 0)
+        layout.addWidget(self.font_color_btn, 1, 1)
+
+        # Header BG Color
+        self.header_bg_btn = self._create_color_button('header_bg_color')
+        layout.addWidget(QLabel("Default Header Background:"), 2, 0)
+        layout.addWidget(self.header_bg_btn, 2, 1)
+
+        # Header Font Color
+        self.header_font_btn = self._create_color_button('header_font_color')
+        layout.addWidget(QLabel("Header Font Color:"), 3, 0)
+        layout.addWidget(self.header_font_btn, 3, 1)
+
+        # Column specific colors
+        self.col_table = QTableWidget(0, 2)
+        self.col_table.setHorizontalHeaderLabels(["Column Name", "Header Color"])
+        self.col_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.col_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.col_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.col_table.cellDoubleClicked.connect(self._pick_column_color)
+        layout.addWidget(QLabel("Column-specific Header Colors (double-click to change):"), 4, 0, 1, 2)
+        layout.addWidget(self.col_table, 5, 0, 1, 2)
+
+        # Save button
+        self.save_btn = QPushButton("💾 Save Report Settings")
+        self.save_btn.setProperty("variant", "primary")
+        self.save_btn.clicked.connect(self.save_settings)
+        layout.addWidget(self.save_btn, 6, 0, 1, 2, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.load_settings()
+
+    def _create_color_button(self, key):
+        btn = QPushButton("Pick Color...")
+        btn.setProperty("key", key)
+        btn.clicked.connect(self._pick_color)
+        self._color_buttons[key] = btn
+        return btn
+
+    def _update_button_color(self, btn, color_hex):
+        btn.setText(color_hex.upper())
+        btn.setStyleSheet(f"background-color: {color_hex}; color: {'#FFFFFF' if QColor(color_hex).lightness() < 128 else '#000000'};")
+
+    def _pick_color(self):
+        sender_btn = self.sender()
+        key = sender_btn.property("key")
+        current_color = sender_btn.text()
+        color = QColorDialog.getColor(QColor(current_color), self, "Pick a Color")
+        if color.isValid():
+            self._update_button_color(sender_btn, color.name())
+
+    def _pick_column_color(self, row, column):
+        if column != 1: return
+        header_item = self.col_table.item(row, 0)
+        color_item = self.col_table.item(row, 1)
+        if not header_item or not color_item: return
+
+        current_color_hex = color_item.text()
+        color = QColorDialog.getColor(QColor(current_color_hex), self, f"Color for {header_item.text()}")
+        if color.isValid():
+            color_item.setText(color.name())
+            color_item.setBackground(color)
+            color_item.setForeground(QColor('#FFFFFF' if color.lightness() < 128 else '#000000'))
+
+
+    def load_settings(self):
+        settings = db.get_report_settings(self.username, self.source)
+        self.font_name_combo.setCurrentFont(QFont(settings['font_name']))
+        self._update_button_color(self.font_color_btn, settings['font_color'])
+        self._update_button_color(self.header_bg_btn, settings['header_bg_color'])
+        self._update_button_color(self.header_font_btn, settings['header_font_color'])
+
+        self.col_table.setRowCount(0)
+        col_colors = settings.get('column_colors', {})
+        for header in REPORT_HEADERS:
+            row_pos = self.col_table.rowCount()
+            self.col_table.insertRow(row_pos)
+            self.col_table.setItem(row_pos, 0, QTableWidgetItem(header))
+            color_hex = col_colors.get(header, settings['header_bg_color'])
+            color_item = QTableWidgetItem(color_hex)
+            color_item.setBackground(QColor(color_hex))
+            color_item.setForeground(QColor('#FFFFFF' if QColor(color_hex).lightness() < 128 else '#000000'))
+            self.col_table.setItem(row_pos, 1, color_item)
+
+    def save_settings(self):
+        col_colors = {}
+        for row in range(self.col_table.rowCount()):
+            header = self.col_table.item(row, 0).text()
+            color = self.col_table.item(row, 1).text()
+            col_colors[header] = color
+
+        settings = {
+            'font_name': self.font_name_combo.currentFont().family(),
+            'font_color': self.font_color_btn.text(),
+            'header_bg_color': self.header_bg_btn.text(),
+            'header_font_color': self.header_font_btn.text(),
+            'column_colors': col_colors
+        }
+        db.save_report_settings(self.username, self.source, settings)
+        db.log_event(self.username, self.source, "SETTINGS_UPDATE", f"Report layout changed: {json.dumps(settings)}")
+        QMessageBox.information(self, "Settings Saved", "Report layout settings have been saved successfully.")
 
 
 # -------------------------------------------------------------
@@ -233,7 +366,7 @@ class PlanStaffWidget(QWidget):
             "1. Register Employee Schedule (DB is SSoT)", collapsed=False
         )
         register_layout = self._build_registration_form()
-        self.registration_section.setContentLayout(register_layout)
+        self.registration_section.setContentWidget(register_layout)
         root.addWidget(self.registration_section, 1)
 
         # --- Transportation Report & Export ---
@@ -283,13 +416,10 @@ class PlanStaffWidget(QWidget):
         self._rebuild_registration_grid(self._current_form_cols)
 
     # ---------- registration form (compact) ----------
-    def _build_registration_form(self) -> QGridLayout:
-        """
-        Compact multi-column grid:
-          Row 1: Select Employee | Role / Department | Badge (ID) | Status / Shift
-          Row 2: Period Start Date | Pick Up Location | Period End Date | Drop Off Location
-          Centered action bar: [ Save Changes to DB Excel ]
-        """
+    def _build_registration_form(self) -> QWidget:
+        container = QWidget()
+        self.main_form_layout = QVBoxLayout(container)
+        
         # Controls
         self.user_selector_combo = QComboBox()
         self.user_selector_combo.currentIndexChanged.connect(self.autofill_user_data)
@@ -335,12 +465,8 @@ class PlanStaffWidget(QWidget):
             field("Role / Department", self.role_display),
             field("Badge (ID)", self.badge_display),
             field("Status / Shift", self.status_selector),
-
-            # Next to Period Start Date -> Pick Up
             field("Period Start Date", self.start_date_edit),
             field("Pick Up Location", self.pickup_combo),
-
-            # Next to Period End Date -> Drop Off
             field("Period End Date", self.end_date_edit),
             field("Drop Off Location", self.dropoff_combo),
         ]
@@ -350,66 +476,49 @@ class PlanStaffWidget(QWidget):
         self._register_grid.setContentsMargins(8, 6, 8, 6)
         self._register_grid.setHorizontalSpacing(12)
         self._register_grid.setVerticalSpacing(10)
+        self.main_form_layout.addLayout(self._register_grid)
 
         # Save bar (full width)
         self._save_bar = QHBoxLayout()
         self._save_bar.addStretch()
         self._save_bar.addWidget(self.save_button)
         self._save_bar.addStretch()
-
+        self.main_form_layout.addLayout(self._save_bar)
+        
         # Load options (base + custom)
         self.load_shift_type_options()
 
-        return self._register_grid
+        return container
 
     def _rebuild_registration_grid(self, columns: int):
-        if columns < 1:
-            columns = 1
-        if len(self._fields) % columns != 0 and columns > 1:
-            columns = 2 if columns == 3 else columns
-        if self._register_grid is None:
-            return
-        if self._current_form_cols == columns and self._register_grid.count() > 0:
-            return
+        if columns < 1: columns = 1
+        num_fields = len(self._fields)
+        
+        # Simple responsive logic
+        if num_fields % columns != 0:
+            if columns == 4 and num_fields == 8: pass
+            else: columns = 2 if columns > 1 else 1
+        
+        if self._register_grid is None: return
+        if self._current_form_cols == columns and self._register_grid.count() > 0: return
         self._current_form_cols = columns
 
-        # --------- CLEAR GRID (PRESERVANDO EL SAVE BAR) ---------
-        for i in reversed(range(self._register_grid.count())):
-            item = self._register_grid.itemAt(i)
-            # Si es el save bar, solo lo quitamos del grid; NO vaciamos sus hijos
-            if item.layout() is self._save_bar:
-                self._register_grid.removeItem(self._save_bar)
-                continue
-            w = item.widget()
-            if w:
-                self._register_grid.removeWidget(w)
-                w.setParent(None)
-            elif item.layout():
-                lay = item.layout()
-                self._register_grid.removeItem(lay)
-                lay.setParent(None)
+        # Clear grid
+        while self._register_grid.count():
+            item = self._register_grid.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
 
-        # --------- RE-ADD CAMPOS ---------
-        rows = (len(self._fields) + columns - 1) // columns
+        # Re-add fields
+        rows = (num_fields + columns - 1) // columns
         idx = 0
         for r in range(rows):
             for c in range(columns):
-                if idx >= len(self._fields):
-                    break
-                self._register_grid.addWidget(self._fields[idx], r, c)
-                self._register_grid.setColumnStretch(c, 1)
-                idx += 1
+                if idx < num_fields:
+                    self._register_grid.addWidget(self._fields[idx], r, c)
+                    self._register_grid.setColumnStretch(c, 1)
+                    idx += 1
 
-        # --------- RE-ADD SAVE BAR (asegurando que contiene el botón) ---------
-        if self._save_bar.indexOf(self.save_button) == -1:
-            # reconstruye el contenido por si se quedó huérfano en un resize previo
-            while self._save_bar.count():
-                self._save_bar.takeAt(0)
-            self._save_bar.addStretch()
-            self._save_bar.addWidget(self.save_button)
-            self._save_bar.addStretch()
-
-        self._register_grid.addLayout(self._save_bar, rows, 0, 1, columns)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -758,22 +867,16 @@ class PlanStaffWidget(QWidget):
 
         # Interpret current selection (status/shift)
         sel = self.status_selector.currentData()
-        if not sel or sel.get("kind") == "none" or sel.get("kind") == "separator":
+        if not sel or sel.get("kind") in ("none", "separator"):
             schedule_status = None
-            shift_type = None
-            in_time = None
-            out_time = None
+            shift_type, in_time, out_time = None, None, None
         elif sel.get("kind") == "base":
-            schedule_status = sel["status"]      # OFF / ON / ON NS
-            shift_type = sel["shift_type"]        # Day Shift / Night Shift / None
-            in_time = sel.get("in_time")
-            out_time = sel.get("out_time")
-        else:
-            # custom type selected
-            schedule_status = "ON"                # ON with custom type code, e.g. 'SOP'
-            shift_type = sel["name"]              # display name
-            in_time = sel.get("in_time")
-            out_time = sel.get("out_time")
+            schedule_status, shift_type = sel["status"], sel["shift_type"]
+            in_time, out_time = sel.get("in_time"), sel.get("out_time")
+        else: # custom
+            schedule_status, shift_type = sel["code"], sel["name"]
+            in_time, out_time = sel.get("in_time"), sel.get("out_time")
+
 
         # FR-01: Overwrite confirmation (Excel + DB)
         conflicts_excel = excel.find_conflicts(self.excel_file, username, badge, start_date, end_date)
@@ -793,20 +896,10 @@ class PlanStaffWidget(QWidget):
         prev_map = db.get_schedule_map_for_range(badge, start_date, end_date, self.source)
 
         # --- DB (SSoT) ---
-        if schedule_status in ("ON", "OFF", "ON NS") or (schedule_status and isinstance(schedule_status, str)):
-            # range history record
-            if schedule_status is not None:
-                db.add_operation(username, role, badge, start_date, end_date)
-            # day-by-day state
-            if schedule_status is None:
-                db.clear_schedule_range(badge, start_date, end_date, self.source)
-            else:
-                db.upsert_schedule_range(
-                    badge, start_date, end_date, schedule_status, shift_type, self.source,
-                    in_time=in_time, out_time=out_time
-                )
-        else:
-            # clear schedule in DB when "Do Not Mark Days" is chosen
+        if schedule_status is not None:
+            db.add_operation(username, role, badge, start_date, end_date)
+            db.upsert_schedule_range(badge, start_date, end_date, schedule_status, shift_type, self.source, in_time, out_time)
+        else: # clear range
             db.clear_schedule_range(badge, start_date, end_date, self.source)
 
         # NEW: persist location assignment for the selected range (if provided)
@@ -819,7 +912,7 @@ class PlanStaffWidget(QWidget):
         success, message = excel.update_plan_staff_excel(
             self.excel_file, username, role, badge,
             schedule_status, shift_type, start_date, end_date, self.source,
-            in_time=in_time, out_time=out_time
+            in_time, out_time
         )
 
         # --- Audit (FR-04)
@@ -846,12 +939,19 @@ class PlanStaffWidget(QWidget):
         self.rotation_changed.emit()
 
     def generate_report(self):
+        settings = db.get_report_settings(self.logged_username, self.source)
         s = self.report_start_date.date().toPyDate()
         e = self.report_end_date.date().toPyDate()
-        excel_data, message = excel.generate_transport_report(self.excel_file, s, e)
+        
+        excel_data, message = excel.generate_transport_report(self.excel_file, s, e, settings)
+
+        if not excel_data:
+            QMessageBox.critical(self, "Report Error", message)
+            return
 
         file_path, _ = QFileDialog.getSaveFileName(
             self,
+            "Save Transport Report",
             f"Transport_Report_{self.source}_{datetime.now().strftime('%Y%m%d')}.xlsx",
             "Excel Files (*.xlsx)"
         )
@@ -861,20 +961,11 @@ class PlanStaffWidget(QWidget):
         try:
             with open(file_path, 'wb') as f:
                 f.write(excel_data)
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Information)
-            box.setWindowTitle("Success")
-            box.setText(f"{message}\n\nReport saved to:\n{file_path}")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
+            QMessageBox.information(self, "Success", f"{message}\n\nReport saved to:\n{file_path}")
             db.log_event(self.logged_username, self.source, "DATA_EXPORT", f"TRANSPORT -> {file_path}")
         except Exception as e:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Critical)
-            box.setWindowTitle("Save Error")
-            box.setText(f"Could not save the file.\nError: {e}")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
+            QMessageBox.critical(self, "Save Error", f"Could not save the file.\nError: {e}")
+
 
     def export_plan_from_db(self):
         """FR-03: Export plan (from DB state; includes custom shift types)."""
@@ -1697,6 +1788,10 @@ class MainWindow(QMainWindow):
         # Refresh Pick Up / Drop Off dropdowns when locations change
         self.location_widget.locations_changed.connect(self.plan_widget.load_location_options)
 
+        # 6) Settings Tab
+        self.settings_widget = ReportSettingsWidget(self.logged_username, self.user_role)
+        tabs.addTab(self.settings_widget, "⚙️ Settings")
+
         # Hot sync
         self.crud_widget.users_changed.connect(self._sync_after_users_changed)
         self.crud_widget.import_done.connect(self._sync_after_users_changed)
@@ -1806,6 +1901,20 @@ class AdminMainWindow(QMainWindow):
         self.location_admin.locations_changed.connect(lambda: self.rgm_plan.load_location_options())
         self.location_admin.locations_changed.connect(lambda: self.nm_plan.load_location_options())
 
+        # 9) Settings
+        settings_container = QWidget()
+        settings_layout = QVBoxLayout(settings_container)
+        settings_tabs = QTabWidget()
+        settings_layout.addWidget(settings_tabs)
+
+        rgm_settings = ReportSettingsWidget(self.logged_username, "RGM")
+        settings_tabs.addTab(rgm_settings, "RGM Report Settings")
+
+        nm_settings = ReportSettingsWidget(self.logged_username, "Newmont")
+        settings_tabs.addTab(nm_settings, "Newmont Report Settings")
+        
+        self.tabs.addTab(settings_container, "⚙️ Settings")
+
         # Hot sync
         self.rgm_crud.users_changed.connect(lambda src: self.rgm_plan.refresh_users_only())
         self.rgm_crud.import_done.connect(lambda src: self.rgm_plan.refresh_users_only())
@@ -1819,3 +1928,4 @@ class AdminMainWindow(QMainWindow):
     def handle_logout(self):
         self.logout_signal.emit()
         self.close()
+
