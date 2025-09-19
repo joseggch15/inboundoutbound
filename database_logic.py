@@ -1,5 +1,6 @@
 # Basado y extendido a partir del módulo original. Referencia: :contentReference[oaicite:0]{index=0}
 import sqlite3
+import json
 from datetime import date, timedelta
 from typing import Tuple, List, Dict, Optional
 
@@ -149,6 +150,26 @@ def setup_database():
         )"""
     )
 
+    # -------------------------
+    # NEW: report_settings
+    # -------------------------
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS report_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            source TEXT NOT NULL,
+            font_name TEXT DEFAULT 'Calibri',
+            font_color TEXT DEFAULT '#000000',
+            header_bg_color TEXT DEFAULT '#4F81BD',
+            header_font_color TEXT DEFAULT '#FFFFFF',
+            column_colors TEXT, -- JSON: {"col_name": "#hex", ...}
+            UNIQUE(username, source)
+        )
+        """
+    )
+
+
     # Indexes útiles
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_source ON users(source)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_schedules_source ON schedules(source)")
@@ -158,6 +179,82 @@ def setup_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_shift_types_source ON shift_types(source)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_shift_types_code ON shift_types(code)")
 
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------
+# Report Settings (NEW)
+# ---------------------------------------------------------------------
+def get_report_settings(username: str, source: str) -> Dict:
+    """Gets report layout settings for a user. Returns defaults if not found."""
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM report_settings WHERE username = ? AND source = ?",
+        (username, source)
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    defaults = {
+        'font_name': 'Calibri',
+        'font_color': '#000000',
+        'header_bg_color': '#4F81BD',
+        'header_font_color': '#FFFFFF',
+        'column_colors': {}
+    }
+
+    if not row:
+        return defaults
+
+    settings = dict(row)
+    column_colors_json = settings.get('column_colors')
+    if column_colors_json:
+        try:
+            settings['column_colors'] = json.loads(column_colors_json)
+        except json.JSONDecodeError:
+            settings['column_colors'] = {} # Fallback
+    else:
+        settings['column_colors'] = {}
+
+    # Ensure all keys from defaults are present
+    for key, value in defaults.items():
+        if key not in settings or settings[key] is None:
+            settings[key] = value
+
+    return settings
+
+
+def save_report_settings(username: str, source: str, settings: Dict):
+    """Saves report layout settings for a user via upsert."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    column_colors_str = json.dumps(settings.get('column_colors', {}))
+
+    cursor.execute(
+        """
+        INSERT INTO report_settings (username, source, font_name, font_color, header_bg_color, header_font_color, column_colors)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(username, source) DO UPDATE SET
+            font_name = excluded.font_name,
+            font_color = excluded.font_color,
+            header_bg_color = excluded.header_bg_color,
+            header_font_color = excluded.header_font_color,
+            column_colors = excluded.column_colors
+        """,
+        (
+            username,
+            source,
+            settings.get('font_name', 'Calibri'),
+            settings.get('font_color', '#000000'),
+            settings.get('header_bg_color', '#4F81BD'),
+            settings.get('header_font_color', '#FFFFFF'),
+            column_colors_str
+        )
+    )
     conn.commit()
     conn.close()
 
