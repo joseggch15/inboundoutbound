@@ -1928,4 +1928,3 @@ class AdminMainWindow(QMainWindow):
     def handle_logout(self):
         self.logout_signal.emit()
         self.close()
-
