@@ -28,15 +28,45 @@ def setup_database():
     )
 
     # -------------------------
-    # Locations (maestro de puntos)
+    # Locations (maestro de puntos) — ahora multi-tenant por 'source'
     # -------------------------
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS location (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            pickup_location TEXT UNIQUE NOT NULL
+            source TEXT NOT NULL,                -- RGM | Newmont
+            pickup_location TEXT NOT NULL,
+            UNIQUE (source, pickup_location)
         )"""
     )
+
+    # --- Migración desde esquema antiguo (sin 'source') ---
+    try:
+        cols = [r[1] for r in cursor.execute("PRAGMA table_info(location)").fetchall()]
+        # Si encontramos una tabla 'location' sin 'source', la migramos:
+        if "source" not in cols:  # tabla vieja
+            cursor.execute("ALTER TABLE location RENAME TO location_old")
+            cursor.execute(
+                """
+                CREATE TABLE location (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    pickup_location TEXT NOT NULL,
+                    UNIQUE (source, pickup_location)
+                )
+                """
+            )
+            # Duplicamos el catálogo previo para ambas empresas para no perder nada:
+            cursor.execute("INSERT INTO location (source, pickup_location) SELECT 'RGM', pickup_location FROM location_old")
+            cursor.execute("INSERT OR IGNORE INTO location (source, pickup_location) SELECT 'Newmont', pickup_location FROM location_old")
+            cursor.execute("DROP TABLE location_old")
+    except sqlite3.OperationalError:
+        pass
+
+    # Índices útiles
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_location_source ON location(source)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_location_src_name ON location(source, pickup_location)")
+
 
     # -------------------------
     # Asignación de ubicaciones por usuario y rango
@@ -67,7 +97,6 @@ def setup_database():
         pass
 
     # Índices útiles
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_location_name ON location(pickup_location)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ul_badge ON user_locations(badge)")
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_ul_range ON user_locations(start_date, end_date)"
@@ -151,23 +180,22 @@ def setup_database():
     )
 
     # -------------------------
-    # NEW: report_settings
+    # Report Settings
     # -------------------------
-    cursor.execute(
-        """
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS report_settings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,
             source TEXT NOT NULL,
-            font_name TEXT DEFAULT 'Calibri',
-            font_color TEXT DEFAULT '#000000',
-            header_bg_color TEXT DEFAULT '#4F81BD',
-            header_font_color TEXT DEFAULT '#FFFFFF',
-            column_colors TEXT, -- JSON: {"col_name": "#hex", ...}
             UNIQUE(username, source)
         )
-        """
-    )
+    """)
+    # --- MIGRATION: Add settings_json column if it doesn't exist ---
+    try:
+        cursor.execute("ALTER TABLE report_settings ADD COLUMN settings_json TEXT")
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" not in str(e).lower():
+            raise e
 
 
     # Indexes útiles
@@ -184,80 +212,60 @@ def setup_database():
 
 
 # ---------------------------------------------------------------------
-# Report Settings (NEW)
+# Report Settings
 # ---------------------------------------------------------------------
 def get_report_settings(username: str, source: str) -> Dict:
-    """Gets report layout settings for a user. Returns defaults if not found."""
+    """Get report settings for a user and source, providing defaults if none exist."""
+    defaults = {
+        "font_name": "Arial",
+        "font_color": "#000000",
+        "header_bg_color": "#4472C4",
+        "header_font_color": "#FFFFFF",
+        "column_colors": {}
+    }
     conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT * FROM report_settings WHERE username = ? AND source = ?",
+        "SELECT settings_json FROM report_settings WHERE username = ? AND source = ?",
         (username, source)
     )
     row = cursor.fetchone()
     conn.close()
-
-    defaults = {
-        'font_name': 'Calibri',
-        'font_color': '#000000',
-        'header_bg_color': '#4F81BD',
-        'header_font_color': '#FFFFFF',
-        'column_colors': {}
-    }
-
-    if not row:
-        return defaults
-
-    settings = dict(row)
-    column_colors_json = settings.get('column_colors')
-    if column_colors_json:
+    if row and row[0]:
         try:
-            settings['column_colors'] = json.loads(column_colors_json)
-        except json.JSONDecodeError:
-            settings['column_colors'] = {} # Fallback
-    else:
-        settings['column_colors'] = {}
-
-    # Ensure all keys from defaults are present
-    for key, value in defaults.items():
-        if key not in settings or settings[key] is None:
-            settings[key] = value
-
-    return settings
-
+            settings = json.loads(row[0])
+            defaults.update(settings)
+            return defaults
+        except (json.JSONDecodeError, TypeError):
+            return defaults
+    return defaults
 
 def save_report_settings(username: str, source: str, settings: Dict):
-    """Saves report layout settings for a user via upsert."""
+    """Save or update report settings for a user and source."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-
-    column_colors_str = json.dumps(settings.get('column_colors', {}))
-
+    settings_json = json.dumps(settings)
     cursor.execute(
         """
-        INSERT INTO report_settings (username, source, font_name, font_color, header_bg_color, header_font_color, column_colors)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(username, source) DO UPDATE SET
-            font_name = excluded.font_name,
-            font_color = excluded.font_color,
-            header_bg_color = excluded.header_bg_color,
-            header_font_color = excluded.header_font_color,
-            column_colors = excluded.column_colors
+        INSERT INTO report_settings (username, source, settings_json)
+        VALUES (?, ?, ?)
+        ON CONFLICT(username, source) DO UPDATE SET settings_json = excluded.settings_json
         """,
-        (
-            username,
-            source,
-            settings.get('font_name', 'Calibri'),
-            settings.get('font_color', '#000000'),
-            settings.get('header_bg_color', '#4F81BD'),
-            settings.get('header_font_color', '#FFFFFF'),
-            column_colors_str
-        )
+        (username, source, settings_json)
     )
     conn.commit()
     conn.close()
 
+def delete_report_settings(username: str, source: str):
+    """Deletes the report settings for a specific user and source."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM report_settings WHERE username = ? AND source = ?",
+        (username, source)
+    )
+    conn.commit()
+    conn.close()
 
 # ---------------------------------------------------------------------
 # Audit log
@@ -417,63 +425,93 @@ def delete_user(user_id: int) -> Tuple[bool, str]:
     finally:
         conn.close()
 
-
-
-
 # -------------------------
-# Locations (CRUD)
+# Locations (CRUD) — con ámbito por 'source'
 # -------------------------
-def get_locations() -> List[Dict]:
+def get_locations(source: Optional[str] = None) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute("SELECT id, pickup_location FROM location ORDER BY pickup_location")
+    if source:
+        cur.execute("SELECT id, source, pickup_location FROM location WHERE source=? ORDER BY pickup_location", (source,))
+    else:
+        cur.execute("SELECT id, source, pickup_location FROM location ORDER BY source, pickup_location")
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
 
-def create_location(pickup_location: str) -> Tuple[bool, str]:
+def create_location(pickup_location: str, source: str) -> Tuple[bool, str]:
     pickup_location = (pickup_location or "").strip()
     if not pickup_location:
         return False, "Location name cannot be empty."
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     try:
-        cur.execute("INSERT INTO location (pickup_location) VALUES (?)", (pickup_location,))
+        cur.execute("INSERT INTO location (source, pickup_location) VALUES (?,?)", (source, pickup_location))
         conn.commit()
-        return True, "Location created."
+        return True, f"Location created for {source}."
     except sqlite3.IntegrityError:
-        return False, "This location already exists."
+        return False, f"This location already exists for {source}."
     finally:
         conn.close()
 
-def update_location(loc_id: int, pickup_location: str) -> Tuple[bool, str]:
+def update_location(loc_id: int, pickup_location: str, source: str) -> Tuple[bool, str]:
     pickup_location = (pickup_location or "").strip()
     if not pickup_location:
         return False, "Location name cannot be empty."
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     try:
-        cur.execute("UPDATE location SET pickup_location = ? WHERE id = ?", (pickup_location, loc_id))
+        # Solo actualiza si el registro pertenece al 'source' (seguridad por ámbito)
+        cur.execute("UPDATE location SET pickup_location=? WHERE id=? AND source=?", (pickup_location, loc_id, source))
         conn.commit()
         if cur.rowcount:
             return True, "Location updated."
-        return False, "Location not found."
+        return False, "Location not found for this company."
     finally:
         conn.close()
 
-def delete_location(loc_id: int) -> Tuple[bool, str]:
+def delete_location(loc_id: int, source: str) -> Tuple[bool, str]:
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     try:
-        cur.execute("DELETE FROM location WHERE id = ?", (loc_id,))
+        cur.execute("DELETE FROM location WHERE id=? AND source=?", (loc_id, source))
         conn.commit()
         if cur.rowcount:
             return True, "Location deleted."
-        return False, "Location not found."
+        return False, "Location not found for this company."
     finally:
         conn.close()
 
+# --- Variantes para Administrador (pueden cambiar 'source' o operar sin ámbito) ---
+def update_location_admin(loc_id: int, pickup_location: str, new_source: str) -> Tuple[bool, str]:
+    pickup_location = (pickup_location or "").strip()
+    if not pickup_location:
+        return False, "Location name cannot be empty."
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE location SET pickup_location=?, source=? WHERE id=?", (pickup_location, new_source, loc_id))
+        conn.commit()
+        if cur.rowcount:
+            return True, "Location updated (admin)."
+        return False, "Location not found."
+    except sqlite3.IntegrityError:
+        return False, f"Another location with the same name already exists for {new_source}."
+    finally:
+        conn.close()
+
+def delete_location_admin(loc_id: int) -> Tuple[bool, str]:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM location WHERE id=?", (loc_id,))
+        conn.commit()
+        if cur.rowcount:
+            return True, "Location deleted (admin)."
+        return False, "Location not found."
+    finally:
+        conn.close()
 
 
 from datetime import date as _date
@@ -869,3 +907,4 @@ def delete_shift_type(type_id: int) -> Tuple[bool, str, Optional[str], Optional[
         return False, f"Database error: {e}", None, None
     finally:
         conn.close()
+

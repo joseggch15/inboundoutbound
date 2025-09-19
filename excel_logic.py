@@ -918,7 +918,7 @@ def generate_transport_report(
 # ============================================================
 def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_date: date, settings: Dict) -> Tuple[bytes, str]:
     output = io.BytesIO()
-    workbook = xlsxwriter.Workbook(output, {'in_memory': True, 'default_date_format': 'dd/mm/yyyy'})
+    workbook = xlsxwriter.Workbook(output, {'in_memory': True, 'default_date_format': 'dddd, mmmm dd, yyyy'})
     worksheet = workbook.add_worksheet("Sheet1")
 
     # Formats
@@ -926,6 +926,7 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
     header_format = workbook.add_format({'bold': True, 'bg_color': '#00B0F0', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
     yellow_header_format = workbook.add_format({'bold': True, 'bg_color': 'yellow', 'align': 'center', 'valign': 'vcenter', 'border': 1})
     data_format = workbook.add_format({'align': 'left', 'valign': 'vcenter', 'border': 1})
+    time_format = workbook.add_format({'align': 'left', 'valign': 'vcenter', 'border': 1, 'num_format': 'h:mm AM/PM'})
     
     # Set column widths
     worksheet.set_column('A:A', 5)
@@ -1016,9 +1017,9 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
             if st_prev != st_d:
                 pu, _ = get_user_location_for_date(badge, d)
                 crew = _get_crew_from_name(st_d if st_d else "")
-                in_data = [in_row - 2, name, department, badge, position, crew, pu or "N/A", d, "RGM TRANSPORT", "PARAMARIBO", "7:00:00 a.m."]
+                in_data = [in_row - 2, name, department, badge, position, crew, pu or "N/A", d, "RGM TRANSPORT", "PARAMARIBO", datetime.strptime("7:00", "%H:%M")]
                 for col, val in enumerate(in_data):
-                    worksheet.write(in_row, col, val, data_format)
+                    worksheet.write(in_row, col, val, data_format if col != 10 else time_format)
                 in_row += 1
 
             # OUTBOUND event
@@ -1028,9 +1029,9 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
             if st_next != st_d:
                 _, do = get_user_location_for_date(badge, d)
                 crew = _get_crew_from_name(st_d if st_d else "")
-                out_data = [name, department, badge, position, crew, d, "RGM TRANSPORT", do or "PARAMARIBO", "7:00:00 a.m."]
+                out_data = [name, department, badge, position, crew, d, "RGM TRANSPORT", do or "PARAMARIBO", datetime.strptime("7:00", "%H:%M")]
                 for col, val in enumerate(out_data):
-                     worksheet.write(out_row, col + 12, val, data_format)
+                     worksheet.write(out_row, col + 12, val, data_format if col != 8 else time_format)
                 out_row += 1
 
 
