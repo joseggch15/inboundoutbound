@@ -764,13 +764,13 @@ class PlanStaffWidget(QWidget):
             in_time = None
             out_time = None
         elif sel.get("kind") == "base":
-            schedule_status = sel["status"]      # OFF / ON / ON NS
+            schedule_status = sel["Fstatus"]      # OFF / ON / ON NS
             shift_type = sel["shift_type"]        # Day Shift / Night Shift / None
             in_time = sel.get("in_time")
             out_time = sel.get("out_time")
         else:
             # custom type selected
-            schedule_status = "ON"                # ON with custom type code, e.g. 'SOP'
+            schedule_status = sel["code"]               # ON with custom type code, e.g. 'SOP'
             shift_type = sel["name"]              # display name
             in_time = sel.get("in_time")
             out_time = sel.get("out_time")
