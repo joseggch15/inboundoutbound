@@ -907,4 +907,3 @@ def delete_shift_type(type_id: int) -> Tuple[bool, str, Optional[str], Optional[
         return False, f"Database error: {e}", None, None
     finally:
         conn.close()
-

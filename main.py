@@ -86,10 +86,12 @@ class LauncherWindow(QWidget):
         self.main_app_window.logout_signal.connect(self.handle_logout)
         self.main_app_window.show()
 
+
     def handle_logout(self):
         """Shows the launcher again after signing out."""
         self.main_app_window = None
         self.show()
+        
 
 
 if __name__ == '__main__':

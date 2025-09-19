@@ -1034,17 +1034,21 @@ class PlanStaffWidget(QWidget):
 
     # ---------- Excel Health / Monitoring ----------
     def check_excel_health(self):
-        exists = os.path.exists(self.excel_file)
-        if not exists:
-            self.excel_health_label.setText("Excel status: ❌ Not found (it may have been moved, deleted, or renamed).")
-            self.excel_health_label.setStyleSheet("color: #B00020; font-weight: bold;")
-            if not self._missing_prompt_shown:
-                self._missing_prompt_shown = True
-                self.prompt_regenerate_or_locate()
-            return
-
-        # Exists -> validate structure and detect changes
+        # This entire block is wrapped in a try/except to prevent a crash
+        # if the timer fires after the widget has been destroyed (e.g., on close).
         try:
+            exists = os.path.exists(self.excel_file)
+            if not exists:
+                self.excel_health_label.setText("Excel status: ❌ Not found (it may have been moved, deleted, or renamed).")
+                self.excel_health_label.setStyleSheet("color: #B00020; font-weight: bold;")
+                if not self._missing_prompt_shown:
+                    self._missing_prompt_shown = True
+                    # Use a single shot timer to call the prompt after the current event loop finishes,
+                    # which is safer than opening a dialog directly from this handler.
+                    QTimer.singleShot(0, self.prompt_regenerate_or_locate)
+                return
+
+            # Exists -> validate structure and detect changes
             mtime = os.path.getmtime(self.excel_file)
             structure_ok, errors, meta = excel.validate_excel_structure(self.excel_file)
             if structure_ok:
@@ -1063,9 +1067,17 @@ class PlanStaffWidget(QWidget):
             if self._last_excel_mtime is None or mtime != self._last_excel_mtime:
                 self._last_excel_mtime = mtime
                 self.load_schedule_data()
-        except Exception:
-            self.excel_health_label.setText("Excel status: ⚠️ Error validating file.")
-            self.excel_health_label.setStyleSheet("color: #E65100; font-weight: bold;")
+        except RuntimeError:
+            # This error occurs if the QLabel widget has been deleted by the time
+            # this timer callback runs. We can safely ignore it.
+            pass
+        except Exception as e:
+            # For any other unexpected error, we can stop the timer and log it.
+            # It's better to check if the label still exists before trying to set its text.
+            if self.excel_health_label:
+                self.excel_health_label.setText(f"Excel status: ⚠️ Error validating file: {e}")
+                self.excel_health_label.setStyleSheet("color: #E65100; font-weight: bold;")
+            self.file_watch_timer.stop()
 
     def prompt_regenerate_or_locate(self):
         msg = QMessageBox(self)
@@ -2035,4 +2047,3 @@ class AdminMainWindow(QMainWindow):
     def handle_logout(self):
         self.logout_signal.emit()
         self.close()
-
