@@ -160,6 +160,10 @@ class PlanStaffWidget(QWidget):
         self.compare_button.clicked.connect(self.compare_excel_db_ui)
         self.compare_button.setProperty("variant", "text")
 
+        self.refresh_button = QPushButton("🔄 Refresh Excel from DB")
+        self.refresh_button.clicked.connect(self.refresh_excel_from_db_ui)
+        self.refresh_button.setProperty("variant", "text")
+
         self.regen_button = QPushButton("🛠️ Regenerate Plan Staff from DB")
         self.regen_button.clicked.connect(self.regenerate_excel_from_db)
         self.regen_button.setProperty("variant", "secondary")
@@ -168,6 +172,7 @@ class PlanStaffWidget(QWidget):
         status_layout.addStretch()
         status_layout.addWidget(self.validate_button)
         status_layout.addWidget(self.compare_button)
+        status_layout.addWidget(self.refresh_button)
         status_layout.addWidget(self.regen_button)
         root.addWidget(create_group_box("File Status  SSoT", status_layout), 0)
 
@@ -976,6 +981,19 @@ class PlanStaffWidget(QWidget):
         if ok:
             db.log_event(self.logged_username, self.source, "DATA_EXPORT", f"PLAN_REGENERATE -> {self.excel_file}")
             self._missing_prompt_shown = False
+            self.check_excel_health()
+            self.refresh_ui_data()
+
+    def refresh_excel_from_db_ui(self):
+        ok, msg = excel.refresh_excel_from_db(self.excel_file, self.source)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information if ok else QMessageBox.Icon.Critical)
+        box.setWindowTitle("Refresh" if ok else "Error")
+        box.setText(msg)
+        box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+        box.exec()
+        if ok:
+            db.log_event(self.logged_username, self.source, "DATA_SYNC", f"PLAN_REFRESH -> {self.excel_file}")
             self.check_excel_health()
             self.refresh_ui_data()
 

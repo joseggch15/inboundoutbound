@@ -473,6 +473,51 @@ def import_excel_to_db(plan_staff_file: str, source: str) -> Tuple[int, int, int
     after_badges = {u['badge'] for u in after}
     skipped = len(before_badges & after_badges)  # aproximado para el mensaje
 
+    # ---- Validación de tipos de turno personalizados (códigos) ----
+    # Recorremos todas las columnas de fechas y recopilamos valores que no sean
+    # estados base ('ON', 'ON NS', 'OFF') ni equivalentes a ON por números/OK/DAY/NIGHT.
+    # Cualquier otro valor se considera un "código" de turno que debe existir en shift_types.
+    try:
+        from database_logic import get_shift_type_map
+        _custom_map = {k.strip().upper(): v for k,v in get_shift_type_map(source).items()}
+    except Exception:
+        _custom_map = {}
+    try:
+        df_codes = pd.read_excel(plan_staff_file, engine='openpyxl')
+        date_cols_all = [c for c in df_codes.columns if _is_date_header(c)]
+        unknown_codes = set()
+        for dcol in date_cols_all:
+            col_series = df_codes[dcol]
+            for v in col_series:
+                if v is None:
+                    continue
+                s = str(v).strip()
+                if not s:
+                    continue
+                su = s.upper()
+                # equivalencias/estados base
+                if su in ("ON", "ON NS", "OFF", "BREAK", "KO", "LEAVE"):
+                    continue
+                if su.isdigit() or su == "OK" or ("DAY" in su) or ("NIGHT" in su):
+                    # se tratará como ON (día/noche) -> no requiere tipo personalizado
+                    continue
+                # Si llega aquí lo tratamos como código personalizado
+                if su not in _custom_map:
+                    unknown_codes.add(su)
+        if unknown_codes:
+            # abortar importación (la UI capturará este ValueError y lo mostrará en un QMessageBox)
+            raise ValueError(
+                "Se detectaron turnos/códigos no registrados en 'shift_types':\n  - " +
+                "\n  - ".join(sorted(unknown_codes)) +
+                "\n\nRegístrelos primero (nombre, código y horarios IN/OUT) en 'Shift Types' para continuar."
+            )
+    except ValueError:
+        # re-lanzar para que la capa UI lo muestre
+        raise
+    except Exception:
+        # fallas al leer códigos no deben romper la importación; continuamos
+        pass
+
     # Importar schedules (solo estados base reconocidos)
     upserts = 0
     try:
@@ -1300,3 +1345,115 @@ def regenerate_plan_from_db(plan_staff_file: str, source: str) -> Tuple[bool, st
         return True, f"PlanStaff file regenerated from DB (SSoT): {os.path.basename(plan_staff_file)}"
     else:
         return False, msg
+
+
+# ============================================================
+# REFRESH Excel <- DB (sin sobreescribir celdas ya llenas)
+# ============================================================
+def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]:
+    """
+    Sincroniza la información desde la BD hacia el Excel existente:
+      • Agrega usuarios faltantes (filas) por BADGE.
+      • Agrega columnas de fechas que existen en BD y no en el Excel.
+      • Escribe solo celdas VACÍAS con el estado proveniente de la BD
+        (no modifica valores ya presentes en el Excel).
+      • Aplica color y, si el status es un código, comenta 'IN-OUT' (HH:MM-HH:MM).
+    """
+    ok, _errors, _meta = validate_excel_structure(plan_staff_file)
+    if not ok:
+        return regenerate_plan_from_db(plan_staff_file, source)
+
+    try:
+        from database_logic import get_all_users, get_schedules_for_source, get_shift_type_map
+        users_db = get_all_users(source)
+        schedules_db = get_schedules_for_source(source)
+        custom_map = get_shift_type_map(source)
+
+        wb = openpyxl.load_workbook(plan_staff_file)
+        ws = wb.active
+
+        header_map = {cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)}
+        variant = _meta.get('variant')
+
+        date_map: Dict[date, int] = {c.value.date(): c.column for c in ws[1] if isinstance(c.value, datetime)}
+
+        badge_col = header_map.get("BADGE") if variant == "RGM" else header_map.get("Company ID")
+        if not badge_col:
+            return False, "Badge column not found in Excel."
+
+        # Colores
+        green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        red = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        yel = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
+
+        def _fill_for(status: Optional[str]) -> Optional[PatternFill]:
+            if status is None: return None
+            s = str(status).strip().upper()
+            if s == "OFF": return red
+            if s == "ON NS": return yel
+            if s == "ON": return green
+            info = custom_map.get(s)
+            if info and info.get('color_hex'):
+                hex_ = info['color_hex'].lstrip('#').upper()
+                return PatternFill(start_color=hex_, end_color=hex_, fill_type="solid")
+            return None
+
+        # Build maps for quick lookup
+        sched_by_badge: Dict[str, Dict[str, Dict]] = {}
+        for s in schedules_db:
+            b, d = str(s.get('badge','')).strip(), str(s.get('date','')).strip()
+            if b and d:
+                sched_by_badge.setdefault(b, {})[d] = s
+
+        rows_by_badge: Dict[str, int] = {str(ws.cell(r,badge_col).value).strip(): r for r in range(2, ws.max_row+1) if ws.cell(r,badge_col).value}
+
+        # --- 1. Add missing users ---
+        added_users = 0
+        for user in users_db:
+            badge = str(user.get('badge','')).strip()
+            if badge and badge not in rows_by_badge:
+                added_users += 1
+                new_row_idx = ws.max_row + 1
+                if variant == "RGM":
+                    ws.cell(new_row_idx, header_map["NAME"], value=user.get('name',''))
+                    ws.cell(new_row_idx, header_map["ROLE"], value=user.get('role',''))
+                    ws.cell(new_row_idx, header_map["BADGE"], value=badge)
+                else: # Newmont
+                    name = user.get('name','')
+                    last, first = (name.split(',',1) + [''])[:2] if ',' in name else (name.rsplit(' ',1) + [''])[:2]
+                    ws.cell(new_row_idx, header_map["Last Name"], value=last.strip())
+                    ws.cell(new_row_idx, header_map["First Name"], value=first.strip())
+                    ws.cell(new_row_idx, header_map["Discipline"], value=user.get('role',''))
+                    ws.cell(new_row_idx, header_map["Company ID"], value=badge)
+                rows_by_badge[badge] = new_row_idx
+
+        # --- 2. Add missing date columns ---
+        all_db_dates = {datetime.fromisoformat(d).date() for b in sched_by_badge for d in sched_by_badge[b]}
+        missing_dates = sorted(list(all_db_dates - set(date_map.keys())))
+        for d in missing_dates:
+            new_col = ws.max_column + 1
+            ws.cell(1, new_col, value=datetime.combine(d, datetime.min.time()))
+            date_map[d] = new_col
+
+        # --- 3. Fill empty cells ---
+        filled_cells = 0
+        for badge, row_idx in rows_by_badge.items():
+            user_scheds = sched_by_badge.get(badge, {})
+            for d, col_idx in date_map.items():
+                cell = ws.cell(row_idx, col_idx)
+                if cell.value is None or str(cell.value).strip() == '':
+                    db_info = user_scheds.get(d.isoformat())
+                    if db_info:
+                        status = (db_info.get('status') or '').strip().upper()
+                        if status:
+                            filled_cells += 1
+                            cell.value = status
+                            cell.fill = _fill_for(status) or PatternFill(fill_type=None)
+                            if status not in ("ON","ON NS","OFF") and db_info.get('in_time') and db_info.get('out_time'):
+                                cell.comment = Comment(f"{db_info['in_time']}-{db_info['out_time']}", "ShiftType")
+
+        wb.save(plan_staff_file)
+        return True, f"Refresh complete: added {added_users} users and filled {filled_cells} cells from DB."
+
+    except Exception as e:
+        return False, f"Refresh error: {e}"
