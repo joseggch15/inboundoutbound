@@ -737,6 +737,14 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
     except Exception:
         custom_map = {}
 
+    ## NUEVO CAMBIO ## - Importar helper de ubicación
+    try:
+        from database_logic import get_user_location_for_date
+    except Exception:
+        def get_user_location_for_date(b, d):
+            return (None, None)
+    ## FIN NUEVO CAMBIO ##
+
     # ---- 3) Abrir plan staff ----
     try:
         wb_src = openpyxl.load_workbook(plan_staff_file, data_only=True)
@@ -831,7 +839,6 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
 
     # ---- 6) Workbook de salida ----
     company_default = "PLGims"
-    site_code = "PBO"
 
     wb_out = openpyxl.Workbook()
     ws = wb_out.active
@@ -929,15 +936,18 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
             if st_prev != st_d:
                 cmt = per_day.get(d, (None, None))[1]
                 if start_date <= d <= end_date and d not in added_in_dates:
+                    ## NUEVO CAMBIO ##
+                    pu, _do = get_user_location_for_date(badge, d)
                     ws.cell(row=r_in, column=1, value=idx_in)
                     ws.cell(row=r_in, column=2, value=last)
                     ws.cell(row=r_in, column=3, value=first)
                     ws.cell(row=r_in, column=4, value=badge)
                     ws.cell(row=r_in, column=5, value=company_default)
                     ws.cell(row=r_in, column=6, value=role)
-                    ws.cell(row=r_in, column=7, value=site_code)
+                    ws.cell(row=r_in, column=7, value=pu or "")   # FROM = Pick Up Location
                     ws.cell(row=r_in, column=8, value=d.strftime("%Y-%m-%d"))
                     ws.cell(row=r_in, column=9, value=_times_for(st_d, "IN", cmt))
+                    ## FIN NUEVO CAMBIO ##
                     added_in_dates.add(d)
                     r_in += 1
                     idx_in += 1
@@ -948,15 +958,18 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
             if st_next != st_d:
                 cmt = per_day.get(d, (None, None))[1]
                 if start_date <= d <= end_date and d not in added_out_dates:
+                    ## NUEVO CAMBIO ##
+                    _pu, do = get_user_location_for_date(badge, d)
                     ws.cell(row=r_out, column=11, value=idx_out)
                     ws.cell(row=r_out, column=12, value=last)
                     ws.cell(row=r_out, column=13, value=first)
                     ws.cell(row=r_out, column=14, value=badge)
                     ws.cell(row=r_out, column=15, value=company_default)
                     ws.cell(row=r_out, column=16, value=role)
-                    ws.cell(row=r_out, column=17, value=site_code)
+                    ws.cell(row=r_out, column=17, value=do or "")  # TO = Drop off location
                     ws.cell(row=r_out, column=18, value=d.strftime("%Y-%m-%d"))
                     ws.cell(row=r_out, column=19, value=_times_for(st_d, "OUT", cmt))
+                    ## FIN NUEVO CAMBIO ##
                     added_out_dates.add(d)
                     r_out += 1
                     idx_out += 1
@@ -967,30 +980,36 @@ def generate_transport_report(plan_staff_file: str, start_date: date, end_date: 
         if next_entry_after_range:
             d, st, cmt = next_entry_after_range
             if d not in added_in_dates:
+                ## NUEVO CAMBIO ##
+                pu, _do = get_user_location_for_date(badge, d)
                 ws.cell(row=r_in, column=1, value=idx_in)
                 ws.cell(row=r_in, column=2, value=last)
                 ws.cell(row=r_in, column=3, value=first)
                 ws.cell(row=r_in, column=4, value=badge)
                 ws.cell(row=r_in, column=5, value=company_default)
                 ws.cell(row=r_in, column=6, value=role)
-                ws.cell(row=r_in, column=7, value=site_code)
+                ws.cell(row=r_in, column=7, value=pu or "")
                 ws.cell(row=r_in, column=8, value=d.strftime("%Y-%m-%d"))
                 ws.cell(row=r_in, column=9, value=_times_for(st, "IN", cmt))
+                ## FIN NUEVO CAMBIO ##
                 r_in += 1
                 idx_in += 1
 
         if next_exit_after_range:
             d, st, cmt = next_exit_after_range
             if d not in added_out_dates:
+                ## NUEVO CAMBIO ##
+                _pu, do = get_user_location_for_date(badge, d)
                 ws.cell(row=r_out, column=11, value=idx_out)
                 ws.cell(row=r_out, column=12, value=last)
                 ws.cell(row=r_out, column=13, value=first)
                 ws.cell(row=r_out, column=14, value=badge)
                 ws.cell(row=r_out, column=15, value=company_default)
                 ws.cell(row=r_out, column=16, value=role)
-                ws.cell(row=r_out, column=17, value=site_code)
+                ws.cell(row=r_out, column=17, value=do or "")
                 ws.cell(row=r_out, column=18, value=d.strftime("%Y-%m-%d"))
                 ws.cell(row=r_out, column=19, value=_times_for(st, "OUT", cmt))
+                ## FIN NUEVO CAMBIO ##
                 r_out += 1
                 idx_out += 1
 
@@ -1120,7 +1139,7 @@ def check_db_sync_with_excel(plan_staff_file: str, source: str) -> Dict:
         'missing_badges_in_db': [badge,...],     # En Excel pero NO en BD
         'extra_badges_in_db': [badge,...],       # En BD pero NO en Excel
         'schedule_mismatches': [
-            {'badge':..., 'date':'YYYY-MM-DD', 'excel': 'ON', 'db':'OFF'}, ...
+          {'badge':..., 'date':'YYYY-MM-DD', 'excel': 'ON', 'db':'OFF'}, ...
         ]
       }
     """

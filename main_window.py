@@ -1,9 +1,13 @@
 # main_window.py
-# Implements REQ-001 (OFF→ON inline confirmation & warning highlight),
-# REQ-002 (auto-center today in Schedule Preview),
-# REQ-003 (date headers with weekday), and the requested fixes:
-#  - Excel status shows the signed-in site (RGM/Newmont)
-#  - Weekday abbreviations: Mon., Tues., Wed., Thurs., Fri., Sat., Sun.
+# Implements:
+#  - REQ-001 (OFF→ON inline confirmation & warning highlight)
+#  - REQ-002 (auto-center today in Schedule Preview)
+#  - REQ-003 (date headers with weekday)
+#  - Locations module (CRUD) and dropdowns for Pick Up / Drop Off in the register form
+#  - Restores the blue “Save Changes to DB Excel” button (centered action bar)
+#  - Hides the “User Pick Up / Drop Off (inline, saves immediately)” panel
+#  - Minor UX refinements (responsive form layout, headers alignment)
+#
 # UI content is in English end-to-end.
 
 from PyQt6.QtWidgets import (
@@ -123,7 +127,7 @@ class PlanStaffWidget(QWidget):
 
     def __init__(self, source: str, excel_file: str, logged_username: str):
         super().__init__()
-        self.source = source          # "RGM" | "Newmont"
+        self.source = source      # "RGM" | "Newmont"
         self.excel_file = excel_file
         self.logged_username = logged_username or "Unknown"
         self._last_excel_mtime = None
@@ -131,9 +135,9 @@ class PlanStaffWidget(QWidget):
 
         # For REQ-001 tracking
         self._loading_preview = False
-        self._cell_original_values = {}   # (row, col) -> original text
-        self._row_identities = []         # index -> {"name":..., "badge":...}
-        self._date_col_dates = []         # schedule_table column index -> pydate
+        self._cell_original_values = {}  # (row, col) -> original text
+        self._row_identities = []        # index -> {"name":..., "badge":...}
+        self._date_col_dates = []        # schedule_table column index -> pydate
         self._warn_highlight_keys = set() # {"<badge>|YYYY-MM-DD", ...}
 
         # ---------- root layout ----------
@@ -221,7 +225,7 @@ class PlanStaffWidget(QWidget):
 
         # --- Register Employee Schedule (compact, multi-column, collapsible) ---
         self.registration_section = CollapsibleGroupBox(
-            "1. Register Employee Schedule (DB is SSoT)", collapsed=True
+            "1. Register Employee Schedule (DB is SSoT)", collapsed=False
         )
         register_layout = self._build_registration_form()
         self.registration_section.setContentLayout(register_layout)
@@ -254,7 +258,7 @@ class PlanStaffWidget(QWidget):
         report_layout.addWidget(export_button)
 
         report_group = create_group_box(
-            f"2. Transportation Report  Export (from {os.path.basename(self.excel_file)})",
+            f"2. Transportation Report & Export (from {os.path.basename(self.excel_file)})",
             report_layout
         )
         root.addWidget(report_group, 1)
@@ -276,9 +280,10 @@ class PlanStaffWidget(QWidget):
     # ---------- registration form (compact) ----------
     def _build_registration_form(self) -> QGridLayout:
         """
-        Compact two-row multi-column grid:
-            Row 1: Select Employee | Role / Department | Badge (ID)
-            Row 2: Status / Shift | Period Start Date | Period End Date
+        Compact multi-column grid:
+          Row 1: Select Employee | Role / Department | Badge (ID) | Status / Shift
+          Row 2: Period Start Date | Pick Up Location | Period End Date | Drop Off Location
+          Centered action bar: [ Save Changes to DB Excel ]
         """
         # Controls
         self.user_selector_combo = QComboBox()
@@ -300,7 +305,12 @@ class PlanStaffWidget(QWidget):
         self.end_date_edit.setCalendarPopup(True)
         self.end_date_edit.setDisplayFormat("dd/MM/yyyy")
 
-        self.save_button = QPushButton("✅ Save Changes to DB  Excel")
+        # NEW: location dropdowns
+        self.pickup_combo = QComboBox()
+        self.dropoff_combo = QComboBox()
+
+        # Restored blue Save button (center action bar)
+        self.save_button = QPushButton("Save Changes to DB Excel")
         self.save_button.clicked.connect(self.save_plan_changes)
         self.save_button.setProperty("variant", "primary")
 
@@ -320,8 +330,14 @@ class PlanStaffWidget(QWidget):
             field("Role / Department", self.role_display),
             field("Badge (ID)", self.badge_display),
             field("Status / Shift", self.status_selector),
+
+            # Next to Period Start Date -> Pick Up
             field("Period Start Date", self.start_date_edit),
+            field("Pick Up Location", self.pickup_combo),
+
+            # Next to Period End Date -> Drop Off
             field("Period End Date", self.end_date_edit),
+            field("Drop Off Location", self.dropoff_combo),
         ]
 
         # Base grid (we will re-pack it responsively in _rebuild_registration_grid)
@@ -342,28 +358,33 @@ class PlanStaffWidget(QWidget):
         return self._register_grid
 
     def _rebuild_registration_grid(self, columns: int):
-        """
-        Responsive repack of the register grid:
-        - 3 columns for width >= 1280
-        - 2 columns for width between ~930 and 1279
-        - 1 column for smaller widths
-        """
         if columns < 1:
             columns = 1
+        if len(self._fields) % columns != 0 and columns > 1:
+            columns = 2 if columns == 3 else columns
         if self._register_grid is None:
             return
-        if self._current_form_cols == columns:
-            pass
+        if self._current_form_cols == columns and self._register_grid.count() > 0:
+            return
         self._current_form_cols = columns
 
-        # Clear grid
-        while self._register_grid.count():
-            item = self._register_grid.takeAt(0)
+        # --------- CLEAR GRID (PRESERVANDO EL SAVE BAR) ---------
+        for i in reversed(range(self._register_grid.count())):
+            item = self._register_grid.itemAt(i)
+            # Si es el save bar, solo lo quitamos del grid; NO vaciamos sus hijos
+            if item.layout() is self._save_bar:
+                self._register_grid.removeItem(self._save_bar)
+                continue
             w = item.widget()
             if w:
                 self._register_grid.removeWidget(w)
+                w.setParent(None)
+            elif item.layout():
+                lay = item.layout()
+                self._register_grid.removeItem(lay)
+                lay.setParent(None)
 
-        # Re-add fields in row-major order
+        # --------- RE-ADD CAMPOS ---------
         rows = (len(self._fields) + columns - 1) // columns
         idx = 0
         for r in range(rows):
@@ -374,14 +395,22 @@ class PlanStaffWidget(QWidget):
                 self._register_grid.setColumnStretch(c, 1)
                 idx += 1
 
-        # Save bar (span all columns)
+        # --------- RE-ADD SAVE BAR (asegurando que contiene el botón) ---------
+        if self._save_bar.indexOf(self.save_button) == -1:
+            # reconstruye el contenido por si se quedó huérfano en un resize previo
+            while self._save_bar.count():
+                self._save_bar.takeAt(0)
+            self._save_bar.addStretch()
+            self._save_bar.addWidget(self.save_button)
+            self._save_bar.addStretch()
+
         self._register_grid.addLayout(self._save_bar, rows, 0, 1, columns)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         # Simple responsive thresholds
         w = max(0, self.width())
-        cols = 3 if w >= 1280 else (2 if w >= 930 else 1)
+        cols = 4 if w >= 1280 else (2 if w >= 930 else 1)
         if cols != self._current_form_cols:
             self._rebuild_registration_grid(cols)
 
@@ -417,6 +446,22 @@ class PlanStaffWidget(QWidget):
                 )
         self.status_selector.setCurrentIndex(0)
         self.status_selector.blockSignals(False)
+
+    # NEW: load available locations into dropdowns
+    def load_location_options(self):
+        self.pickup_combo.blockSignals(True)
+        self.dropoff_combo.blockSignals(True)
+        self.pickup_combo.clear()
+        self.dropoff_combo.clear()
+        self.pickup_combo.addItem("— Select location —", None)
+        self.dropoff_combo.addItem("— Select location —", None)
+        for loc in db.get_locations():
+            self.pickup_combo.addItem(loc["pickup_location"], loc["pickup_location"])
+            self.dropoff_combo.addItem(loc["pickup_location"], loc["pickup_location"])
+        self.pickup_combo.setCurrentIndex(0)
+        self.dropoff_combo.setCurrentIndex(0)
+        self.pickup_combo.blockSignals(False)
+        self.dropoff_combo.blockSignals(False)
 
     def load_schedule_data(self):
         df = excel.get_schedule_preview(self.excel_file)
@@ -671,6 +716,10 @@ class PlanStaffWidget(QWidget):
         start_date = self.start_date_edit.date().toPyDate()
         end_date = self.end_date_edit.date().toPyDate()
 
+        # NEW: read locations (optional)
+        pickup = self.pickup_combo.currentData() or None
+        dropoff = self.dropoff_combo.currentData() or None
+
         if not username or username == "-- Select a user --":
             mark_error(self.user_selector_combo, True)
             box = QMessageBox(self)
@@ -710,14 +759,14 @@ class PlanStaffWidget(QWidget):
             in_time = None
             out_time = None
         elif sel.get("kind") == "base":
-            schedule_status = sel["status"]          # OFF / ON / ON NS
-            shift_type = sel["shift_type"]           # Day Shift / Night Shift / None
+            schedule_status = sel["status"]      # OFF / ON / ON NS
+            shift_type = sel["shift_type"]        # Day Shift / Night Shift / None
             in_time = sel.get("in_time")
             out_time = sel.get("out_time")
         else:
             # custom type selected
-            schedule_status = "ON"                   # ON with custom type code, e.g. 'SOP'
-            shift_type = sel["name"]                 # display name
+            schedule_status = "ON"                # ON with custom type code, e.g. 'SOP'
+            shift_type = sel["name"]              # display name
             in_time = sel.get("in_time")
             out_time = sel.get("out_time")
 
@@ -755,6 +804,12 @@ class PlanStaffWidget(QWidget):
             # clear schedule in DB when "Do Not Mark Days" is chosen
             db.clear_schedule_range(badge, start_date, end_date, self.source)
 
+        # NEW: persist location assignment for the selected range (if provided)
+        if pickup or dropoff:
+            db.assign_user_location_range(badge, start_date, end_date, pickup, dropoff)
+            db.log_event(self.logged_username, self.source, "LOCATION_ASSIGN",
+                          f"{username} ({badge}) {start_date}..{end_date} PU={pickup} DO={dropoff}")
+
         # --- Excel (derived artifact; created if missing) ---
         success, message = excel.update_plan_staff_excel(
             self.excel_file, username, role, badge,
@@ -768,7 +823,7 @@ class PlanStaffWidget(QWidget):
             self.logged_username,
             self.source,
             "SHIFT_MODIFICATION",
-            f"{username} ({badge}) {start_date}.{end_date} prev={prev_map} new={new_map}; Excel={'OK' if success else 'ERR'}"
+            f"{username} ({badge}) {start_date}..{end_date} prev={prev_map} new={new_map}; Excel={'OK' if success else 'ERR'}"
         )
 
         # --- Message
@@ -850,6 +905,7 @@ class PlanStaffWidget(QWidget):
         self.load_shift_type_options()
         self.load_schedule_data()
         self.load_users_to_selector()
+        self.load_location_options()  # keep combos in sync with Location admin
 
     # ---------- Excel Health / Monitoring ----------
     def check_excel_health(self):
@@ -953,7 +1009,7 @@ class PlanStaffWidget(QWidget):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Information)
         box.setWindowTitle("Excel vs DB Comparison")
-        box.setText(preview if len(preview) < 1500 else (preview[:1500] + "\n."))
+        box.setText(preview if len(preview) < 1500 else (preview[:1500] + "\n..."))
         box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
         box.exec()
 
@@ -1162,7 +1218,7 @@ class CrudWidget(QWidget):
 
             # Audit log (FR-04)
             db.log_event(self.logged_username, self.source, "DATA_IMPORT",
-                         f"users_inserted={inserted}; users_skipped={skipped}; schedule_upserts={upserts}")
+                          f"users_inserted={inserted}; users_skipped={skipped}; schedule_upserts={upserts}")
 
             # Message
             box = QMessageBox(self)
@@ -1184,7 +1240,7 @@ class CrudWidget(QWidget):
         except ValueError as ve:
             # Structure error -> DO NOT save anything
             db.log_event(self.logged_username, self.source, "DATA_IMPORT",
-                         f"ERROR: {str(ve).replace(chr(10),' | ')}")
+                          f"ERROR: {str(ve).replace(chr(10),' | ')}")
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Critical)
             box.setWindowTitle("Invalid Excel")
@@ -1414,6 +1470,137 @@ class ShiftTypeAdminWidget(QWidget):
 
 
 # -------------------------------------------------------------
+# NEW Widget: Location Admin
+# -------------------------------------------------------------
+class LocationAdminWidget(QWidget):
+    locations_changed = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        layout = QHBoxLayout(self)
+
+        # --- Edit Form ---
+        form = QGridLayout()
+        self.loc_id = None
+        self.loc_input = QLineEdit()
+        btn_new = QPushButton("✨ New")
+        btn_save = QPushButton("💾 Save")
+        btn_del = QPushButton("❌ Delete")
+        btn_save.setProperty("variant", "primary")
+        btn_del.setProperty("danger", True)
+
+        form.addWidget(QLabel("Location name:"), 0, 0)
+        form.addWidget(self.loc_input, 0, 1)
+        h = QHBoxLayout()
+        h.addWidget(btn_new)
+        h.addWidget(btn_save)
+        h.addWidget(btn_del)
+        form.addLayout(h, 1, 0, 1, 2)
+        form_group = create_group_box("Location", form)
+        form_group.setFixedWidth(360)
+
+        # --- Table ---
+        self.loc_table = QTableWidget()
+        self.loc_table.setAlternatingRowColors(True)
+        table_box = QVBoxLayout()
+        table_box.addWidget(self.loc_table)
+        table_group = create_group_box("Locations", table_box)
+
+        layout.addWidget(form_group)
+        layout.addWidget(table_group)
+
+        # --- Signals ---
+        btn_new.clicked.connect(self._new_loc)
+        btn_save.clicked.connect(self._save_loc)
+        btn_del.clicked.connect(self._delete_loc)
+        self.loc_table.itemClicked.connect(self._load_to_form)
+
+        self._reload_table()
+
+    def _reload_table(self):
+        rows = db.get_locations()
+        self.loc_table.setRowCount(len(rows))
+        self.loc_table.setColumnCount(2)
+        self.loc_table.setHorizontalHeaderLabels(["ID", "Location"])
+        for r, row in enumerate(rows):
+            self.loc_table.setItem(r, 0, QTableWidgetItem(str(row["id"])))
+            self.loc_table.setItem(r, 1, QTableWidgetItem(row["pickup_location"]))
+        self.loc_table.setColumnHidden(0, True)
+        self.loc_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+
+    def _new_loc(self):
+        self.loc_id = None
+        self.loc_input.clear()
+        self.loc_table.clearSelection()
+
+    def _save_loc(self):
+        name = self.loc_input.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Input Error", "Location name cannot be empty.")
+            return
+
+        if self.loc_id:
+            ok, msg = db.update_location(self.loc_id, name)
+        else:
+            ok, msg = db.create_location(name)
+        QMessageBox.information(self, "Location", msg)
+        self._reload_table()
+        self.locations_changed.emit()
+        self._new_loc()
+
+    def _delete_loc(self):
+        if not self.loc_id:
+            QMessageBox.warning(self, "Location", "Please select a row.")
+            return
+        ok, msg = db.delete_location(self.loc_id)
+        QMessageBox.information(self, "Location", msg)
+        self._reload_table()
+        self.locations_changed.emit()
+        self._new_loc()
+
+    def _load_to_form(self, item):
+        row = item.row()
+        self.loc_id = int(self.loc_table.item(row, 0).text())
+        self.loc_input.setText(self.loc_table.item(row, 1).text())
+
+
+# -------------------------------------------------------------
+# Widget: Audit Log (visible for Admin; reusable otherwise)
+# -------------------------------------------------------------
+class AuditLogWidget(QWidget):
+    def __init__(self, source: str | None):
+        super().__init__()
+        self.source = source
+        layout = QVBoxLayout(self)
+        self.audit_table = QTableWidget()
+        layout.addWidget(self.audit_table)
+
+        refresh_btn = QPushButton("🔄 Refresh")
+        refresh_btn.setProperty("variant", "secondary")
+        refresh_btn.clicked.connect(self.load_audit_log_data)
+        layout.addWidget(refresh_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+        self.load_audit_log_data()
+
+    def load_audit_log_data(self):
+        events = db.get_audit_log(source=self.source)
+        headers = ["Timestamp", "User", "Source", "Action", "Detail"]
+        self.audit_table.setRowCount(len(events))
+        self.audit_table.setColumnCount(len(headers))
+        self.audit_table.setHorizontalHeaderLabels(headers)
+
+        for r, ev in enumerate(events):
+            self.audit_table.setItem(r, 0, QTableWidgetItem(ev.get('ts', '')))
+            self.audit_table.setItem(r, 1, QTableWidgetItem(ev.get('username', '')))
+            self.audit_table.setItem(r, 2, QTableWidgetItem(ev.get('source', '')))
+            self.audit_table.setItem(r, 3, QTableWidgetItem(ev.get('action_type', '')))
+            self.audit_table.setItem(r, 4, QTableWidgetItem(ev.get('detail', '')))
+
+        self.audit_table.setAlternatingRowColors(True)
+        self.audit_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+
+
+# -------------------------------------------------------------
 # Main window (normal profile: RGM or Newmont)
 # -------------------------------------------------------------
 class MainWindow(QMainWindow):
@@ -1485,6 +1672,12 @@ class MainWindow(QMainWindow):
             tabs.addTab(self.shift_types_widget, f"⚙️ {self.user_role} Shift Types")
             # Refresh combos/preview when shift types change
             self.shift_types_widget.types_changed.connect(lambda src: self.plan_widget.refresh_ui_data())
+
+        # 5) Locations admin
+        self.location_widget = LocationAdminWidget()
+        tabs.addTab(self.location_widget, "📍 Location")
+        # Refresh Pick Up / Drop Off dropdowns when locations change
+        self.location_widget.locations_changed.connect(self.plan_widget.load_location_options)
 
         # Hot sync
         self.crud_widget.users_changed.connect(self._sync_after_users_changed)
@@ -1588,6 +1781,13 @@ class AdminMainWindow(QMainWindow):
         self.nm_types = ShiftTypeAdminWidget("Newmont", newmont_excel, self.logged_username)
         self.tabs.addTab(self.nm_types, "⚙️ Newmont Shift Types")
 
+        # 8) Locations (global admin)
+        self.location_admin = LocationAdminWidget()
+        self.tabs.addTab(self.location_admin, "📍 Locations")
+        # refresh dropdowns on both plan tabs when the master list changes
+        self.location_admin.locations_changed.connect(lambda: self.rgm_plan.load_location_options())
+        self.location_admin.locations_changed.connect(lambda: self.nm_plan.load_location_options())
+
         # Hot sync
         self.rgm_crud.users_changed.connect(lambda src: self.rgm_plan.refresh_users_only())
         self.rgm_crud.import_done.connect(lambda src: self.rgm_plan.refresh_users_only())
@@ -1601,39 +1801,3 @@ class AdminMainWindow(QMainWindow):
     def handle_logout(self):
         self.logout_signal.emit()
         self.close()
-
-
-# -------------------------------------------------------------
-# Widget: Audit Log (visible for Admin; reusable otherwise)
-# -------------------------------------------------------------
-class AuditLogWidget(QWidget):
-    def __init__(self, source: str | None):
-        super().__init__()
-        self.source = source
-        layout = QVBoxLayout(self)
-        self.audit_table = QTableWidget()
-        layout.addWidget(self.audit_table)
-
-        refresh_btn = QPushButton("🔄 Refresh")
-        refresh_btn.setProperty("variant", "secondary")
-        refresh_btn.clicked.connect(self.load_audit_log_data)
-        layout.addWidget(refresh_btn, alignment=Qt.AlignmentFlag.AlignRight)
-
-        self.load_audit_log_data()
-
-    def load_audit_log_data(self):
-        events = db.get_audit_log(source=self.source)
-        headers = ["Timestamp", "User", "Source", "Action", "Detail"]
-        self.audit_table.setRowCount(len(events))
-        self.audit_table.setColumnCount(len(headers))
-        self.audit_table.setHorizontalHeaderLabels(headers)
-
-        for r, ev in enumerate(events):
-            self.audit_table.setItem(r, 0, QTableWidgetItem(ev.get('ts', '')))
-            self.audit_table.setItem(r, 1, QTableWidgetItem(ev.get('username', '')))
-            self.audit_table.setItem(r, 2, QTableWidgetItem(ev.get('source', '')))
-            self.audit_table.setItem(r, 3, QTableWidgetItem(ev.get('action_type', '')))
-            self.audit_table.setItem(r, 4, QTableWidgetItem(ev.get('detail', '')))
-
-        self.audit_table.setAlternatingRowColors(True)
-        self.audit_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
