@@ -196,14 +196,13 @@ QHeaderView::section {{
 }}
 
 /* Custom Header Styles for Schedule Preview */
-QHeaderView#fixedHeaders::section {{
-  background-color: #f2f2f2;
-  color: #000000;
-}}
-
-QHeaderView#dateHeaders::section {{
-  background-color: #cfe8fc;
-  color: #003366;
+QHeaderView#fixedHeaders::section, QHeaderView#dateHeaders::section {{
+  background-color: {p['primary_700']};
+  color: {p['primary_txt_on']};
+  border: none;
+  border-right: 1px solid {p['white']};
+  padding: 8px;
+  font-weight: 600;
 }}
 
 QTableWidget {{
