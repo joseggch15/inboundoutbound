@@ -13,6 +13,7 @@
 # --- MODIFIED: The hover-card (ShiftInfoCard) has been redesigned for compactness and better UX as per user requirements. ---
 # --- UPDATED: The ShiftInfoCard background is now opaque with a shadow for better visibility as per technical requirements. ---
 # --- NEW: Added filter panels to all relevant tabs as per specifications. ---
+# --- MODIFICATION: Added color chips to Shift Types table and Status/Shift dropdown for better color visibility. ---
 
 import json
 import os
@@ -53,8 +54,9 @@ from PyQt6.QtCore import (
     QSignalBlocker,
     QEvent,
     QRect,
+    QSize,
 )
-from PyQt6.QtGui import QColor, QFont, QCursor
+from PyQt6.QtGui import QColor, QFont, QCursor, QIcon, QPixmap, QPainter, QPen
 from datetime import datetime, date as pydate, timedelta
 
 # App logic (unchanged)
@@ -185,6 +187,43 @@ class ShiftInfoCard(QLabel):
 # -------------------------------------------------------------
 # Common helpers
 # -------------------------------------------------------------
+def _create_color_icon(hex_code: str, size: QSize = QSize(24, 12)) -> QIcon:
+    """Creates a QIcon with a solid color rectangle (chip) for color previews."""
+    if not hex_code or not hex_code.startswith("#"):
+        hex_code = "#D1D5DB"  # Default gray for invalid/empty codes
+
+    pixmap = QPixmap(size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pixmap)
+    try:
+        color = QColor(hex_code)
+        if not color.isValid():
+            color = QColor("#D1D5DB")  # Gray fallback for invalid hex
+    except Exception:
+        color = QColor("#D1D5DB")
+
+    painter.setBrush(color)
+
+    # Draw border if color is very light or for fallback gray
+    pen = QPen()
+    if color.lightness() > 230 or not color.isValid():
+        pen.setColor(QColor("#A9A9A9"))  # Darker gray for visibility on light backgrounds
+        pen.setWidth(1)
+    else:
+        # For darker colors, use a transparent pen (no border)
+        pen.setColor(Qt.GlobalColor.transparent)
+
+    painter.setPen(pen)
+
+    # Draw rounded rectangle slightly inset so border is fully visible
+    rect = pixmap.rect().adjusted(0, 0, -1, -1)
+    painter.drawRoundedRect(rect, 3.0, 3.0)
+    painter.end()
+
+    return QIcon(pixmap)
+
+
 def create_group_box(title: str, inner_layout) -> QGroupBox:
     box = QGroupBox(title)
     font = box.font()
@@ -788,10 +827,11 @@ class PlanStaffWidget(QWidget):
         self.status_selector.clear()
 
         # Blank option
-        self.status_selector.addItem("— Do Not Mark Days —", {"kind": "none"})
+        self.status_selector.addItem(QIcon(), "— Do Not Mark Days —", {"kind": "none"})
 
-        # Base
+        # Base statuses with color chips
         self.status_selector.addItem(
+            _create_color_icon("#FFC7CE"),  # OFF color
             "OFF",
             {
                 "kind": "base",
@@ -802,6 +842,7 @@ class PlanStaffWidget(QWidget):
             },
         )
         self.status_selector.addItem(
+            _create_color_icon("#C6EFCE"),  # ON color
             "ON (Day Shift)",
             {
                 "kind": "base",
@@ -812,6 +853,7 @@ class PlanStaffWidget(QWidget):
             },
         )
         self.status_selector.addItem(
+            _create_color_icon("#FFFF99"),  # ON NS color
             "ON NS (Night Shift)",
             {
                 "kind": "base",
@@ -827,11 +869,12 @@ class PlanStaffWidget(QWidget):
         self._custom_shift_map = {t["code"]: t for t in types}  # refresh map
         if types:
             self.status_selector.addItem(
-                "—— Custom Shift Types ——", {"kind": "separator"}
+                QIcon(), "—— Custom Shift Types ——", {"kind": "separator"}
             )
             for t in types:
                 label = f"{t['name']} [{t['code']}]  {t['in_time']}-{t['out_time']}"
                 self.status_selector.addItem(
+                    _create_color_icon(t["color_hex"]),  # Custom color
                     label,
                     {
                         "kind": "custom",
@@ -2193,8 +2236,9 @@ class ShiftTypeAdminWidget(QWidget):
         self.code_input.setText(code)
         color_hex = self.types_table.item(row, 3).text()
         self.color_display.setText(color_hex)
-        in_time = self.types_table.item(row, 4).text()
-        out_time = self.types_table.item(row, 5).text()
+        # Columns are now shifted due to "Color Preview"
+        in_time = self.types_table.item(row, 5).text()
+        out_time = self.types_table.item(row, 6).text()
         self.in_time_edit.setTime(QTime.fromString(in_time, "HH:mm"))
         self.out_time_edit.setTime(QTime.fromString(out_time, "HH:mm"))
         self.current_old_code = code
@@ -2330,7 +2374,7 @@ class ShiftTypeAdminWidget(QWidget):
             in_to=self._filter_state['in_to'],
             usage=self._filter_state['usage']
         )
-        headers = ["ID", "Name", "Code", "Color", "IN", "OUT"]
+        headers = ["ID", "Name", "Code", "Color", "Color Preview", "IN", "OUT"]
         self.types_table.setRowCount(len(types))
         self.types_table.setColumnCount(len(headers))
         self.types_table.setHorizontalHeaderLabels(headers)
@@ -2339,12 +2383,23 @@ class ShiftTypeAdminWidget(QWidget):
             self.types_table.setItem(r, 1, QTableWidgetItem(t["name"]))
             self.types_table.setItem(r, 2, QTableWidgetItem(t["code"]))
             self.types_table.setItem(r, 3, QTableWidgetItem(t["color_hex"]))
-            self.types_table.setItem(r, 4, QTableWidgetItem(t["in_time"]))
-            self.types_table.setItem(r, 5, QTableWidgetItem(t["out_time"]))
+            
+            # Add color preview item
+            preview_item = QTableWidgetItem()
+            preview_item.setIcon(_create_color_icon(t["color_hex"]))
+            self.types_table.setItem(r, 4, preview_item)
+
+            self.types_table.setItem(r, 5, QTableWidgetItem(t["in_time"]))
+            self.types_table.setItem(r, 6, QTableWidgetItem(t["out_time"]))
+
         self.types_table.setColumnHidden(0, True)
         self.types_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
         )
+        # Adjust preview column width
+        preview_col_index = headers.index("Color Preview")
+        self.types_table.horizontalHeader().setSectionResizeMode(preview_col_index, QHeaderView.ResizeMode.ResizeToContents)
+        self.types_table.setColumnWidth(preview_col_index, 40)
 
 
 # -------------------------------------------------------------
@@ -2860,4 +2915,3 @@ class AdminMainWindow(QMainWindow):
     def handle_logout(self):
         self.logout_signal.emit()
         self.close()
-
