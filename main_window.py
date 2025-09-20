@@ -9,6 +9,7 @@
 #  - Minor UX refinements (responsive form layout, headers alignment)
 #
 # UI content is in English end-to-end.
+# --- INJECTED FEATURE: Hover-card with IN/OUT times and Pick Up/Drop Off locations. ---
 
 import json
 from PyQt6.QtWidgets import (
@@ -18,8 +19,8 @@ from PyQt6.QtWidgets import (
     QTabWidget, QApplication, QColorDialog, QTimeEdit, QSizePolicy, QToolButton,
     QAbstractItemView, QFontComboBox
 )
-from PyQt6.QtCore import QDate, Qt, pyqtSignal, QTime, QTimer, QSignalBlocker
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtCore import QDate, Qt, pyqtSignal, QTime, QTimer, QSignalBlocker, QEvent
+from PyQt6.QtGui import QColor, QFont, QCursor
 from datetime import datetime, date as pydate
 import os
 
@@ -40,6 +41,35 @@ RGM_REPORT_HEADERS = [
     "IN BOUND DATE", "Method Of Transport", "Location", "DEPT TIME",
     "ROSEBEL SITE OUT BOUND DATE"
 ]
+
+# -------------------------------------------------------------
+# NEW: Hover card widget
+# -------------------------------------------------------------
+class ShiftInfoCard(QLabel):
+    """A custom widget to display shift details in a styled card."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setStyleSheet("""
+            QLabel {
+                background-color: #F9FAFB;
+                color: #374151;
+                border: 1px solid #E5E7EB;
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 13px;
+            }
+        """)
+        self.adjustSize()
+
+    def show_info(self, pos: QCursor, text: str):
+        self.setText(text)
+        self.adjustSize()
+        # Position the card slightly offset from the cursor
+        self.move(pos.pos().x() + 15, pos.pos().y() + 15)
+        self.show()
 
 
 # -------------------------------------------------------------
@@ -133,9 +163,6 @@ class CollapsibleGroupBox(QWidget):
         return self._content
 
 
-# -------------------------------------------------------------
-# NEW Widget: Report Layout Settings
-# -------------------------------------------------------------
 # -------------------------------------------------------------
 # NEW Widget: Report Layout Settings
 # -------------------------------------------------------------
@@ -305,6 +332,7 @@ class PlanStaffWidget(QWidget):
         self.logged_username = logged_username or "Unknown"
         self._last_excel_mtime = None
         self._missing_prompt_shown = False
+        self._custom_shift_map = db.get_shift_type_map(self.source)
 
         # For REQ-001 tracking
         self._loading_preview = False
@@ -441,6 +469,12 @@ class PlanStaffWidget(QWidget):
         )
         root.addWidget(report_group, 1)
 
+        # --- Hover card setup ---
+        self._shift_info_card = ShiftInfoCard(self)
+        self.schedule_table.setMouseTracking(True)
+        self.schedule_table.cellEntered.connect(self._show_shift_tooltip)
+        self.schedule_table.viewport().installEventFilter(self)
+
         # Initial data load
         self.refresh_ui_data()
 
@@ -454,6 +488,12 @@ class PlanStaffWidget(QWidget):
         # Track current responsive columns for the register grid
         self._current_form_cols = 3
         self._rebuild_registration_grid(self._current_form_cols)
+
+    def eventFilter(self, source, event):
+        # Hide the card when the mouse leaves the table area
+        if source is self.schedule_table.viewport() and event.type() == QEvent.Type.Leave:
+            self._shift_info_card.hide()
+        return super().eventFilter(source, event)
 
     # ---------- registration form (compact) ----------
     def _build_registration_form(self) -> QWidget:
@@ -584,6 +624,7 @@ class PlanStaffWidget(QWidget):
 
         # Custom types
         types = db.get_shift_types(self.source)
+        self._custom_shift_map = {t['code']: t for t in types} # refresh map
         if types:
             self.status_selector.addItem("—— Custom Shift Types ——", {"kind": "separator"})
             for t in types:
@@ -829,6 +870,83 @@ class PlanStaffWidget(QWidget):
                 # remove warn if reverted to OFF/blank/other
                 if key in self._warn_highlight_keys:
                     self._warn_highlight_keys.discard(key)
+
+    # ---------- NEW: hover card logic ----------
+    def _show_shift_tooltip(self, row: int, col: int):
+        # Ensure row/col are valid
+        if not (0 <= row < len(self._row_identities) and 0 <= col < len(self._date_col_dates)):
+            self._shift_info_card.hide()
+            return
+        
+        item = self.schedule_table.item(row, col)
+        if not item or not item.text().strip():
+            self._shift_info_card.hide()
+            return
+
+        # --- Get identifiers from internal state ---
+        identity = self._row_identities[row]
+        badge = identity.get("badge")
+        name = identity.get("name")
+        hover_date = self._date_col_dates[col]
+
+        if not badge or not hover_date:
+            self._shift_info_card.hide()
+            return
+
+        # --- Fetch live data from DB (SSoT) ---
+        schedule_data = db.get_schedule_map_for_range(badge, hover_date, hover_date, self.source)
+        day_info = schedule_data.get(hover_date.isoformat())
+        
+        pickup, dropoff = db.get_user_location_for_date(badge, hover_date)
+
+        if not day_info:
+            self._shift_info_card.hide()
+            return
+
+        # --- Format data for the card ---
+        status = (day_info.get("status") or "N/A").upper()
+        shift_name = status
+        
+        in_time = day_info.get("in_time")
+        out_time = day_info.get("out_time")
+
+        if status == "ON":
+            shift_name = "Day Shift"
+            in_time = in_time or "06:00"
+            out_time = out_time or "18:00"
+        elif status == "ON NS":
+            shift_name = "Night Shift"
+            in_time = in_time or "18:00"
+            out_time = out_time or "06:00"
+        elif status in self._custom_shift_map:
+            # It's a custom shift type
+            custom_info = self._custom_shift_map[status]
+            shift_name = custom_info.get("name", status)
+            # IN/OUT times are already correct from day_info
+        
+        # Build compact, user-friendly HTML content
+        html = (
+            f"<div style='min-width: 250px;'>"
+            f"<p style='margin: 0; font-size: 14px; color: #111827; font-weight: 600;'>{name}</p>"
+            f"<p style='margin: 0 0 8px 0; color: #6B7280;'>{shift_name}</p>"
+            
+            f"<div style='border-top: 1px solid #E5E7EB; padding-top: 8px; margin-top: 4px;'>"
+            f"<table style='width: 100%;'>"
+            f"<tr>"
+            f"<td style='color: #6B7280;'>IN:</td><td style='color: #111827; font-weight: 600;'>{in_time or 'N/A'}</td>"
+            f"<td style='color: #6B7280;'>OUT:</td><td style='color: #111827; font-weight: 600;'>{out_time or 'N/A'}</td>"
+            f"</tr></table></div>"
+
+            f"<div style='border-top: 1px solid #E5E7EB; padding-top: 8px; margin-top: 8px;'>"
+            f"<p style='margin: 0; color: #6B7280;'>Pick Up:</p>"
+            f"<p style='margin: 0 0 5px 0; color: #111827; font-weight: 600;'>{pickup or 'Not assigned'}</p>"
+            f"<p style='margin: 0; color: #6B7280;'>Drop Off:</p>"
+            f"<p style='margin: 0; color: #111827; font-weight: 600;'>{dropoff or 'Not assigned'}</p>"
+            f"</div>"
+            f"</div>"
+        )
+        
+        self._shift_info_card.show_info(QCursor(), html)
 
     def load_users_to_selector(self):
         self.user_selector_combo.blockSignals(True)
