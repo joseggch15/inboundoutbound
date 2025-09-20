@@ -194,6 +194,18 @@ QHeaderView::section {{
   border: 1px solid {p['neutral_200']};
   font-weight: 600;
 }}
+
+/* Custom Header Styles for Schedule Preview */
+QHeaderView#fixedHeaders::section {{
+  background-color: #f2f2f2;
+  color: #000000;
+}}
+
+QHeaderView#dateHeaders::section {{
+  background-color: #cfe8fc;
+  color: #003366;
+}}
+
 QTableWidget {{
   gridline-color: {p['neutral_200']};
   selection-background-color: {p['primary_50']};
