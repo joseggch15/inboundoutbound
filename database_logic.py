@@ -206,6 +206,8 @@ def setup_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_shift_types_source ON shift_types(source)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_shift_types_code ON shift_types(code)")
+    # TR-ST-01: Index for shift type usage status filter
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_schedules_source_status ON schedules(source, status)")
 
     conn.commit()
     conn.close()
@@ -394,6 +396,38 @@ def get_all_users(source: str) -> list:
     conn.close()
     return users
 
+def get_users_filtered(source: str, text: Optional[str], role: Optional[str], badge_prefix: Optional[str], active_since: Optional[date] = None) -> list:
+    """Get filtered list of users for a source."""
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    query = "SELECT id, name, role, badge FROM users WHERE source = ?"
+    params: List = [source]
+
+    if text:
+        query += " AND (name LIKE ? OR badge LIKE ?)"
+        params.extend([f"%{text}%", f"%{text}%"])
+    
+    if role:
+        query += " AND role = ?"
+        params.append(role)
+        
+    if badge_prefix:
+        query += " AND badge LIKE ?"
+        params.append(f"{badge_prefix}%")
+        
+    if active_since:
+        query += " AND EXISTS (SELECT 1 FROM schedules s WHERE s.badge = users.badge AND s.source = users.source AND s.date >= ?)"
+        params.append(active_since.isoformat())
+
+    query += " ORDER BY name"
+    
+    cursor.execute(query, tuple(params))
+    users = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return users
+
 
 def update_user(
     user_id: int, name: str, role: str, badge: str, source: str
@@ -455,6 +489,41 @@ def get_locations(source: Optional[str] = None) -> List[Dict]:
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
+
+def get_locations_filtered(source: Optional[str], text: Optional[str], sort_by: str = 'name', unassigned_only: bool = False) -> List[Dict]:
+    """Get filtered and sorted locations."""
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    query = "SELECT id, source, pickup_location FROM location l"
+    conditions = []
+    params: List = []
+
+    if source:
+        conditions.append("source = ?")
+        params.append(source)
+    
+    if text:
+        conditions.append("pickup_location LIKE ?")
+        params.append(f"%{text}%")
+    
+    if unassigned_only:
+        conditions.append("NOT EXISTS (SELECT 1 FROM user_locations ul WHERE ul.pickup_location = l.pickup_location AND ul.is_default = 1)")
+    
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+
+    if sort_by == 'source':
+        query += " ORDER BY source, pickup_location"
+    else: # name
+        query += " ORDER BY pickup_location, source"
+
+    cursor.execute(query, tuple(params))
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
 
 def create_location(pickup_location: str, source: str) -> Tuple[bool, str]:
     pickup_location = (pickup_location or "").strip()
@@ -749,6 +818,42 @@ def get_all_operations() -> List[Dict]:
     conn.close()
     return res
 
+def get_operations_filtered(text: Optional[str], role: Optional[str], d_from: Optional[date], d_to: Optional[date], sort_by: str = 'start_date_desc') -> List[Dict]:
+    """ Get filtered list of operations history. """
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    query = "SELECT id, username, role, badge, start_date, end_date FROM operations"
+    conditions = []
+    params: List = []
+
+    if text:
+        conditions.append("(username LIKE ? OR badge LIKE ? OR role LIKE ?)")
+        params.extend([f"%{text}%", f"%{text}%", f"%{text}%"])
+
+    if role:
+        conditions.append("role = ?")
+        params.append(role)
+    
+    if d_from and d_to:
+        # Overlap logic: (StartA <= EndB) and (EndA >= StartB)
+        conditions.append("(start_date <= ? AND end_date >= ?)")
+        params.extend([d_to.isoformat(), d_from.isoformat()])
+
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+
+    if sort_by == 'name_asc':
+        query += " ORDER BY username ASC"
+    else: # start_date_desc
+        query += " ORDER BY start_date DESC"
+
+    cursor.execute(query, tuple(params))
+    res = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return res
+
 
 # ---------------------------------------------------------------------
 # Shift Types (CRUD + helpers)
@@ -763,6 +868,35 @@ def get_shift_types(source: str) -> List[Dict]:
         (source,),
     )
     rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+def get_shift_types_filtered(source: str, text: Optional[str], in_from: Optional[str], in_to: Optional[str], usage: Optional[str]) -> List[Dict]:
+    """Get filtered shift types for a source."""
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    query = "SELECT id, source, name, code, color_hex, in_time, out_time FROM shift_types st WHERE source = ?"
+    params: List = [source]
+
+    if text:
+        query += " AND (name LIKE ? OR code LIKE ?)"
+        params.extend([f"%{text}%", f"%{text}%"])
+    
+    if in_from and in_to:
+        query += " AND in_time BETWEEN ? AND ?"
+        params.extend([in_from, in_to])
+        
+    if usage == "In use":
+        query += " AND EXISTS (SELECT 1 FROM schedules s WHERE s.source = st.source AND s.status = st.code)"
+    elif usage == "Not in use":
+        query += " AND NOT EXISTS (SELECT 1 FROM schedules s WHERE s.source = st.source AND s.status = st.code)"
+
+    query += " ORDER BY name"
+    
+    cursor.execute(query, tuple(params))
+    rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return rows
 

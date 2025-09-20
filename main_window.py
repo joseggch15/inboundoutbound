@@ -12,8 +12,10 @@
 # --- INJECTED FEATURE: Hover-card with IN/OUT times and Pick Up/Drop Off locations. ---
 # --- MODIFIED: The hover-card (ShiftInfoCard) has been redesigned for compactness and better UX as per user requirements. ---
 # --- UPDATED: The ShiftInfoCard background is now opaque with a shadow for better visibility as per technical requirements. ---
+# --- NEW: Added filter panels to all relevant tabs as per specifications. ---
 
 import json
+import os
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -40,6 +42,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFontComboBox,
     QGraphicsDropShadowEffect,
+    QCheckBox,
 )
 from PyQt6.QtCore import (
     QDate,
@@ -52,8 +55,7 @@ from PyQt6.QtCore import (
     QRect,
 )
 from PyQt6.QtGui import QColor, QFont, QCursor
-from datetime import datetime, date as pydate
-import os
+from datetime import datetime, date as pydate, timedelta
 
 # App logic (unchanged)
 import database_logic as db
@@ -91,6 +93,7 @@ RGM_REPORT_HEADERS = [
     "DEPT TIME",
     "ROSEBEL SITE OUT BOUND DATE",
 ]
+DEBOUNCE_MS = 200
 
 
 # -------------------------------------------------------------
@@ -1608,24 +1611,130 @@ class PlanStaffWidget(QWidget):
 class RotationHistoryWidget(QWidget):
     def __init__(self):
         super().__init__()
+        self._filter_state = {}
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self.refresh_data)
+
         layout = QVBoxLayout(self)
+
+        # -- Filter Panel --
+        filter_layout = QHBoxLayout()
+        filter_layout.setContentsMargins(0, 0, 0, 8)
+        
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search Name/Badge/Role...")
+        self.search_input.textChanged.connect(self._request_refresh)
+        
+        self.role_combo = QComboBox()
+        self.role_combo.currentIndexChanged.connect(self._request_refresh)
+
+        self.date_from = QDateEdit()
+        self.date_from.setCalendarPopup(True)
+        self.date_from.setDisplayFormat("yyyy-MM-dd")
+        self.date_from.dateChanged.connect(self._request_refresh)
+        
+        self.date_to = QDateEdit()
+        self.date_to.setCalendarPopup(True)
+        self.date_to.setDisplayFormat("yyyy-MM-dd")
+        self.date_to.dateChanged.connect(self._request_refresh)
+
+        self.active_today_check = QCheckBox("Active today")
+        self.active_today_check.stateChanged.connect(self._toggle_active_today)
+
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItems(["Start Date (desc)", "Name (asc)"])
+        self.sort_combo.currentIndexChanged.connect(self._request_refresh)
+        
+        reset_button = QPushButton("Reset")
+        reset_button.clicked.connect(self.reset_filters)
+
+        filter_layout.addWidget(self.search_input, 2)
+        filter_layout.addWidget(QLabel("Role:"))
+        filter_layout.addWidget(self.role_combo, 1)
+        filter_layout.addWidget(QLabel("Date Range:"))
+        filter_layout.addWidget(self.date_from)
+        filter_layout.addWidget(QLabel("–"))
+        filter_layout.addWidget(self.date_to)
+        filter_layout.addWidget(self.active_today_check)
+        filter_layout.addStretch()
+        filter_layout.addWidget(QLabel("Sort by:"))
+        filter_layout.addWidget(self.sort_combo)
+        filter_layout.addWidget(reset_button)
+        
+        layout.addLayout(filter_layout)
 
         self.table = QTableWidget()
         self.table.setAlternatingRowColors(True)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         layout.addWidget(self.table)
 
+        self.reset_filters() # To initialize and load data
+
+    def _request_refresh(self):
+        self._debounce_timer.start(DEBOUNCE_MS)
+
+    def _toggle_active_today(self, state):
+        is_checked = state == Qt.CheckState.Checked.value
+        self.date_from.setEnabled(not is_checked)
+        self.date_to.setEnabled(not is_checked)
+        if is_checked:
+            today = QDate.currentDate()
+            self.date_from.setDate(today)
+            self.date_to.setDate(today)
+        self._request_refresh()
+
+    def _populate_role_filter(self):
+        self.role_combo.blockSignals(True)
+        current_role = self.role_combo.currentText()
+        self.role_combo.clear()
+        self.role_combo.addItem("All Roles", None)
+        # Get distinct roles from all operations
+        all_records = db.get_all_operations()
+        roles = sorted(list(set(r['role'] for r in all_records if r.get('role'))))
+        self.role_combo.addItems(roles)
+        
+        idx = self.role_combo.findText(current_role)
+        if idx != -1:
+            self.role_combo.setCurrentIndex(idx)
+        self.role_combo.blockSignals(False)
+
+    def reset_filters(self):
+        with QSignalBlocker(self.search_input), \
+             QSignalBlocker(self.role_combo), \
+             QSignalBlocker(self.date_from), \
+             QSignalBlocker(self.date_to), \
+             QSignalBlocker(self.active_today_check), \
+             QSignalBlocker(self.sort_combo):
+            self.search_input.clear()
+            self._populate_role_filter()
+            self.role_combo.setCurrentIndex(0)
+            self.date_from.setDate(QDate(2000, 1, 1))
+            self.date_to.setDate(QDate.currentDate().addYears(5))
+            self.active_today_check.setChecked(False)
+            self.sort_combo.setCurrentIndex(0)
         self.refresh_data()
 
     def refresh_data(self):
-        # Note: operations table has no 'source' column; list all.
-        records = db.get_all_operations()
-        headers = [
-            "Name",
-            "Role",
-            "Badge",
-            "Start Date",
-            "End Date",
-        ]  # ID intentionally omitted
+        # Persist filter state
+        self._filter_state['text'] = self.search_input.text()
+        self._filter_state['role'] = self.role_combo.currentText() if self.role_combo.currentIndex() > 0 else None
+        self._filter_state['sort'] = 'name_asc' if self.sort_combo.currentIndex() == 1 else 'start_date_desc'
+
+        d_from = self.date_from.date().toPyDate()
+        d_to = self.date_to.date().toPyDate()
+        # If active_today is checked, the dates are already set correctly.
+        # If not, we still use the date edit values for range filtering.
+        
+        records = db.get_operations_filtered(
+            text=self._filter_state['text'],
+            role=self._filter_state['role'],
+            d_from=d_from,
+            d_to=d_to,
+            sort_by=self._filter_state['sort']
+        )
+        
+        headers = ["Name", "Role", "Badge", "Start Date", "End Date"]
         self.table.setRowCount(len(records))
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
@@ -1637,9 +1746,7 @@ class RotationHistoryWidget(QWidget):
             self.table.setItem(row_idx, 3, QTableWidgetItem(record["start_date"]))
             self.table.setItem(row_idx, 4, QTableWidgetItem(record["end_date"]))
 
-        self.table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
 
 # -------------------------------------------------------------
@@ -1648,9 +1755,7 @@ class RotationHistoryWidget(QWidget):
 class CrudWidget(QWidget):
     # Signals for immediate UI sync
     import_done = pyqtSignal(str)  # emits 'source' when import finishes
-    users_changed = pyqtSignal(
-        str
-    )  # emits 'source' when user list changes (create/edit/delete)
+    users_changed = pyqtSignal(str)  # emits 'source' when user list changes
 
     def __init__(self, source: str, excel_file: str, logged_username: str):
         super().__init__()
@@ -1658,6 +1763,11 @@ class CrudWidget(QWidget):
         self.excel_file = excel_file
         self.logged_username = logged_username or "Unknown"
         self.current_user_id = None
+        
+        self._filter_state = {}
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self.load_users_table)
 
         layout = QHBoxLayout(self)
 
@@ -1703,7 +1813,33 @@ class CrudWidget(QWidget):
         form_group.setFixedWidth(400)
 
         # Right panel: users table
-        table_layout = QVBoxLayout()
+        table_panel = QWidget()
+        table_layout = QVBoxLayout(table_panel)
+        
+        # --- Filter Panel for Users ---
+        filter_bar = QHBoxLayout()
+        self.user_search_input = QLineEdit()
+        self.user_search_input.setPlaceholderText("Search Name/Badge...")
+        self.user_search_input.textChanged.connect(self._request_refresh)
+        
+        self.user_role_combo = QComboBox()
+        self.user_role_combo.currentIndexChanged.connect(self._request_refresh)
+
+        self.user_badge_prefix_input = QLineEdit()
+        self.user_badge_prefix_input.setPlaceholderText("Badge prefix...")
+        self.user_badge_prefix_input.textChanged.connect(self._request_refresh)
+
+        user_reset_btn = QPushButton("Reset")
+        user_reset_btn.clicked.connect(self.reset_filters)
+
+        filter_bar.addWidget(self.user_search_input, 2)
+        filter_bar.addWidget(QLabel("Role:"))
+        filter_bar.addWidget(self.user_role_combo, 1)
+        filter_bar.addWidget(QLabel("Badge Prefix:"))
+        filter_bar.addWidget(self.user_badge_prefix_input, 1)
+        filter_bar.addWidget(user_reset_btn)
+        table_layout.addLayout(filter_bar)
+        
         self.users_table = QTableWidget()
         self.users_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.users_table.setAlternatingRowColors(True)
@@ -1716,9 +1852,45 @@ class CrudWidget(QWidget):
 
         self.refresh_ui_data()
 
+    def _request_refresh(self):
+        self._debounce_timer.start(DEBOUNCE_MS)
+
+    def _populate_role_filter(self):
+        self.user_role_combo.blockSignals(True)
+        current_role = self.user_role_combo.currentText()
+        self.user_role_combo.clear()
+        self.user_role_combo.addItem("All Roles")
+        all_users = db.get_all_users(self.source)
+        roles = sorted(list(set(u['role'] for u in all_users if u.get('role'))))
+        self.user_role_combo.addItems(roles)
+        idx = self.user_role_combo.findText(current_role)
+        if idx > 0:
+            self.user_role_combo.setCurrentIndex(idx)
+        self.user_role_combo.blockSignals(False)
+
+    def reset_filters(self):
+        with QSignalBlocker(self.user_search_input), \
+             QSignalBlocker(self.user_role_combo), \
+             QSignalBlocker(self.user_badge_prefix_input):
+            self.user_search_input.clear()
+            self.user_role_combo.setCurrentIndex(0)
+            self.user_badge_prefix_input.clear()
+        self.load_users_table()
+        
     # Table & form CRUD
     def load_users_table(self):
-        users = db.get_all_users(self.source)
+        self._filter_state['text'] = self.user_search_input.text()
+        self._filter_state['role'] = self.user_role_combo.currentText() if self.user_role_combo.currentIndex() > 0 else None
+        self._filter_state['badge_prefix'] = self.user_badge_prefix_input.text()
+
+        users = db.get_users_filtered(
+            source=self.source,
+            text=self._filter_state['text'],
+            role=self._filter_state['role'],
+            badge_prefix=self._filter_state['badge_prefix'],
+            active_since=None # Not implemented in UI yet
+        )
+        
         headers = ["ID", "Name", "Role", "Badge"]
         self.users_table.setRowCount(len(users))
         self.users_table.setColumnCount(len(headers))
@@ -1777,10 +1949,11 @@ class CrudWidget(QWidget):
         box.setText(message)
         box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
         box.exec()
-
-        self.refresh_ui_data()
-        # sync "Select Employee" combo in Plan Staff
-        self.users_changed.emit(self.source)
+        
+        if success:
+            self._populate_role_filter()
+            self.refresh_ui_data()
+            self.users_changed.emit(self.source)
 
     def delete_crud_user(self):
         if not self.current_user_id:
@@ -1812,9 +1985,10 @@ class CrudWidget(QWidget):
             box.setText(message)
             box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
             box.exec()
-            self.refresh_ui_data()
-            # sync "Select Employee" combo in Plan Staff
-            self.users_changed.emit(self.source)
+            if success:
+                self._populate_role_filter()
+                self.refresh_ui_data()
+                self.users_changed.emit(self.source)
 
     def import_users_from_excel(self):
         """
@@ -1867,6 +2041,7 @@ class CrudWidget(QWidget):
             box.exec()
 
     def refresh_ui_data(self):
+        self._populate_role_filter()
         self.load_users_table()
         self.clear_crud_form()
 
@@ -1885,6 +2060,11 @@ class ShiftTypeAdminWidget(QWidget):
         self.current_type_id = None
         self.current_old_code = None
 
+        self._filter_state = {}
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self.refresh_table)
+        
         layout = QHBoxLayout(self)
 
         # Left: form
@@ -1938,7 +2118,40 @@ class ShiftTypeAdminWidget(QWidget):
         form_group.setFixedWidth(420)
 
         # Right: table
-        table_layout = QVBoxLayout()
+        table_panel = QWidget()
+        table_layout = QVBoxLayout(table_panel)
+        
+        # --- Filter Panel for Shift Types ---
+        st_filter_bar = QHBoxLayout()
+        self.st_search_input = QLineEdit()
+        self.st_search_input.setPlaceholderText("Search Name/Code...")
+        self.st_search_input.textChanged.connect(self._request_refresh)
+        
+        self.st_time_from = QTimeEdit(QTime(0, 0))
+        self.st_time_from.setDisplayFormat("HH:mm")
+        self.st_time_from.timeChanged.connect(self._request_refresh)
+        
+        self.st_time_to = QTimeEdit(QTime(23, 59))
+        self.st_time_to.setDisplayFormat("HH:mm")
+        self.st_time_to.timeChanged.connect(self._request_refresh)
+        
+        self.st_usage_combo = QComboBox()
+        self.st_usage_combo.addItems(["All", "In use", "Not in use"])
+        self.st_usage_combo.currentIndexChanged.connect(self._request_refresh)
+        
+        st_reset_btn = QPushButton("Reset")
+        st_reset_btn.clicked.connect(self.reset_filters)
+
+        st_filter_bar.addWidget(self.st_search_input, 2)
+        st_filter_bar.addWidget(QLabel("IN time from:"))
+        st_filter_bar.addWidget(self.st_time_from)
+        st_filter_bar.addWidget(QLabel("to:"))
+        st_filter_bar.addWidget(self.st_time_to)
+        st_filter_bar.addWidget(QLabel("Usage:"))
+        st_filter_bar.addWidget(self.st_usage_combo, 1)
+        st_filter_bar.addWidget(st_reset_btn)
+        table_layout.addLayout(st_filter_bar)
+        
         self.types_table = QTableWidget()
         self.types_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.types_table.setAlternatingRowColors(True)
@@ -1949,6 +2162,20 @@ class ShiftTypeAdminWidget(QWidget):
         layout.addWidget(form_group)
         layout.addWidget(table_group)
 
+        self.reset_filters()
+
+    def _request_refresh(self):
+        self._debounce_timer.start(DEBOUNCE_MS)
+
+    def reset_filters(self):
+        with QSignalBlocker(self.st_search_input), \
+             QSignalBlocker(self.st_time_from), \
+             QSignalBlocker(self.st_time_to), \
+             QSignalBlocker(self.st_usage_combo):
+            self.st_search_input.clear()
+            self.st_time_from.setTime(QTime(0,0))
+            self.st_time_to.setTime(QTime(23,59))
+            self.st_usage_combo.setCurrentIndex(0)
         self.refresh_table()
 
     def pick_color(self):
@@ -2091,7 +2318,18 @@ class ShiftTypeAdminWidget(QWidget):
             self.clear_form()
 
     def refresh_table(self):
-        types = db.get_shift_types(self.source)
+        self._filter_state['text'] = self.st_search_input.text()
+        self._filter_state['in_from'] = self.st_time_from.time().toString("HH:mm")
+        self._filter_state['in_to'] = self.st_time_to.time().toString("HH:mm")
+        self._filter_state['usage'] = self.st_usage_combo.currentText() if self.st_usage_combo.currentIndex() > 0 else None
+        
+        types = db.get_shift_types_filtered(
+            source=self.source,
+            text=self._filter_state['text'],
+            in_from=self._filter_state['in_from'],
+            in_to=self._filter_state['in_to'],
+            usage=self._filter_state['usage']
+        )
         headers = ["ID", "Name", "Code", "Color", "IN", "OUT"]
         self.types_table.setRowCount(len(types))
         self.types_table.setColumnCount(len(headers))
@@ -2124,6 +2362,10 @@ class LocationAdminWidget(QWidget):
         super().__init__()
         self.scope_source = scope_source  # None = admin; "RGM"/"Newmont" = normal
         self.loc_id = None
+        self._filter_state = {}
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self._reload_table)
 
         layout = QHBoxLayout(self)
 
@@ -2160,20 +2402,35 @@ class LocationAdminWidget(QWidget):
         form_group.setFixedWidth(420)
 
         # --- Tabla ---
-        table_box = QVBoxLayout()
+        table_panel = QWidget()
+        table_box = QVBoxLayout(table_panel)
+        
         controls_row = QHBoxLayout()
+
+        self.loc_search_input = QLineEdit()
+        self.loc_search_input.setPlaceholderText("Search location...")
+        self.loc_search_input.textChanged.connect(self._request_refresh)
+        controls_row.addWidget(self.loc_search_input, 1)
 
         # Filtro por empresa (solo en Admin)
         self.filter_combo = None
         if self.scope_source is None:
             self.filter_combo = QComboBox()
-            self.filter_combo.addItem("All", None)
+            self.filter_combo.addItem("All Sources", None)
             self.filter_combo.addItem("RGM", "RGM")
             self.filter_combo.addItem("Newmont", "Newmont")
-            self.filter_combo.currentIndexChanged.connect(self._reload_table)
-            controls_row.addWidget(QLabel("Filter:"))
+            self.filter_combo.currentIndexChanged.connect(self._request_refresh)
+            controls_row.addWidget(QLabel("Source:"))
             controls_row.addWidget(self.filter_combo)
-            controls_row.addStretch()
+        
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItems(["Sort by Name", "Sort by Source"])
+        self.sort_combo.currentIndexChanged.connect(self._request_refresh)
+        controls_row.addWidget(self.sort_combo)
+
+        reset_btn = QPushButton("Reset")
+        reset_btn.clicked.connect(self._reset_filters)
+        controls_row.addWidget(reset_btn)
 
         table_box.addLayout(controls_row)
 
@@ -2192,9 +2449,22 @@ class LocationAdminWidget(QWidget):
         btn_del.clicked.connect(self._delete_loc)
         self.loc_table.itemClicked.connect(self._load_to_form)
 
-        self._reload_table()
+        self._reset_filters()
 
     # --- helpers ---
+    def _request_refresh(self):
+        self._debounce_timer.start(DEBOUNCE_MS)
+
+    def _reset_filters(self):
+        with QSignalBlocker(self.loc_search_input), QSignalBlocker(self.sort_combo):
+            self.loc_search_input.clear()
+            self.sort_combo.setCurrentIndex(0)
+            if self.filter_combo:
+                with QSignalBlocker(self.filter_combo):
+                    self.filter_combo.setCurrentIndex(0)
+        self._reload_table()
+
+
     def _effective_filter_source(self) -> str | None:
         if self.scope_source is not None:
             return self.scope_source  # perfil normal
@@ -2205,8 +2475,15 @@ class LocationAdminWidget(QWidget):
 
     def _reload_table(self):
         src = self._effective_filter_source()
-        rows = db.get_locations(source=src)
-        # Admin ve la columna Source; usuario normal, solo Location
+        text = self.loc_search_input.text()
+        sort = 'source' if self.sort_combo.currentIndex() == 1 else 'name'
+        
+        self._filter_state['source'] = src
+        self._filter_state['text'] = text
+        self._filter_state['sort'] = sort
+
+        rows = db.get_locations_filtered(source=src, text=text, sort_by=sort)
+        
         if self.scope_source is None:
             headers = ["ID", "Source", "Location"]
         else:
@@ -2583,3 +2860,4 @@ class AdminMainWindow(QMainWindow):
     def handle_logout(self):
         self.logout_signal.emit()
         self.close()
+
