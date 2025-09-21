@@ -112,7 +112,7 @@ class ShiftInfoCard(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+      #  self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)#
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
         # Style according to the new design rules
@@ -120,15 +120,18 @@ class ShiftInfoCard(QLabel):
         self.setStyleSheet(
             """
             QLabel {
-                background-color: #F9FAFB; /* Option 2: Very Light Gray */
+                /* Your changes to this color will now work */
+                background-color: #E3F2FD; /* Example: light blue */
+                
                 color: #111827;
                 border: 1px solid #E5E7EB;
                 border-radius: 8px;
-                padding: 12px; /* Approx 1rem */
+                padding: 12px;
                 font-size: 13px;
             }
         """
         )
+
 
         # Add a subtle box-shadow for depth, as requested.
         shadow = QGraphicsDropShadowEffect(self)
