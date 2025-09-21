@@ -132,6 +132,7 @@ def setup_database():
             source TEXT NOT NULL,
             in_time TEXT,                        -- HH:MM (para tipos personalizados)
             out_time TEXT,                       -- HH:MM (para tipos personalizados)
+            remark TEXT,
             UNIQUE (badge, date, source)
         )"""
     )
@@ -143,6 +144,10 @@ def setup_database():
         pass
     try:
         cursor.execute("ALTER TABLE schedules ADD COLUMN out_time TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE schedules ADD COLUMN remark TEXT")
     except sqlite3.OperationalError:
         pass
 
@@ -705,6 +710,7 @@ def upsert_schedule_day(
     source: str,
     in_time: Optional[str] = None,
     out_time: Optional[str] = None,
+    remark: Optional[str] = None,
 ):
     """
     Upsert de un día en schedules. Soporta:
@@ -716,15 +722,15 @@ def upsert_schedule_day(
     try:
         # UPDATE primero
         cursor.execute(
-            "UPDATE schedules SET status = ?, shift_type = ?, in_time = ?, out_time = ? "
+            "UPDATE schedules SET status = ?, shift_type = ?, in_time = ?, out_time = ?, remark = ? "
             "WHERE badge = ? AND date = ? AND source = ?",
-            (status, shift_type, in_time, out_time, badge, d.isoformat(), source),
+            (status, shift_type, in_time, out_time, remark, badge, d.isoformat(), source),
         )
         if cursor.rowcount == 0:
             cursor.execute(
-                "INSERT INTO schedules (badge, date, status, shift_type, source, in_time, out_time) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (badge, d.isoformat(), status, shift_type, source, in_time, out_time),
+                "INSERT INTO schedules (badge, date, status, shift_type, source, in_time, out_time, remark) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (badge, d.isoformat(), status, shift_type, source, in_time, out_time, remark),
             )
         conn.commit()
     finally:
@@ -740,6 +746,7 @@ def upsert_schedule_range(
     source: str,
     in_time: Optional[str] = None,
     out_time: Optional[str] = None,
+    remark: Optional[str] = None,
 ) -> int:
     """
     Marca por rango [start_d, end_d]. Devuelve cuántos días se escribieron.
@@ -747,7 +754,7 @@ def upsert_schedule_range(
     total = 0
     d = start_d
     while d <= end_d:
-        upsert_schedule_day(badge, d, status, shift_type, source, in_time, out_time)
+        upsert_schedule_day(badge, d, status, shift_type, source, in_time, out_time, remark)
         total += 1
         d += timedelta(days=1)
     return total
@@ -770,12 +777,12 @@ def clear_schedule_range(badge: str, start_d: date, end_d: date, source: str) ->
 def get_schedule_map_for_range(
     badge: str, start_d: date, end_d: date, source: str
 ) -> Dict[str, Dict]:
-    """Devuelve { 'YYYY-MM-DD': {'status':..., 'shift_type':..., 'in_time':..., 'out_time':...} } para el rango."""
+    """Devuelve { 'YYYY-MM-DD': {'status':..., 'shift_type':..., 'in_time':..., 'out_time':..., 'remark':...} } para el rango."""
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT date, status, shift_type, in_time, out_time "
+        "SELECT date, status, shift_type, in_time, out_time, remark "
         "FROM schedules WHERE badge = ? AND source = ? AND date >= ? AND date <= ?",
         (badge, source, start_d.isoformat(), end_d.isoformat()),
     )
@@ -785,6 +792,7 @@ def get_schedule_map_for_range(
             "shift_type": row["shift_type"],
             "in_time": row["in_time"],
             "out_time": row["out_time"],
+            "remark": row["remark"],
         }
         for row in cursor.fetchall()
     }
@@ -798,7 +806,7 @@ def get_schedules_for_source(source: str) -> List[Dict]:
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT badge, date, status, shift_type, source, in_time, out_time "
+        "SELECT badge, date, status, shift_type, source, in_time, out_time, remark "
         "FROM schedules WHERE source = ? ORDER BY date",
         (source,),
     )

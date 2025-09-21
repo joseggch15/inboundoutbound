@@ -14,6 +14,7 @@
 # --- UPDATED: The ShiftInfoCard background is now opaque with a shadow for better visibility as per technical requirements. ---
 # --- NEW: Added filter panels to all relevant tabs as per specifications. ---
 # --- MODIFICATION: Added color chips to Shift Types table and Status/Shift dropdown for better color visibility. ---
+# --- NEW: Added "Remarks" feature to registration form and ShiftInfoCard. ---
 
 import json
 import os
@@ -731,6 +732,11 @@ class PlanStaffWidget(QWidget):
         # NEW: location dropdowns
         self.pickup_combo = QComboBox()
         self.dropoff_combo = QComboBox()
+        
+        # NEW: remarks input
+        self.remarks_input = QLineEdit()
+        self.remarks_input.setPlaceholderText("Optional: add a note for this period...")
+
 
         # Restored blue Save button (center action bar)
         self.save_button = QPushButton("Save Changes to DB Excel")
@@ -754,9 +760,10 @@ class PlanStaffWidget(QWidget):
             field("Badge (ID)", self.badge_display),
             field("Status / Shift", self.status_selector),
             field("Period Start Date", self.start_date_edit),
-            field("Pick Up Location", self.pickup_combo),
             field("Period End Date", self.end_date_edit),
+            field("Pick Up Location", self.pickup_combo),
             field("Drop Off Location", self.dropoff_combo),
+            field("Remarks", self.remarks_input),
         ]
 
         # Base grid (we will re-pack it responsively in _rebuild_registration_grid)
@@ -783,13 +790,6 @@ class PlanStaffWidget(QWidget):
             columns = 1
         num_fields = len(self._fields)
 
-        # Simple responsive logic
-        if num_fields % columns != 0:
-            if columns == 4 and num_fields == 8:
-                pass
-            else:
-                columns = 2 if columns > 1 else 1
-
         if self._register_grid is None:
             return
         if self._current_form_cols == columns and self._register_grid.count() > 0:
@@ -814,9 +814,9 @@ class PlanStaffWidget(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # Simple responsive thresholds
+        # Simple responsive thresholds for 9 fields (3x3 is ideal)
         w = max(0, self.width())
-        cols = 4 if w >= 1280 else (2 if w >= 930 else 1)
+        cols = 3 if w >= 930 else (2 if w >= 620 else 1)
         if cols != self._current_form_cols:
             self._rebuild_registration_grid(cols)
 
@@ -1180,6 +1180,8 @@ class PlanStaffWidget(QWidget):
 
         # --- Format data for the card (New compact format) ---
         status_code = (day_info.get("status") or "N/A").upper()
+        remark = day_info.get("remark")
+
 
         # Determine Shift Title and Times
         shift_title = status_code
@@ -1215,6 +1217,17 @@ class PlanStaffWidget(QWidget):
             logistics_html += f"<p {schedule_style}>📍 <b>Drop Off:</b> {dropoff_clean or 'Not assigned'}</p>"
             logistics_html += "</div>"
             content_lines.append(logistics_html)
+
+        # NEW: Add remarks section
+        if remark:
+            remark_style = "style='margin: 0; font-size: 13px; color: #573a00;'" # Dark amber text
+            # Soft yellow background for the remarks block
+            remark_block_style = "style='background-color: #FEF3C7; border-radius: 4px; padding: 6px 8px; margin-top: 8px;'"
+            remark_html = f"<div {remark_block_style}>"
+            remark_html += f"<p {remark_style}><b>Remark:</b> {remark}</p>"
+            remark_html += "</div>"
+            content_lines.append(remark_html)
+
 
         html_body = "".join(content_lines)
         final_html = f"<div style='line-height: 1.3;'>{html_body}</div>"
@@ -1265,6 +1278,8 @@ class PlanStaffWidget(QWidget):
         # NEW: read locations (optional)
         pickup = self.pickup_combo.currentData() or None
         dropoff = self.dropoff_combo.currentData() or None
+        remark = self.remarks_input.text().strip() or None
+
 
         if not username or username == "-- Select a user --":
             mark_error(self.user_selector_combo, True)
@@ -1344,6 +1359,7 @@ class PlanStaffWidget(QWidget):
                 self.source,
                 in_time,
                 out_time,
+                remark,
             )
         else:  # clear range
             db.clear_schedule_range(badge, start_date, end_date, self.source)
@@ -1381,7 +1397,7 @@ class PlanStaffWidget(QWidget):
             self.logged_username,
             self.source,
             "SHIFT_MODIFICATION",
-            f"{username} ({badge}) {start_date}..{end_date} prev={prev_map} new={new_map}; Excel={'OK' if success else 'ERR'}",
+            f"{username} ({badge}) {start_date}..{end_date} prev={prev_map} new={new_map} remark={remark}; Excel={'OK' if success else 'ERR'}",
         )
 
         # --- Message
@@ -1485,6 +1501,7 @@ class PlanStaffWidget(QWidget):
         self.load_schedule_data()
         self.load_users_to_selector()
         self.load_location_options()  # keep combos in sync with Location admin
+        self.remarks_input.clear() # Clear remarks on refresh
 
     # ---------- Excel Health / Monitoring ----------
     def check_excel_health(self):
@@ -2915,3 +2932,4 @@ class AdminMainWindow(QMainWindow):
     def handle_logout(self):
         self.logout_signal.emit()
         self.close()
+
