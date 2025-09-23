@@ -120,11 +120,9 @@ class ShiftInfoCard(QLabel):
         self.setStyleSheet(
             """
             QLabel {
-                /* Your changes to this color will now work */
-                background-color: #E3F2FD; /* Example: light blue */
-                
-                color: #111827;
-                border: 1px solid #E5E7EB;
+                background-color: #374151; /* Gris oscuro */
+                color: #FFFFFF;             /* LETRA BLANCA PARA EL TEXTO */
+                border: 1px solid #4B5563;  /* Borde ligeramente más claro */
                 border-radius: 8px;
                 padding: 12px;
                 font-size: 13px;
@@ -247,12 +245,9 @@ def _clean(value) -> str:
     return s
 
 
-def _weekday_abbrev_en(d: pydate) -> str:
-    """
-    English weekday abbreviations with trailing period for Schedule Preview headers.
-    Monday=0 ... Sunday=6
-    """
-    names = ["Mon", "Tues", "Wed", "Thurs", "Fri", "Sat", "Sun"]
+def _weekday_full_en(d: pydate) -> str:
+    """English full weekday names."""
+    names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     return names[d.weekday()]
 
 
@@ -945,7 +940,7 @@ class PlanStaffWidget(QWidget):
         # Schedule (date) headers -> one line with date + weekday (abbrev)
         schedule_headers = []
         for d in date_cols:
-            schedule_headers.append(f"{d.isoformat()} {_weekday_abbrev_en(d)}")
+            schedule_headers.append(f"{d.isoformat()}\n{_weekday_full_en(d)}")
         self._date_col_dates = list(date_cols)  # keep exact order
 
         # Build tables
@@ -1202,8 +1197,8 @@ class PlanStaffWidget(QWidget):
             shift_title = "OFF"
 
         # Build compact HTML content
-        title_style = "style='margin: 0 0 2px 0; font-size: 14px; color: #111827; font-weight: 600;'"
-        schedule_style = "style='margin: 0; font-size: 13px; color: #6B7280;'"
+        title_style = "style='margin: 0 0 2px 0; font-size: 14px; color: #FFFFFF; font-weight: 600;'"
+        schedule_style = "style='margin: 0; font-size: 13px; color: #FFFFFF;'"
 
         content_lines = [f"<p {title_style}>{shift_title}</p>"]
 
@@ -1223,9 +1218,9 @@ class PlanStaffWidget(QWidget):
 
         # NEW: Add remarks section
         if remark:
-            remark_style = "style='margin: 0; font-size: 13px; color: #573a00;'" # Dark amber text
+            remark_style = "style='margin: 0; font-size: 13px; color: #FFFFFF;'"
             # Soft yellow background for the remarks block
-            remark_block_style = "style='background-color: #FEF3C7; border-radius: 4px; padding: 6px 8px; margin-top: 8px;'"
+            remark_block_style = "style='border-top: 1px solid #1565C0; padding-top: 8px; margin-top: 8px;'"
             remark_html = f"<div {remark_block_style}>"
             remark_html += f"<p {remark_style}><b>Remark:</b> {remark}</p>"
             remark_html += "</div>"
