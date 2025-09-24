@@ -657,7 +657,7 @@ class PlanStaffWidget(QWidget):
         self.report_end_date.setDisplayFormat("dd/MM/yyyy")
         report_layout.addWidget(self.report_end_date)
 
-        report_button = QPushButton("🚀 Generate Report")
+        report_button = QPushButton("🚀 Generate Inbound Outbound Report")
         report_button.clicked.connect(self.generate_report)
         report_button.setProperty("variant", "primary")
         report_layout.addWidget(report_button)
@@ -737,7 +737,7 @@ class PlanStaffWidget(QWidget):
 
 
         # Restored blue Save button (center action bar)
-        self.save_button = QPushButton("Save Changes to DB Excel")
+        self.save_button = QPushButton("💾 Save Changes to DB Excel")
         self.save_button.clicked.connect(self.save_plan_changes)
         self.save_button.setProperty("variant", "primary")
 
