@@ -9,13 +9,13 @@ from ui_login import LoginWindow, LoadingWindow
 from ui.theme import apply_app_theme
 
 
-class LauncherWindow(QWidget):
+class LauncherWindow(QWidget): 
     """
-    Initial window with a single Sign In button.
+    Initial window with a single Log in button.
     """
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Inbound - Outbound PLG")
+        self.setWindowTitle("Transport Operations Manager PLG")
         self.setMinimumSize(420, 220)
         self.main_app_window = None
         self._login_payload = None
@@ -30,7 +30,7 @@ class LauncherWindow(QWidget):
         font = title.font(); font.setPointSize(20); font.setBold(True)
         title.setFont(font)
 
-        login_button = QPushButton("Sign In")
+        login_button = QPushButton("Log In")
         login_button.setFixedSize(220, 48)
         login_button.setProperty("variant", "primary")
 

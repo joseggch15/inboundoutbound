@@ -202,7 +202,7 @@ QHeaderView#fixedHeaders::section, QHeaderView#dateHeaders::section {{
   border: none;
   border-right: 1px solid {p['white']};
   padding: 4px;
-  font-weight: 600;
+  font-weight: 700;
   height: 32px; /* NUEVO: Altura fija para todos los encabezados */
   vertical-align: middle; /* NUEVO: Centra verticalmente el texto (para ROLE, NAME, etc.) */
 }}

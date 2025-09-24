@@ -1,0 +1,9 @@
+# Archivos y carpetas de PyInstaller
+/dist/
+/build/
+*.spec
+
+# Archivos de entorno de Python
+__pycache__/
+*.pyc
+.env
