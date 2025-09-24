@@ -201,9 +201,9 @@ QHeaderView#fixedHeaders::section, QHeaderView#dateHeaders::section {{
   color: {p['primary_txt_on']};
   border: none;
   border-right: 1px solid {p['white']};
-  padding: 8px;
+  padding: 4px;
   font-weight: 600;
-  height: 48px; /* NUEVO: Altura fija para todos los encabezados */
+  height: 32px; /* NUEVO: Altura fija para todos los encabezados */
   vertical-align: middle; /* NUEVO: Centra verticalmente el texto (para ROLE, NAME, etc.) */
 }}
 

@@ -617,7 +617,7 @@ class PlanStaffWidget(QWidget):
             QHeaderView.ResizeMode.ResizeToContents
         )
         self.frozen_table.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+             Qt.ScrollBarPolicy.ScrollBarAlwaysOn
         )
         self.frozen_table.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding
