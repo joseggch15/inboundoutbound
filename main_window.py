@@ -15,6 +15,7 @@
 # --- NEW: Added filter panels to all relevant tabs as per specifications. ---
 # --- MODIFICATION: Added color chips to Shift Types table and Status/Shift dropdown for better color visibility. ---
 # --- NEW: Added "Remarks" feature to registration form and ShiftInfoCard. ---
+# --- MODIFIED: Added 'created_by' tracking for rotation history, filtering the view based on the logged-in user.
 
 import json
 import os
@@ -112,7 +113,6 @@ class ShiftInfoCard(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
-      #  self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)#
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
         # Style according to the new design rules
@@ -1347,7 +1347,15 @@ class PlanStaffWidget(QWidget):
 
         # --- DB (SSoT) ---
         if schedule_status is not None:
-            db.add_operation(username, role, badge, start_date, end_date)
+            # AHORA: guardar también el autor
+            db.add_operation(
+                username=username,
+                role=role,
+                badge=badge,
+                start_date=start_date,
+                end_date=end_date,
+                created_by=self.logged_username,  # ← NUEVO
+            )
             db.upsert_schedule_range(
                 badge,
                 start_date,
@@ -1667,8 +1675,13 @@ class PlanStaffWidget(QWidget):
 # Widget: Rotation History (own tab, without ID column)
 # -------------------------------------------------------------
 class RotationHistoryWidget(QWidget):
-    def __init__(self):
+    def __init__(self, created_by: str | None = None):
+        """
+        Si created_by es None => modo 'admin' (ve todo).
+        En caso contrario, solo muestra operaciones creadas por ese usuario.
+        """
         super().__init__()
+        self._created_by = (created_by or "").strip() or None
         self._filter_state = {}
         self._debounce_timer = QTimer(self)
         self._debounce_timer.setSingleShot(True)
@@ -1698,7 +1711,7 @@ class RotationHistoryWidget(QWidget):
         self.date_to.dateChanged.connect(self._request_refresh)
 
         self.active_today_check = QCheckBox("Active today")
-        self.active_today_check.stateChanged.connect(self._toggle_active_today)
+        self.active_today_check.toggled.connect(self._toggle_active_today)
 
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["Start Date (desc)", "Name (asc)"])
@@ -1732,11 +1745,10 @@ class RotationHistoryWidget(QWidget):
     def _request_refresh(self):
         self._debounce_timer.start(DEBOUNCE_MS)
 
-    def _toggle_active_today(self, state):
-        is_checked = state == Qt.CheckState.Checked.value
-        self.date_from.setEnabled(not is_checked)
-        self.date_to.setEnabled(not is_checked)
-        if is_checked:
+    def _toggle_active_today(self, checked):
+        self.date_from.setEnabled(not checked)
+        self.date_to.setEnabled(not checked)
+        if checked:
             today = QDate.currentDate()
             self.date_from.setDate(today)
             self.date_to.setDate(today)
@@ -1747,9 +1759,9 @@ class RotationHistoryWidget(QWidget):
         current_role = self.role_combo.currentText()
         self.role_combo.clear()
         self.role_combo.addItem("All Roles", None)
-        # Get distinct roles from all operations
-        all_records = db.get_all_operations()
-        roles = sorted(list(set(r['role'] for r in all_records if r.get('role'))))
+        # roles solo de operaciones creadas por el usuario (si aplica)
+        all_records = db.get_operations_filtered(created_by=self._created_by)
+        roles = sorted(list(set(r["role"] for r in all_records if r.get("role"))))
         self.role_combo.addItems(roles)
         
         idx = self.role_combo.findText(current_role)
@@ -1781,18 +1793,17 @@ class RotationHistoryWidget(QWidget):
 
         d_from = self.date_from.date().toPyDate()
         d_to = self.date_to.date().toPyDate()
-        # If active_today is checked, the dates are already set correctly.
-        # If not, we still use the date edit values for range filtering.
         
         records = db.get_operations_filtered(
             text=self._filter_state['text'],
             role=self._filter_state['role'],
             d_from=d_from,
             d_to=d_to,
-            sort_by=self._filter_state['sort']
+            sort_by=self._filter_state['sort'],
+            created_by=self._created_by,  # NUEVO: solo mis rotaciones
         )
         
-        headers = ["Name", "Role", "Badge", "Start Date", "End Date"]
+        headers = ["Name", "Role", "Badge", "Start Date", "End Date", "Created By"]
         self.table.setRowCount(len(records))
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
@@ -1803,6 +1814,7 @@ class RotationHistoryWidget(QWidget):
             self.table.setItem(row_idx, 2, QTableWidgetItem(record["badge"]))
             self.table.setItem(row_idx, 3, QTableWidgetItem(record["start_date"]))
             self.table.setItem(row_idx, 4, QTableWidgetItem(record["end_date"]))
+            self.table.setItem(row_idx, 5, QTableWidgetItem(record.get("created_by", "")))
 
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
@@ -2744,7 +2756,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.plan_widget, "📅 Plan Staff & Reports")
 
         # 2) Rotation History (new tab, no ID column)
-        self.rotation_widget = RotationHistoryWidget()
+        self.rotation_widget = RotationHistoryWidget(created_by=self.logged_username)  # ← NUEVO: solo mis registros
         tabs.addTab(self.rotation_widget, "🔁 Rotation History")
         # Refresh rotation history whenever plan saves a rotation
         self.plan_widget.rotation_changed.connect(self.rotation_widget.refresh_data)
@@ -2865,7 +2877,7 @@ class AdminMainWindow(QMainWindow):
         self.tabs.addTab(self.nm_plan, "📅 Newmont Plan Staff")
 
         # 5) Rotation History (global; no ID column)
-        self.rotation_history = RotationHistoryWidget()
+        self.rotation_history = RotationHistoryWidget(created_by=None) # AHORA (modo admin = None → sin filtro)
         self.tabs.addTab(self.rotation_history, "🔁 Rotation History")
         # Refresh when either plan tab writes a rotation
         self.rgm_plan.rotation_changed.connect(self.rotation_history.refresh_data)
@@ -2930,4 +2942,3 @@ class AdminMainWindow(QMainWindow):
     def handle_logout(self):
         self.logout_signal.emit()
         self.close()
-

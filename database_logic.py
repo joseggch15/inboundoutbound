@@ -1,7 +1,9 @@
+# database_logic.py
 # Basado y extendido a partir del módulo original. Referencia: :contentReference[oaicite:0]{index=0}
+# MODIFIED: Integrated changes to add 'created_by' to the 'operations' table for tracking rotation history authorship.
 import sqlite3
 import json
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from typing import Tuple, List, Dict, Optional
 
 DB_FILE = "transporte_operaciones.db"
@@ -117,6 +119,16 @@ def setup_database():
         )
     """
     )
+    
+    # MIGRACIÓN: agregar created_by si no existe (idempotente)
+    try:
+        cursor.execute("ALTER TABLE operations ADD COLUMN created_by TEXT")
+        # Índice útil para filtrar por autor
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_operations_created_by ON operations(created_by)")
+    except sqlite3.OperationalError:
+        # La columna ya existe, lo cual está bien.
+        pass
+
 
     # -------------------------
     # schedules (estado día a día)
@@ -604,9 +616,7 @@ def delete_location_admin(loc_id: int) -> Tuple[bool, str]:
         conn.close()
 
 
-from datetime import date as _date
-
-def assign_user_location_range(badge: str, start_date: _date, end_date: _date,
+def assign_user_location_range(badge: str, start_date: date, end_date: date,
                                pickup: Optional[str], dropoff: Optional[str],
                                is_default: int = 0) -> None:
     """Inserta una asignación de pickup/dropoff para un rango de fechas."""
@@ -637,7 +647,7 @@ def set_user_default_locations(badge: str, pickup: Optional[str], dropoff: Optio
     conn.commit()
     conn.close()
 
-def get_user_location_for_date(badge: str, d: _date) -> Tuple[Optional[str], Optional[str]]:
+def get_user_location_for_date(badge: str, d: date) -> Tuple[Optional[str], Optional[str]]:
     """Busca primero una asignación de rango que cubra la fecha; si no existe, cae al default."""
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
@@ -691,12 +701,34 @@ def list_user_default_locations(source: str) -> List[Dict]:
 # ---------------------------------------------------------------------
 # Operations & schedules
 # ---------------------------------------------------------------------
-def add_operation(username: str, role: str, badge: str, start_date: date, end_date: date):
+def add_operation(
+    username: str,
+    role: str,
+    badge: str,
+    start_date: date,
+    end_date: date,
+    created_by: Optional[str] = None,  # NUEVO: autor (usuario logueado)
+) -> None:
+    """
+    Inserta una operación (registro de rotación).
+    - username: empleado afectado (p.ej. 'Rosa Melano')
+    - created_by: usuario que generó el registro (p.ej. 'javierteheran')
+    """
     conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO operations (username, role, badge, start_date, end_date) VALUES (?, ?, ?, ?, ?)",
-        (username, role, badge, start_date.isoformat(), end_date.isoformat()),
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO operations (username, role, badge, start_date, end_date, created_by)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            username.strip(),
+            role.strip(),
+            str(badge).strip(),
+            start_date.isoformat(),
+            end_date.isoformat(),
+            (created_by or "").strip() or None,
+        ),
     )
     conn.commit()
     conn.close()
@@ -816,46 +848,61 @@ def get_schedules_for_source(source: str) -> List[Dict]:
 
 
 def get_all_operations() -> List[Dict]:
+    """Devuelve TODAS las operaciones (se usa para poblar combos)."""
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, username, role, badge, start_date, end_date FROM operations ORDER BY id DESC"
-    )
-    res = [dict(r) for r in cursor.fetchall()]
+    cur = conn.cursor()
+    cur.execute("SELECT id, username, role, badge, start_date, end_date, created_by FROM operations ORDER BY id DESC")
+    rows = [dict(r) for r in cur.fetchall()]
     conn.close()
-    return res
+    return rows
 
-def get_operations_filtered(text: Optional[str], role: Optional[str], d_from: Optional[date], d_to: Optional[date], sort_by: str = 'start_date_desc') -> List[Dict]:
-    """ Get filtered list of operations history. """
+
+def get_operations_filtered(
+    text: Optional[str] = None,
+    role: Optional[str] = None,
+    d_from: Optional[date] = None,
+    d_to: Optional[date] = None,
+    sort_by: str = "start_date_desc",
+    created_by: Optional[str] = None,  # NUEVO
+) -> List[Dict]:
+    """
+    Obtiene operaciones filtradas.  Si `created_by` se especifica,
+    se devuelven únicamente las rotaciones creadas por ese usuario.
+    """
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    query = "SELECT id, username, role, badge, start_date, end_date FROM operations"
-    conditions = []
+    query = "SELECT id, username, role, badge, start_date, end_date, created_by FROM operations"
+    conditions: List[str] = []
     params: List = []
 
     if text:
         conditions.append("(username LIKE ? OR badge LIKE ? OR role LIKE ?)")
-        params.extend([f"%{text}%", f"%{text}%", f"%{text}%"])
+        like = f"%{text}%"
+        params.extend([like, like, like])
 
     if role:
         conditions.append("role = ?")
         params.append(role)
-    
+
     if d_from and d_to:
         # Overlap logic: (StartA <= EndB) and (EndA >= StartB)
         conditions.append("(start_date <= ? AND end_date >= ?)")
         params.extend([d_to.isoformat(), d_from.isoformat()])
+        
+    if created_by:
+        conditions.append("created_by = ?")
+        params.append(created_by)
 
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
 
-    if sort_by == 'name_asc':
-        query += " ORDER BY username ASC"
-    else: # start_date_desc
-        query += " ORDER BY start_date DESC"
+    if sort_by == "name_asc":
+        query += " ORDER BY username ASC, start_date DESC"
+    else:
+        query += " ORDER BY start_date DESC, username ASC"
 
     cursor.execute(query, tuple(params))
     res = [dict(r) for r in cursor.fetchall()]
