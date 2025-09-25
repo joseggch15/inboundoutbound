@@ -1417,7 +1417,7 @@ def regenerate_plan_from_db(plan_staff_file: str, source: str) -> Tuple[bool, st
 def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]:
     """
     Sincroniza la información desde la BD hacia el Excel existente:
-      • Agrega usuarios faltantes (filas) por BADGE.
+      • Agrega usuarios faltantes (filas) por BADGE o por NAME si el badge cambió.
       • Agrega columnas de fechas que existen en BD y no en el Excel.
       • Escribe solo celdas VACÍAS con el estado proveniente de la BD
         (no modifica valores ya presentes en el Excel).
@@ -1469,27 +1469,90 @@ def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]
             if b and d:
                 sched_by_badge.setdefault(b, {})[d] = s
 
-        rows_by_badge: Dict[str, int] = {str(ws.cell(r,badge_col).value).strip(): r for r in range(2, ws.max_row+1) if ws.cell(r,badge_col).value}
+        # --- 1. Add missing users (merge by NAME if badge changed) ---
+        def _norm(s: str) -> str:
+            return " ".join((s or "").replace(",", " ").split()).strip().lower()
 
-        # --- 1. Add missing users ---
+        # Mapear filas por badge y por nombre
+        rows_by_badge = {str(ws.cell(r, badge_col).value).strip(): r
+                         for r in range(2, ws.max_row+1)
+                         if ws.cell(r, badge_col).value}
+        
+        rows_by_name = {}
+        for r in range(2, ws.max_row+1):
+            if variant == "RGM":
+                n = ws.cell(r, header_map["NAME"]).value
+            else: # Newmont
+                last = ws.cell(r, header_map["Last Name"]).value
+                first = ws.cell(r, header_map["First Name"]).value
+                n = (str(last or "") + " " + str(first or "")).strip()
+            if n:
+                rows_by_name[_norm(str(n))] = r
+
         added_users = 0
+        updated_users = 0
         for user in users_db:
-            badge = str(user.get('badge','')).strip()
-            if badge and badge not in rows_by_badge:
-                added_users += 1
-                new_row_idx = ws.max_row + 1
+            name = user.get('name','') or ''
+            role = user.get('role','') or ''
+            badge = str(user.get('badge','') or '').strip()
+            if not badge:
+                continue
+            
+            if badge in rows_by_badge:
+                continue  # Ya está
+
+            # MERGE por nombre (caso: cambió el badge)
+            match_row = rows_by_name.get(_norm(name))
+            if match_row:
+                updated_users += 1
+                old_badge = str(ws.cell(match_row, badge_col).value or '').strip()
+                if old_badge and old_badge in rows_by_badge:
+                    del rows_by_badge[old_badge]  # limpiar índice viejo
+
                 if variant == "RGM":
-                    ws.cell(new_row_idx, header_map["NAME"], value=user.get('name',''))
-                    ws.cell(new_row_idx, header_map["ROLE"], value=user.get('role',''))
-                    ws.cell(new_row_idx, header_map["BADGE"], value=badge)
+                    ws.cell(match_row, header_map["NAME"], value=name)
+                    ws.cell(match_row, header_map["ROLE"], value=role)
+                    ws.cell(match_row, header_map["BADGE"], value=badge)
                 else: # Newmont
-                    name = user.get('name','')
-                    last, first = (name.split(',',1) + [''])[:2] if ',' in name else (name.rsplit(' ',1) + [''])[:2]
-                    ws.cell(new_row_idx, header_map["Last Name"], value=last.strip())
-                    ws.cell(new_row_idx, header_map["First Name"], value=first.strip())
-                    ws.cell(new_row_idx, header_map["Discipline"], value=user.get('role',''))
-                    ws.cell(new_row_idx, header_map["Company ID"], value=badge)
-                rows_by_badge[badge] = new_row_idx
+                    # dividir "Last, First" o "First Last"
+                    nm = name
+                    if ',' in nm:
+                        last, first = (nm.split(',', 1) + [''])[:2]
+                    else:
+                        parts = nm.split()
+                        first = parts[0] if parts else ''
+                        last = ' '.join(parts[1:]) if len(parts) > 1 else ''
+                    ws.cell(match_row, header_map["Last Name"], value=(last or '').strip())
+                    ws.cell(match_row, header_map["First Name"], value=(first or '').strip())
+                    ws.cell(match_row, header_map["Discipline"], value=role)
+                    ws.cell(match_row, header_map["Company ID"], value=badge)
+
+                rows_by_badge[badge] = match_row
+                rows_by_name[_norm(name)] = match_row
+                continue
+
+            # Si no hay ni badge ni nombre → realmente nuevo
+            added_users += 1
+            new_row_idx = ws.max_row + 1
+            if variant == "RGM":
+                ws.cell(new_row_idx, header_map["NAME"], value=name)
+                ws.cell(new_row_idx, header_map["ROLE"], value=role)
+                ws.cell(new_row_idx, header_map["BADGE"], value=badge)
+            else: # Newmont
+                if ',' in name:
+                    last, first = (name.split(',', 1) + [''])[:2]
+                else:
+                    parts = name.split()
+                    first = parts[0] if parts else ''
+                    last = ' '.join(parts[1:]) if len(parts) > 1 else ''
+                ws.cell(new_row_idx, header_map["Last Name"], value=(last or '').strip())
+                ws.cell(new_row_idx, header_map["First Name"], value=(first or '').strip())
+                ws.cell(new_row_idx, header_map["Discipline"], value=role)
+                ws.cell(new_row_idx, header_map["Company ID"], value=badge)
+            
+            rows_by_badge[badge] = new_row_idx
+            rows_by_name[_norm(name)] = new_row_idx
+
 
         # --- 2. Add missing date columns ---
         all_db_dates = {datetime.fromisoformat(d).date() for b in sched_by_badge for d in sched_by_badge[b]}
@@ -1517,7 +1580,7 @@ def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]
                                 cell.comment = Comment(f"{db_info['in_time']}-{db_info['out_time']}", "ShiftType")
 
         wb.save(plan_staff_file)
-        return True, f"Refresh complete: added {added_users} users and filled {filled_cells} cells from DB."
+        return True, f"Refresh complete: added {added_users} new users, updated {updated_users} existing users, and filled {filled_cells} cells from DB."
 
     except Exception as e:
         return False, f"Refresh error: {e}"
