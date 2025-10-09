@@ -6,10 +6,14 @@
 # y utilidades de reporte.
 #
 # Esta versión corrige el error de Pylance:
-#   "variant no está definido"
+#    "variant no está definido"
 # garantizando que la variable 'variant' se inicializa y se
 # propaga correctamente en validate_excel_structure y en
 # cualquier flujo que la use (meta['variant']).
+#
+# MODIFICACIÓN: La generación de reportes de transporte ahora
+# consulta la tabla 'operations' para usar las fechas y horas
+# de entrada/salida personalizadas si están disponibles.
 # ============================================================
 
 from __future__ import annotations
@@ -139,9 +143,9 @@ def _get_transport_time_str(
 
     # Priority 2: Standard shifts
     if su == "ON":
-        return "06:00:00" if kind == "IN" else "12:00:00"
+        return "06:00:00" if kind == "IN" else "18:00:00" # RGM Out time changed to 18:00
     if su == "ON NS":
-        return "12:00:00" if kind == "IN" else "06:00:00"
+        return "18:00:00" if kind == "IN" else "06:00:00" # RGM In/Out time changed to 18:00 / 06:00
 
     # Priority 3: Fallback from cell comment (e.g., "08:00-17:00")
     if comment and "-" in str(comment):
@@ -153,7 +157,7 @@ def _get_transport_time_str(
             pass
 
     # Final fallback
-    return "06:00:00" if kind == "IN" else "12:00:00"
+    return "06:00:00" if kind == "IN" else "18:00:00"
 
 
 # ============================================================
@@ -317,7 +321,7 @@ def update_plan_staff_excel(
     - Escribe:
         * Estados base -> 'ON' / 'ON NS' / 'OFF' con colores legacy.
         * Tipos personalizados -> código (p.ej. 'SOP') y color del tipo.
-      Además añade un comentario con 'IN-OUT' (HH:MM-HH:MM) si viene in_time/out_time.
+        Además añade un comentario con 'IN-OUT' (HH:MM-HH:MM) si viene in_time/out_time.
     - Si schedule_status es None, limpia el rango.
     """
     try:
@@ -811,12 +815,18 @@ def generate_transport_report(
     if source == "RGM":
         return generate_rgm_transport_report(plan_staff_file, start_date, end_date, settings)
 
-    # ---- 2) Cargar mapping de tipos personalizados desde BD ----
+    # ---- 2) Cargar datos de BD (tipos de turno, ubicaciones y operaciones) ----
     try:
-        from database_logic import get_shift_type_map, get_user_location_for_date
+        from database_logic import get_shift_type_map, get_user_location_for_date, get_all_operations
         custom_map: Dict[str, Dict] = {k.strip().upper(): v for k, v in get_shift_type_map(source).items()}
+        # Crear un mapa de operaciones por badge para búsqueda rápida
+        ops_by_badge = {}
+        for op in get_all_operations():
+            b = op.get('badge')
+            if b: ops_by_badge.setdefault(b, []).append(op)
     except Exception:
         custom_map = {}
+        ops_by_badge = {}
         def get_user_location_for_date(b, d): return (None, None)
 
     # ---- 3) Abrir plan staff y extraer datos ----
@@ -849,9 +859,21 @@ def generate_transport_report(
     def _is_working(s): return bool(s and s not in ("OFF", "BREAK", "KO", "LEAVE"))
 
     # ---- 6) Data processing: Collect IN/OUT rows ----
-    in_rows_data, out_rows_data = [], []
+    all_in_events, all_out_events = [], []
     company_default = "PLGims"
     dates_sorted = sorted(date_cols.values())
+
+    def _find_operation_for_date(badge: str, target_date: date, user_ops: List[Dict]):
+        if not user_ops: return None
+        for op in user_ops:
+            try:
+                op_start = datetime.fromisoformat(op['start_date']).date()
+                op_end = datetime.fromisoformat(op['end_date']).date()
+                if op_start <= target_date <= op_end:
+                    return op
+            except (ValueError, TypeError):
+                continue
+        return None
 
     if is_rgm:
         name_col, role_col, badge_col = header_map["NAME"], header_map["ROLE"], header_map["BADGE"]
@@ -870,6 +892,7 @@ def generate_transport_report(
         badge = str(ws_src.cell(row=r_idx, column=badge_col).value or "").strip()
         if not badge: continue
         role, (last, first) = str(ws_src.cell(row=r_idx, column=role_col).value or "").strip(), get_name(r_idx)
+        user_operations = ops_by_badge.get(badge, [])
         
         per_day: Dict[date, Tuple[Optional[str], Optional[str]]] = {}
         for c, d in date_cols.items():
@@ -877,43 +900,52 @@ def generate_transport_report(
             per_day[d] = (_norm_status(cell.value), (cell.comment.text if cell.comment else None))
 
         if not per_day: continue
-        added_in, added_out = set(), set()
-        next_in, next_out = None, None
-
+        
         for i, d in enumerate(dates_sorted):
             st_d, cmt_d = per_day.get(d, (None, None))
             if not _is_working(st_d): continue
-            prev_d = dates_sorted[i-1] if i > 0 else None
-            next_d = dates_sorted[i+1] if i < len(dates_sorted)-1 else None
-            st_prev, _ = per_day.get(prev_d, (None,None)) if prev_d else (None,None)
-            st_next, _ = per_day.get(next_d, (None,None)) if next_d else (None,None)
+            
+            prev_d = dates_sorted[i-1] if i > 0 else (d - timedelta(days=1))
+            next_d = dates_sorted[i+1] if i < len(dates_sorted)-1 else (d + timedelta(days=1))
+            st_prev, _ = per_day.get(prev_d, (None,None))
+            st_next, _ = per_day.get(next_d, (None,None))
 
+            # --- NEW: Determine date and time, with override from operations DB ---
+            operation = _find_operation_for_date(badge, d, user_operations)
+
+            entry_date_to_use = d
+            exit_date_to_use = d
             time_in_str = _get_transport_time_str(st_d, "IN", cmt_d, custom_map)
             time_out_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map)
+            
+            if operation and operation.get('entry_date') and operation.get('exit_date'):
+                try:
+                    entry_dt = datetime.strptime(operation['entry_date'], '%Y-%m-%d %H:%M')
+                    exit_dt = datetime.strptime(operation['exit_date'], '%Y-%m-%d %H:%M')
+                    
+                    entry_date_to_use = entry_dt.date()
+                    time_in_str = entry_dt.strftime('%H:%M:%S')
+                    exit_date_to_use = exit_dt.date()
+                    time_out_str = exit_dt.strftime('%H:%M:%S')
+                except (ValueError, TypeError):
+                    pass # Fallback to defaults
 
-            if st_prev != st_d: # Entry event
-                if start_date <= d <= end_date and d not in added_in:
-                    pu, _ = get_user_location_for_date(badge, d)
-                    in_rows_data.append([last, first, badge, company_default, role, pu or "", d, time_in_str])
-                    added_in.add(d)
-                elif d > end_date and next_in is None:
-                    next_in = (d, st_d, cmt_d)
-            if st_next != st_d: # Exit event
-                if start_date <= d <= end_date and d not in added_out:
-                    _, do = get_user_location_for_date(badge, d)
-                    out_rows_data.append([last, first, badge, company_default, role, do or "", d, time_out_str])
-                    added_out.add(d)
-                elif d > end_date and next_out is None:
-                    next_out = (d, st_d, cmt_d)
+            is_entry = not _is_working(st_prev)
+            is_exit = not _is_working(st_next)
 
-        if next_in and next_in[0] not in added_in:
-            d, st, cmt = next_in; pu, _ = get_user_location_for_date(badge, d)
-            time_in_str = _get_transport_time_str(st, "IN", cmt, custom_map)
-            in_rows_data.append([last, first, badge, company_default, role, pu or "", d, time_in_str])
-        if next_out and next_out[0] not in added_out:
-            d, st, cmt = next_out; _, do = get_user_location_for_date(badge, d)
-            time_out_str = _get_transport_time_str(st, "OUT", cmt, custom_map)
-            out_rows_data.append([last, first, badge, company_default, role, do or "", d, time_out_str])
+            if is_entry:
+                pu, _ = get_user_location_for_date(badge, d)
+                all_in_events.append([last, first, badge, company_default, role, pu or "", entry_date_to_use, time_in_str])
+            
+            if is_exit:
+                _, do = get_user_location_for_date(badge, d)
+                all_out_events.append([last, first, badge, company_default, role, do or "", exit_date_to_use, time_out_str])
+    
+    # Filter events by report date range and sort them
+    in_rows_data = [row for row in all_in_events if start_date <= row[6] <= end_date]
+    out_rows_data = [row for row in all_out_events if start_date <= row[6] <= end_date]
+    in_rows_data.sort(key=lambda x: (x[6], x[7], x[0]))
+    out_rows_data.sort(key=lambda x: (x[6], x[7], x[0]))
 
     # ---- 7) Write to xlsxwriter workbook ----
     output = io.BytesIO()
@@ -972,7 +1004,7 @@ def generate_transport_report(
                 time_obj = datetime.strptime(cell_data, '%H:%M:%S')
                 ws.write_datetime(i + row_start_index, col, time_obj, f_time)
             else:
-                 ws.write(i + row_start_index, col, cell_data, f_default)
+                ws.write(i + row_start_index, col, cell_data, f_default)
     
     ws.autofit()
     workbook.close()
@@ -1003,7 +1035,7 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
     worksheet.set_column('E:F', 20) # POSITION, CREW
     worksheet.set_column('G:H', 25) # PICKUP, INBOUND DATE
     worksheet.set_column('I:K', 15) # METHOD, LOCATION, DEPT TIME
-
+    worksheet.set_column('L:L', 2) # Spacer
     worksheet.set_column('M:M', 25) # NAME
     worksheet.set_column('N:P', 15) # DEPARTMENT, BADGE, POSITION
     worksheet.set_column('Q:R', 20) # CREW, OUTBOUND DATE
@@ -1023,37 +1055,18 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
     for col, header in enumerate(outbound_headers):
         worksheet.write(2, col + 12, header, header_format)
 
-    # --- Data Extraction Logic ---
-    ops_by_badge = {}
-    custom_map: Dict[str, Dict] = {}
+    # --- Data Extraction Logic (MODIFIED) ---
     try:
         from database_logic import get_shift_type_map, get_user_location_for_date, get_all_operations
-        
-        # 1. Fetch ALL operations from DB to find entry/exit datetimes
-        all_ops = get_all_operations()
-        for op in all_ops:
-            badge = op.get('badge')
-            if badge:
-                ops_by_badge.setdefault(badge, []).append(op)
-
-        custom_map = {k.strip().upper(): v for k, v in get_shift_type_map("RGM").items()}
-    except ImportError:
-        # Fallback if database_logic is not available
+        custom_map: Dict[str, Dict] = {k.strip().upper(): v for k, v in get_shift_type_map("RGM").items()}
+        ops_by_badge = {}
+        for op in get_all_operations():
+            b = op.get('badge')
+            if b: ops_by_badge.setdefault(b, []).append(op)
+    except Exception:
+        custom_map = {}
+        ops_by_badge = {}
         def get_user_location_for_date(b, d): return (None, None)
-    except Exception as e:
-        print(f"Database access error during report generation: {e}")
-        def get_user_location_for_date(b, d): return (None, None)
-
-    # Helper to find the correct operation for a given date
-    def find_op_for_date(badge: str, event_date_py: date) -> Optional[Dict]:
-        if badge not in ops_by_badge:
-            return None
-        event_date_str = event_date_py.isoformat()
-        # Find the operation record that contains the event date
-        for op in ops_by_badge[badge]:
-            if op['start_date'] <= event_date_str <= op['end_date']:
-                return op
-        return None
 
     try:
         wb_src = openpyxl.load_workbook(plan_staff_file, data_only=True)
@@ -1078,12 +1091,23 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
     def _is_working(s): return bool(s and s != "OFF")
 
     def _get_crew_from_name(name: str):
-        # Placeholder logic
         if 'day' in name.lower(): return "A 14/7 DAY"
         if 'night' in name.lower(): return "B 7/7/7 DAY/NIGHT"
         return "C 14/7 DAY"
 
-    in_row, out_row = 3, 3
+    def _find_operation_for_date(badge: str, target_date: date, user_ops: List[Dict]):
+        if not user_ops: return None
+        for op in user_ops:
+            try:
+                op_start = datetime.fromisoformat(op['start_date']).date()
+                op_end = datetime.fromisoformat(op['end_date']).date()
+                if op_start <= target_date <= op_end:
+                    return op
+            except (ValueError, TypeError):
+                continue
+        return None
+    
+    all_in_events, all_out_events = [], []
     dates_sorted = sorted(date_cols.values())
 
     for r_idx in range(2, ws_src.max_row + 1):
@@ -1093,6 +1117,7 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
         name = str(ws_src.cell(row=r_idx, column=header_map["NAME"]).value or "")
         department = str(ws_src.cell(row=r_idx, column=header_map["ROLE"]).value or "")
         position = "Technician" # Placeholder
+        user_operations = ops_by_badge.get(badge, [])
         
         per_day: Dict[date, Tuple[Optional[str], Optional[str]]] = {}
         for c, d in date_cols.items():
@@ -1100,78 +1125,71 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
             per_day[d] = (_norm_status(cell.value), (cell.comment.text if cell.comment else None))
 
         for i, d in enumerate(dates_sorted):
-            if not (start_date <= d <= end_date): continue
-            
             st_d, cmt_d = per_day.get(d, (None, None))
             if not _is_working(st_d): continue
 
-            prev_d = dates_sorted[i-1] if i > 0 else None
+            prev_d = dates_sorted[i-1] if i > 0 else (d - timedelta(days=1))
+            next_d = dates_sorted[i+1] if i < len(dates_sorted) - 1 else (d + timedelta(days=1))
             st_prev, _ = per_day.get(prev_d, (None, None))
+            st_next, _ = per_day.get(next_d, (None, None))
             
-            # INBOUND event: occurs on the first day of a work block
-            if st_prev != st_d:
+            operation = _find_operation_for_date(badge, d, user_operations)
+            entry_date_to_use, exit_date_to_use = d, d
+            time_in_str = _get_transport_time_str(st_d, "IN", cmt_d, custom_map)
+            time_out_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map)
+            
+            if operation and operation.get('entry_date') and operation.get('exit_date'):
+                try:
+                    entry_dt = datetime.strptime(operation['entry_date'], '%Y-%m-%d %H:%M')
+                    exit_dt = datetime.strptime(operation['exit_date'], '%Y-%m-%d %H:%M')
+                    entry_date_to_use = entry_dt.date()
+                    time_in_str = entry_dt.strftime('%H:%M:%S')
+                    exit_date_to_use = exit_dt.date()
+                    time_out_str = exit_dt.strftime('%H:%M:%S')
+                except (ValueError, TypeError):
+                    pass
+            
+            # INBOUND event
+            if not _is_working(st_prev):
                 pu, _ = get_user_location_for_date(badge, d)
                 crew = _get_crew_from_name(st_d if st_d else "")
-                
-                # --- MODIFIED TIME LOGIC ---
-                dept_time = None
-                operation = find_op_for_date(badge, d)
-                if operation and operation.get('entry_date'):
-                    try: # Stored as 'YYYY-MM-DD HH:MM'
-                        dept_time = datetime.strptime(operation['entry_date'], "%Y-%m-%d %H:%M")
-                    except (ValueError, TypeError):
-                        dept_time = None
-                
-                # Fallback to old logic if DB time is not available
-                if dept_time is None:
-                    time_str = _get_transport_time_str(st_d, "IN", cmt_d, custom_map)
-                    dept_time = datetime.strptime(time_str, "%H:%M:%S")
-                # --- END MODIFIED TIME LOGIC ---
-                
-                in_data = [in_row - 2, name, department, badge, position, crew, pu or "N/A", d, "RGM TRANSPORT", "PARAMARIBO", dept_time]
-                for col, val in enumerate(in_data):
-                    header_name = inbound_headers[col]
-                    if header_name == "IN BOUND DATE":
-                        worksheet.write_datetime(in_row, col, val, date_format)
-                    elif header_name == "DEPT TIME":
-                        worksheet.write_datetime(in_row, col, val, time_format)
-                    else:
-                        worksheet.write(in_row, col, val, data_format)
-                in_row += 1
+                dept_time = datetime.strptime(time_in_str, "%H:%M:%S")
+                all_in_events.append([name, department, badge, position, crew, pu or "N/A", entry_date_to_use, "RGM TRANSPORT", "PARAMARIBO", dept_time])
 
-            # OUTBOUND event: occurs on the last day of a work block
-            next_d = dates_sorted[i+1] if i < len(dates_sorted) - 1 else None
-            st_next, _ = per_day.get(next_d, (None, None))
-
-            if st_next != st_d:
+            # OUTBOUND event
+            if not _is_working(st_next):
                 _, do = get_user_location_for_date(badge, d)
                 crew = _get_crew_from_name(st_d if st_d else "")
+                dept_time = datetime.strptime(time_out_str, "%H:%M:%S")
+                all_out_events.append([name, department, badge, position, crew, exit_date_to_use, "RGM TRANSPORT", do or "PARAMARIBO", dept_time])
 
-                # --- MODIFIED TIME LOGIC ---
-                dept_time = None
-                operation = find_op_for_date(badge, d)
-                if operation and operation.get('exit_date'):
-                    try: # Stored as 'YYYY-MM-DD HH:MM'
-                        dept_time = datetime.strptime(operation['exit_date'], "%Y-%m-%d %H:%M")
-                    except (ValueError, TypeError):
-                        dept_time = None
+    # Filter and sort events
+    in_rows_data = [row for row in all_in_events if start_date <= row[6] <= end_date]
+    out_rows_data = [row for row in all_out_events if start_date <= row[5] <= end_date]
+    in_rows_data.sort(key=lambda x: (x[6], x[9], x[0]))
+    out_rows_data.sort(key=lambda x: (x[5], x[8], x[0]))
 
-                # Fallback to old logic
-                if dept_time is None:
-                    time_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map)
-                    dept_time = datetime.strptime(time_str, "%H:%M:%S")
-                # --- END MODIFIED TIME LOGIC ---
-
-                out_data = [name, department, badge, position, crew, d, "RGM TRANSPORT", do or "PARAMARIBO", dept_time]
-                for col, val in enumerate(out_data):
-                    header_name = outbound_headers[col]
-                    if header_name == "ROSEBEL SITE OUT BOUND DATE":
-                        worksheet.write_datetime(out_row, col + 12, val, date_format)
-                    elif header_name == "DEPT TIME":
-                        worksheet.write_datetime(out_row, col + 12, val, time_format)
-                    else:
-                         worksheet.write(out_row, col + 12, val, data_format)
-                out_row += 1
+    # Write filtered data to worksheet
+    for i, row_data in enumerate(in_rows_data):
+        row_to_write = [i + 1] + row_data
+        for col, val in enumerate(row_to_write):
+            header_name = inbound_headers[col]
+            if header_name == "IN BOUND DATE":
+                worksheet.write_datetime(i + 3, col, val, date_format)
+            elif header_name == "DEPT TIME":
+                worksheet.write_datetime(i + 3, col, val, time_format)
+            else:
+                worksheet.write(i + 3, col, val, data_format)
+                
+    for i, row_data in enumerate(out_rows_data):
+        for col, val in enumerate(row_data):
+            header_name = outbound_headers[col]
+            if header_name == "ROSEBEL SITE OUT BOUND DATE":
+                worksheet.write_datetime(i + 3, col + 12, val, date_format)
+            elif header_name == "DEPT TIME":
+                worksheet.write_datetime(i + 3, col + 12, val, time_format)
+            else:
+                worksheet.write(i + 3, col + 12, val, data_format)
 
     workbook.close()
     output.seek(0)
@@ -1294,8 +1312,8 @@ def check_db_sync_with_excel(plan_staff_file: str, source: str) -> Dict:
       {
         'users_in_excel': int,
         'users_in_db': int,
-        'missing_badges_in_db': [badge,...],     # En Excel pero NO en BD
-        'extra_badges_in_db': [badge,...],       # En BD pero NO en Excel
+        'missing_badges_in_db': [badge,...],      # En Excel pero NO en BD
+        'extra_badges_in_db': [badge,...],        # En BD pero NO en Excel
         'schedule_mismatches': [
           {'badge':..., 'date':'YYYY-MM-DD', 'excel': 'ON', 'db':'OFF'}, ...
         ]
@@ -1570,3 +1588,4 @@ def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]
 
     except Exception as e:
         return False, f"Refresh error: {e}"
+
