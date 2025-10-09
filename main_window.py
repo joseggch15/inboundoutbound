@@ -2854,7 +2854,7 @@ class MainWindow(QMainWindow):
         self.logged_user_label.setFont(lu_font)
         self.logged_user_label.setStyleSheet("padding: 0 12px;")
 
-        logout_button = QPushButton("🔒 Sign Out")
+        logout_button = QPushButton("🔒 Log Out")
         logout_button.setFixedWidth(150)
         logout_button.setProperty("variant", "text")
         logout_button.clicked.connect(self.handle_logout)
@@ -2965,7 +2965,7 @@ class AdminMainWindow(QMainWindow):
         self.logged_user_label.setFont(lu_font)
         self.logged_user_label.setStyleSheet("padding: 0 12px;")
 
-        logout_button = QPushButton("🔒 Sign Out")
+        logout_button = QPushButton("🔒 Log Out")
         logout_button.setFixedWidth(150)
         logout_button.setProperty("variant", "text")
         logout_button.clicked.connect(self.handle_logout)
