@@ -1023,13 +1023,37 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
     for col, header in enumerate(outbound_headers):
         worksheet.write(2, col + 12, header, header_format)
 
-    # --- Data Extraction Logic (similar to the original function) ---
+    # --- Data Extraction Logic ---
+    ops_by_badge = {}
+    custom_map: Dict[str, Dict] = {}
     try:
-        from database_logic import get_shift_type_map, get_user_location_for_date
-        custom_map: Dict[str, Dict] = {k.strip().upper(): v for k, v in get_shift_type_map("RGM").items()}
-    except Exception:
-        custom_map = {}
+        from database_logic import get_shift_type_map, get_user_location_for_date, get_all_operations
+        
+        # 1. Fetch ALL operations from DB to find entry/exit datetimes
+        all_ops = get_all_operations()
+        for op in all_ops:
+            badge = op.get('badge')
+            if badge:
+                ops_by_badge.setdefault(badge, []).append(op)
+
+        custom_map = {k.strip().upper(): v for k, v in get_shift_type_map("RGM").items()}
+    except ImportError:
+        # Fallback if database_logic is not available
         def get_user_location_for_date(b, d): return (None, None)
+    except Exception as e:
+        print(f"Database access error during report generation: {e}")
+        def get_user_location_for_date(b, d): return (None, None)
+
+    # Helper to find the correct operation for a given date
+    def find_op_for_date(badge: str, event_date_py: date) -> Optional[Dict]:
+        if badge not in ops_by_badge:
+            return None
+        event_date_str = event_date_py.isoformat()
+        # Find the operation record that contains the event date
+        for op in ops_by_badge[badge]:
+            if op['start_date'] <= event_date_str <= op['end_date']:
+                return op
+        return None
 
     try:
         wb_src = openpyxl.load_workbook(plan_staff_file, data_only=True)
@@ -1084,12 +1108,25 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
             prev_d = dates_sorted[i-1] if i > 0 else None
             st_prev, _ = per_day.get(prev_d, (None, None))
             
-            # INBOUND event
+            # INBOUND event: occurs on the first day of a work block
             if st_prev != st_d:
                 pu, _ = get_user_location_for_date(badge, d)
                 crew = _get_crew_from_name(st_d if st_d else "")
-                time_str = _get_transport_time_str(st_d, "IN", cmt_d, custom_map)
-                dept_time = datetime.strptime(time_str, "%H:%M:%S")
+                
+                # --- MODIFIED TIME LOGIC ---
+                dept_time = None
+                operation = find_op_for_date(badge, d)
+                if operation and operation.get('entry_date'):
+                    try: # Stored as 'YYYY-MM-DD HH:MM'
+                        dept_time = datetime.strptime(operation['entry_date'], "%Y-%m-%d %H:%M")
+                    except (ValueError, TypeError):
+                        dept_time = None
+                
+                # Fallback to old logic if DB time is not available
+                if dept_time is None:
+                    time_str = _get_transport_time_str(st_d, "IN", cmt_d, custom_map)
+                    dept_time = datetime.strptime(time_str, "%H:%M:%S")
+                # --- END MODIFIED TIME LOGIC ---
                 
                 in_data = [in_row - 2, name, department, badge, position, crew, pu or "N/A", d, "RGM TRANSPORT", "PARAMARIBO", dept_time]
                 for col, val in enumerate(in_data):
@@ -1102,15 +1139,28 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
                         worksheet.write(in_row, col, val, data_format)
                 in_row += 1
 
-            # OUTBOUND event
+            # OUTBOUND event: occurs on the last day of a work block
             next_d = dates_sorted[i+1] if i < len(dates_sorted) - 1 else None
             st_next, _ = per_day.get(next_d, (None, None))
 
             if st_next != st_d:
                 _, do = get_user_location_for_date(badge, d)
                 crew = _get_crew_from_name(st_d if st_d else "")
-                time_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map)
-                dept_time = datetime.strptime(time_str, "%H:%M:%S")
+
+                # --- MODIFIED TIME LOGIC ---
+                dept_time = None
+                operation = find_op_for_date(badge, d)
+                if operation and operation.get('exit_date'):
+                    try: # Stored as 'YYYY-MM-DD HH:MM'
+                        dept_time = datetime.strptime(operation['exit_date'], "%Y-%m-%d %H:%M")
+                    except (ValueError, TypeError):
+                        dept_time = None
+
+                # Fallback to old logic
+                if dept_time is None:
+                    time_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map)
+                    dept_time = datetime.strptime(time_str, "%H:%M:%S")
+                # --- END MODIFIED TIME LOGIC ---
 
                 out_data = [name, department, badge, position, crew, d, "RGM TRANSPORT", do or "PARAMARIBO", dept_time]
                 for col, val in enumerate(out_data):
@@ -1122,7 +1172,6 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
                     else:
                          worksheet.write(out_row, col + 12, val, data_format)
                 out_row += 1
-
 
     workbook.close()
     output.seek(0)

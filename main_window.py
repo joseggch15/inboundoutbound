@@ -17,6 +17,7 @@
 # --- NEW: Added "Remarks" feature to registration form and ShiftInfoCard. ---
 # --- MODIFIED: Added 'created_by' tracking for rotation history, filtering the view based on the logged-in user.
 # --- NEW: Added separate entry/exit date feature in registration form, with UI toggle and updated hover card info.
+# --- MODIFICATION: Added time inputs for Entry/Exit dates and updated Hover Card to display them.
 
 import json
 import os
@@ -748,18 +749,31 @@ class PlanStaffWidget(QWidget):
         self.entry_date_edit = QDateEdit(QDate.currentDate())
         self.entry_date_edit.setCalendarPopup(True)
         self.entry_date_edit.setDisplayFormat("dd/MM/yyyy")
+        
+        # MODIFIED: Add time input for entry
+        self.entry_time_edit = QTimeEdit(QTime(6, 0))
+        self.entry_time_edit.setDisplayFormat("HH:mm")
 
         self.exit_date_edit = QDateEdit(QDate.currentDate().addDays(14))
         self.exit_date_edit.setCalendarPopup(True)
         self.exit_date_edit.setDisplayFormat("dd/MM/yyyy")
+        
+        # MODIFIED: Add time input for exit
+        self.exit_time_edit = QTimeEdit(QTime(18, 0))
+        self.exit_time_edit.setDisplayFormat("HH:mm")
 
         self._travel_dates_container = QWidget()
         travel_layout = QHBoxLayout(self._travel_dates_container)
         travel_layout.setContentsMargins(0, 0, 0, 0)
         travel_layout.addWidget(QLabel("Entry Date:"))
         travel_layout.addWidget(self.entry_date_edit)
+        travel_layout.addWidget(QLabel("Time:"))
+        travel_layout.addWidget(self.entry_time_edit)
+        travel_layout.addSpacing(20)
         travel_layout.addWidget(QLabel("Exit Date:"))
         travel_layout.addWidget(self.exit_date_edit)
+        travel_layout.addWidget(QLabel("Time:"))
+        travel_layout.addWidget(self.exit_time_edit)
         travel_layout.addStretch()
         self._travel_dates_container.setVisible(False)
 
@@ -817,6 +831,9 @@ class PlanStaffWidget(QWidget):
             # For convenience, sync the dates from the main period when shown
             self.entry_date_edit.setDate(self.start_date_edit.date())
             self.exit_date_edit.setDate(self.end_date_edit.date())
+            # MODIFIED: Set default times as well
+            self.entry_time_edit.setTime(QTime(6, 0))
+            self.exit_time_edit.setTime(QTime(18, 0))
 
 
     def _rebuild_registration_grid(self, columns: int):
@@ -1250,26 +1267,32 @@ class PlanStaffWidget(QWidget):
         if in_time and out_time:
             content_lines.append(f"<p {schedule_style}>⏰ {in_time} – {out_time}</p>")
 
-        # NEW: Add travel dates from the operation record
+        # MODIFIED: Add travel dates and exact times from the operation record
         if operation_info:
-            entry_d = operation_info.get('entry_date', '')
-            exit_d = operation_info.get('exit_date', '')
-            if entry_d and exit_d:
-                # Find IN/OUT times for those specific dates
-                entry_day_schedule = db.get_schedule_map_for_range(badge, pydate.fromisoformat(entry_d), pydate.fromisoformat(entry_d), self.source)
-                exit_day_schedule = db.get_schedule_map_for_range(badge, pydate.fromisoformat(exit_d), pydate.fromisoformat(exit_d), self.source)
-                
-                entry_info = entry_day_schedule.get(entry_d)
-                exit_info = exit_day_schedule.get(exit_d)
-                
-                entry_time = excel._get_transport_time_str(entry_info.get('status') if entry_info else 'ON', 'IN', None, self._custom_shift_map)
-                exit_time = excel._get_transport_time_str(exit_info.get('status') if exit_info else 'ON', 'OUT', None, self._custom_shift_map)
+            entry_dt_str = operation_info.get('entry_date', '')
+            exit_dt_str = operation_info.get('exit_date', '')
+            
+            # Check for the presence of time in the string
+            if entry_dt_str and exit_dt_str and ' ' in entry_dt_str:
+                try:
+                    # Parse 'YYYY-MM-DD HH:MM'
+                    entry_dt = datetime.strptime(entry_dt_str, '%Y-%m-%d %H:%M')
+                    exit_dt = datetime.strptime(exit_dt_str, '%Y-%m-%d %H:%M')
 
-                travel_html = "<div style='border-top: 1px solid #4B5563; padding-top: 6px; margin-top: 8px;'>"
-                travel_html += f"<p {schedule_style}>✈️ <b>Entry:</b> {entry_d} at {entry_time}</p>"
-                travel_html += f"<p {schedule_style}>✈️ <b>Exit:</b> {exit_d} at {exit_time}</p>"
-                travel_html += "</div>"
-                content_lines.append(travel_html)
+                    entry_date_display = entry_dt.strftime('%Y-%m-%d')
+                    entry_time_display = entry_dt.strftime('%H:%M')
+
+                    exit_date_display = exit_dt.strftime('%Y-%m-%d')
+                    exit_time_display = exit_dt.strftime('%H:%M')
+
+                    travel_html = "<div style='border-top: 1px solid #4B5563; padding-top: 6px; margin-top: 8px;'>"
+                    travel_html += f"<p {schedule_style}>✈️ <b>Entry:</b> {entry_date_display} at {entry_time_display}</p>"
+                    travel_html += f"<p {schedule_style}>✈️ <b>Exit:</b> {exit_date_display} at {exit_time_display}</p>"
+                    travel_html += "</div>"
+                    content_lines.append(travel_html)
+                except ValueError:
+                    # Fallback if parsing fails, should not happen with new save logic
+                    pass
 
 
         # Logistic Notes (only if they exist)
@@ -1348,20 +1371,25 @@ class PlanStaffWidget(QWidget):
         dropoff = self.dropoff_combo.currentData() or None
         remark = self.remarks_input.text().strip() or None
         
-        # NEW: read travel dates if checkbox is ticked
-        entry_date = None
-        exit_date = None
+        # MODIFIED: read travel dates and times if checkbox is ticked
+        entry_datetime = None
+        exit_datetime = None
         if self.travel_dates_check.isChecked():
             entry_date = self.entry_date_edit.date().toPyDate()
-            exit_date = self.exit_date_edit.date().toPyDate()
+            entry_time = self.entry_time_edit.time().toPyTime()
+            entry_datetime = datetime.combine(entry_date, entry_time)
             
-            if entry_date > exit_date:
+            exit_date = self.exit_date_edit.date().toPyDate()
+            exit_time = self.exit_time_edit.time().toPyTime()
+            exit_datetime = datetime.combine(exit_date, exit_time)
+            
+            if entry_datetime > exit_datetime:
                 mark_error(self.entry_date_edit, True)
                 mark_error(self.exit_date_edit, True)
-                QMessageBox.warning(self, "Date Error", "Entry date cannot be after Exit date.")
+                QMessageBox.warning(self, "Date Error", "Entry date/time cannot be after Exit date/time.")
                 return
 
-            if entry_date > start_date or exit_date < end_date:
+            if entry_datetime.date() > start_date or exit_datetime.date() < end_date:
                 reply = QMessageBox.question(self, "Confirm Dates", 
                 "The travel period does not fully encompass the work period. This is unusual. Are you sure you want to proceed?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
@@ -1437,7 +1465,7 @@ class PlanStaffWidget(QWidget):
 
         # --- DB (SSoT) ---
         if schedule_status is not None:
-            # Save the operation with the new travel dates
+            # MODIFIED: Save the operation with new datetimes
             db.add_operation(
                 username=username,
                 role=role,
@@ -1445,8 +1473,8 @@ class PlanStaffWidget(QWidget):
                 start_date=start_date,
                 end_date=end_date,
                 created_by=self.logged_username,
-                entry_date=entry_date,   # Pass new dates
-                exit_date=exit_date,     # Pass new dates
+                entry_date=entry_datetime,
+                exit_date=exit_datetime,
             )
             db.upsert_schedule_range(
                 badge,

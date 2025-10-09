@@ -707,7 +707,10 @@ def list_user_default_locations(source: str) -> List[Dict]:
 # ---------------------------------------------------------------------
 # Operations & schedules
 # ---------------------------------------------------------------------
-def add_operation(username: str, role: str, badge: str, start_date: date, end_date: date, created_by: str, entry_date: Optional[date] = None, exit_date: Optional[date] = None):
+def add_operation(username: str, role: str, badge: str, start_date: date, end_date: date, created_by: str, entry_date: Optional[datetime] = None, exit_date: Optional[datetime] = None):
+    """
+    MODIFIED: Handles datetime for entry/exit to store time.
+    """
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
@@ -716,8 +719,8 @@ def add_operation(username: str, role: str, badge: str, start_date: date, end_da
             username, role, badge,
             start_date.isoformat(), end_date.isoformat(),
             created_by,
-            entry_date.isoformat() if entry_date else None,
-            exit_date.isoformat() if exit_date else None
+            entry_date.strftime('%Y-%m-%d %H:%M') if entry_date else None,
+            exit_date.strftime('%Y-%m-%d %H:%M') if exit_date else None
         ),
     )
     conn.commit()
@@ -1091,4 +1094,3 @@ def delete_shift_type(type_id: int) -> Tuple[bool, str, Optional[str], Optional[
         return False, f"Database error: {e}", None, None
     finally:
         conn.close()
-
