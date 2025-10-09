@@ -15,6 +15,8 @@
 # --- NEW: Added filter panels to all relevant tabs as per specifications. ---
 # --- MODIFICATION: Added color chips to Shift Types table and Status/Shift dropdown for better color visibility. ---
 # --- NEW: Added "Remarks" feature to registration form and ShiftInfoCard. ---
+# --- MODIFIED: Added 'created_by' tracking for rotation history, filtering the view based on the logged-in user.
+# --- NEW: Added separate entry/exit date feature in registration form, with UI toggle and updated hover card info.
 
 import json
 import os
@@ -112,7 +114,6 @@ class ShiftInfoCard(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
-      #  self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)#
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
         # Style according to the new design rules
@@ -120,11 +121,9 @@ class ShiftInfoCard(QLabel):
         self.setStyleSheet(
             """
             QLabel {
-                /* Your changes to this color will now work */
-                background-color: #E3F2FD; /* Example: light blue */
-                
-                color: #111827;
-                border: 1px solid #E5E7EB;
+                background-color: #374151; /* Gris oscuro */
+                color: #FFFFFF;             /* LETRA BLANCA PARA EL TEXTO */
+                border: 1px solid #4B5563;  /* Borde ligeramente más claro */
                 border-radius: 8px;
                 padding: 12px;
                 font-size: 13px;
@@ -247,12 +246,9 @@ def _clean(value) -> str:
     return s
 
 
-def _weekday_abbrev_en(d: pydate) -> str:
-    """
-    English weekday abbreviations with trailing period for Schedule Preview headers.
-    Monday=0 ... Sunday=6
-    """
-    names = ["Mon", "Tues", "Wed", "Thurs", "Fri", "Sat", "Sun"]
+def _weekday_full_en(d: pydate) -> str:
+    """English full weekday names."""
+    names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     return names[d.weekday()]
 
 
@@ -622,7 +618,7 @@ class PlanStaffWidget(QWidget):
             QHeaderView.ResizeMode.ResizeToContents
         )
         self.frozen_table.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+             Qt.ScrollBarPolicy.ScrollBarAlwaysOn
         )
         self.frozen_table.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding
@@ -662,7 +658,7 @@ class PlanStaffWidget(QWidget):
         self.report_end_date.setDisplayFormat("dd/MM/yyyy")
         report_layout.addWidget(self.report_end_date)
 
-        report_button = QPushButton("🚀 Generate Report")
+        report_button = QPushButton("🚀 Generate Inbound Outbound Report")
         report_button.clicked.connect(self.generate_report)
         report_button.setProperty("variant", "primary")
         report_layout.addWidget(report_button)
@@ -740,11 +736,33 @@ class PlanStaffWidget(QWidget):
         self.remarks_input = QLineEdit()
         self.remarks_input.setPlaceholderText("Optional: add a note for this period...")
 
-
         # Restored blue Save button (center action bar)
-        self.save_button = QPushButton("Save Changes to DB Excel")
+        self.save_button = QPushButton("💾 Save Changes to DB Excel")
         self.save_button.clicked.connect(self.save_plan_changes)
         self.save_button.setProperty("variant", "primary")
+        
+        # NEW: Separate travel dates controls
+        self.travel_dates_check = QCheckBox("Travel dates are different from work period")
+        self.travel_dates_check.toggled.connect(self._toggle_travel_dates_visibility)
+
+        self.entry_date_edit = QDateEdit(QDate.currentDate())
+        self.entry_date_edit.setCalendarPopup(True)
+        self.entry_date_edit.setDisplayFormat("dd/MM/yyyy")
+
+        self.exit_date_edit = QDateEdit(QDate.currentDate().addDays(14))
+        self.exit_date_edit.setCalendarPopup(True)
+        self.exit_date_edit.setDisplayFormat("dd/MM/yyyy")
+
+        self._travel_dates_container = QWidget()
+        travel_layout = QHBoxLayout(self._travel_dates_container)
+        travel_layout.setContentsMargins(0, 0, 0, 0)
+        travel_layout.addWidget(QLabel("Entry Date:"))
+        travel_layout.addWidget(self.entry_date_edit)
+        travel_layout.addWidget(QLabel("Exit Date:"))
+        travel_layout.addWidget(self.exit_date_edit)
+        travel_layout.addStretch()
+        self._travel_dates_container.setVisible(False)
+
 
         # Field containers (label on top)
         def field(title: str, w: QWidget) -> QWidget:
@@ -776,6 +794,10 @@ class PlanStaffWidget(QWidget):
         self._register_grid.setVerticalSpacing(10)
         self.main_form_layout.addLayout(self._register_grid)
 
+        # Add new travel date controls after the grid
+        self.main_form_layout.addWidget(self.travel_dates_check)
+        self.main_form_layout.addWidget(self._travel_dates_container)
+
         # Save bar (full width)
         self._save_bar = QHBoxLayout()
         self._save_bar.addStretch()
@@ -787,6 +809,15 @@ class PlanStaffWidget(QWidget):
         self.load_shift_type_options()
 
         return container
+
+    def _toggle_travel_dates_visibility(self, checked: bool):
+        """Shows or hides the entry/exit date fields based on the checkbox."""
+        self._travel_dates_container.setVisible(checked)
+        if checked:
+            # For convenience, sync the dates from the main period when shown
+            self.entry_date_edit.setDate(self.start_date_edit.date())
+            self.exit_date_edit.setDate(self.end_date_edit.date())
+
 
     def _rebuild_registration_grid(self, columns: int):
         if columns < 1:
@@ -945,7 +976,7 @@ class PlanStaffWidget(QWidget):
         # Schedule (date) headers -> one line with date + weekday (abbrev)
         schedule_headers = []
         for d in date_cols:
-            schedule_headers.append(f"{d.isoformat()} {_weekday_abbrev_en(d)}")
+            schedule_headers.append(f"{d.isoformat()}\n{_weekday_full_en(d)}")
         self._date_col_dates = list(date_cols)  # keep exact order
 
         # Build tables
@@ -1176,6 +1207,15 @@ class PlanStaffWidget(QWidget):
         day_info = schedule_data.get(hover_date.isoformat())
         pickup, dropoff = db.get_user_location_for_date(badge, hover_date)
 
+        # NEW: Fetch the operation record to get the correct travel dates
+        operations = db.get_operations_filtered(
+            text=badge, d_from=hover_date, d_to=hover_date
+        )
+        # Filter for exact badge match and take the latest one if multiple overlap
+        operations = [op for op in operations if op.get("badge") == badge]
+        operation_info = operations[0] if operations else None
+
+
         if not day_info:
             final_html = "<p style='margin:0;'>Information not available</p>"
             self._shift_info_card.show_info(global_cell_rect, final_html)
@@ -1202,20 +1242,42 @@ class PlanStaffWidget(QWidget):
             shift_title = "OFF"
 
         # Build compact HTML content
-        title_style = "style='margin: 0 0 2px 0; font-size: 14px; color: #111827; font-weight: 600;'"
-        schedule_style = "style='margin: 0; font-size: 13px; color: #6B7280;'"
+        title_style = "style='margin: 0 0 2px 0; font-size: 14px; color: #FFFFFF; font-weight: 600;'"
+        schedule_style = "style='margin: 0; font-size: 13px; color: #FFFFFF;'"
 
         content_lines = [f"<p {title_style}>{shift_title}</p>"]
 
         if in_time and out_time:
             content_lines.append(f"<p {schedule_style}>⏰ {in_time} – {out_time}</p>")
 
+        # NEW: Add travel dates from the operation record
+        if operation_info:
+            entry_d = operation_info.get('entry_date', '')
+            exit_d = operation_info.get('exit_date', '')
+            if entry_d and exit_d:
+                # Find IN/OUT times for those specific dates
+                entry_day_schedule = db.get_schedule_map_for_range(badge, pydate.fromisoformat(entry_d), pydate.fromisoformat(entry_d), self.source)
+                exit_day_schedule = db.get_schedule_map_for_range(badge, pydate.fromisoformat(exit_d), pydate.fromisoformat(exit_d), self.source)
+                
+                entry_info = entry_day_schedule.get(entry_d)
+                exit_info = exit_day_schedule.get(exit_d)
+                
+                entry_time = excel._get_transport_time_str(entry_info.get('status') if entry_info else 'ON', 'IN', None, self._custom_shift_map)
+                exit_time = excel._get_transport_time_str(exit_info.get('status') if exit_info else 'ON', 'OUT', None, self._custom_shift_map)
+
+                travel_html = "<div style='border-top: 1px solid #4B5563; padding-top: 6px; margin-top: 8px;'>"
+                travel_html += f"<p {schedule_style}>✈️ <b>Entry:</b> {entry_d} at {entry_time}</p>"
+                travel_html += f"<p {schedule_style}>✈️ <b>Exit:</b> {exit_d} at {exit_time}</p>"
+                travel_html += "</div>"
+                content_lines.append(travel_html)
+
+
         # Logistic Notes (only if they exist)
         pickup_clean = _clean(pickup)
         dropoff_clean = _clean(dropoff)
 
         if pickup_clean or dropoff_clean:
-            logistics_html = "<div style='border-top: 1px solid #E5E7EB; padding-top: 6px; margin-top: 8px;'>"
+            logistics_html = "<div style='border-top: 1px solid #4B5563; padding-top: 6px; margin-top: 8px;'>"
             logistics_html += f"<p {schedule_style}>📍 <b>Pick Up:</b> {pickup_clean or 'Not assigned'}</p>"
             logistics_html += f"<p {schedule_style}>📍 <b>Drop Off:</b> {dropoff_clean or 'Not assigned'}</p>"
             logistics_html += "</div>"
@@ -1223,9 +1285,9 @@ class PlanStaffWidget(QWidget):
 
         # NEW: Add remarks section
         if remark:
-            remark_style = "style='margin: 0; font-size: 13px; color: #573a00;'" # Dark amber text
+            remark_style = "style='margin: 0; font-size: 13px; color: #FFFFFF;'"
             # Soft yellow background for the remarks block
-            remark_block_style = "style='background-color: #FEF3C7; border-radius: 4px; padding: 6px 8px; margin-top: 8px;'"
+            remark_block_style = "style='border-top: 1px solid #1565C0; padding-top: 8px; margin-top: 8px;'"
             remark_html = f"<div {remark_block_style}>"
             remark_html += f"<p {remark_style}><b>Remark:</b> {remark}</p>"
             remark_html += "</div>"
@@ -1271,6 +1333,9 @@ class PlanStaffWidget(QWidget):
         mark_error(self.role_display, False)
         mark_error(self.start_date_edit, False)
         mark_error(self.end_date_edit, False)
+        mark_error(self.entry_date_edit, False)
+        mark_error(self.exit_date_edit, False)
+
 
         username = self.user_selector_combo.currentText()
         badge = self.badge_display.text()
@@ -1282,6 +1347,26 @@ class PlanStaffWidget(QWidget):
         pickup = self.pickup_combo.currentData() or None
         dropoff = self.dropoff_combo.currentData() or None
         remark = self.remarks_input.text().strip() or None
+        
+        # NEW: read travel dates if checkbox is ticked
+        entry_date = None
+        exit_date = None
+        if self.travel_dates_check.isChecked():
+            entry_date = self.entry_date_edit.date().toPyDate()
+            exit_date = self.exit_date_edit.date().toPyDate()
+            
+            if entry_date > exit_date:
+                mark_error(self.entry_date_edit, True)
+                mark_error(self.exit_date_edit, True)
+                QMessageBox.warning(self, "Date Error", "Entry date cannot be after Exit date.")
+                return
+
+            if entry_date > start_date or exit_date < end_date:
+                reply = QMessageBox.question(self, "Confirm Dates", 
+                "The travel period does not fully encompass the work period. This is unusual. Are you sure you want to proceed?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+                if reply == QMessageBox.StandardButton.No:
+                    return
 
 
         if not username or username == "-- Select a user --":
@@ -1352,7 +1437,17 @@ class PlanStaffWidget(QWidget):
 
         # --- DB (SSoT) ---
         if schedule_status is not None:
-            db.add_operation(username, role, badge, start_date, end_date)
+            # Save the operation with the new travel dates
+            db.add_operation(
+                username=username,
+                role=role,
+                badge=badge,
+                start_date=start_date,
+                end_date=end_date,
+                created_by=self.logged_username,
+                entry_date=entry_date,   # Pass new dates
+                exit_date=exit_date,     # Pass new dates
+            )
             db.upsert_schedule_range(
                 badge,
                 start_date,
@@ -1672,8 +1767,13 @@ class PlanStaffWidget(QWidget):
 # Widget: Rotation History (own tab, without ID column)
 # -------------------------------------------------------------
 class RotationHistoryWidget(QWidget):
-    def __init__(self):
+    def __init__(self, created_by: str | None = None):
+        """
+        Si created_by es None => modo 'admin' (ve todo).
+        En caso contrario, solo muestra operaciones creadas por ese usuario.
+        """
         super().__init__()
+        self._created_by = (created_by or "").strip() or None
         self._filter_state = {}
         self._debounce_timer = QTimer(self)
         self._debounce_timer.setSingleShot(True)
@@ -1703,7 +1803,7 @@ class RotationHistoryWidget(QWidget):
         self.date_to.dateChanged.connect(self._request_refresh)
 
         self.active_today_check = QCheckBox("Active today")
-        self.active_today_check.stateChanged.connect(self._toggle_active_today)
+        self.active_today_check.toggled.connect(self._toggle_active_today)
 
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["Start Date (desc)", "Name (asc)"])
@@ -1737,11 +1837,10 @@ class RotationHistoryWidget(QWidget):
     def _request_refresh(self):
         self._debounce_timer.start(DEBOUNCE_MS)
 
-    def _toggle_active_today(self, state):
-        is_checked = state == Qt.CheckState.Checked.value
-        self.date_from.setEnabled(not is_checked)
-        self.date_to.setEnabled(not is_checked)
-        if is_checked:
+    def _toggle_active_today(self, checked):
+        self.date_from.setEnabled(not checked)
+        self.date_to.setEnabled(not checked)
+        if checked:
             today = QDate.currentDate()
             self.date_from.setDate(today)
             self.date_to.setDate(today)
@@ -1752,9 +1851,9 @@ class RotationHistoryWidget(QWidget):
         current_role = self.role_combo.currentText()
         self.role_combo.clear()
         self.role_combo.addItem("All Roles", None)
-        # Get distinct roles from all operations
-        all_records = db.get_all_operations()
-        roles = sorted(list(set(r['role'] for r in all_records if r.get('role'))))
+        # roles solo de operaciones creadas por el usuario (si aplica)
+        all_records = db.get_operations_filtered(created_by=self._created_by)
+        roles = sorted(list(set(r["role"] for r in all_records if r.get("role"))))
         self.role_combo.addItems(roles)
         
         idx = self.role_combo.findText(current_role)
@@ -1786,18 +1885,17 @@ class RotationHistoryWidget(QWidget):
 
         d_from = self.date_from.date().toPyDate()
         d_to = self.date_to.date().toPyDate()
-        # If active_today is checked, the dates are already set correctly.
-        # If not, we still use the date edit values for range filtering.
         
         records = db.get_operations_filtered(
             text=self._filter_state['text'],
             role=self._filter_state['role'],
             d_from=d_from,
             d_to=d_to,
-            sort_by=self._filter_state['sort']
+            sort_by=self._filter_state['sort'],
+            created_by=self._created_by,  # NUEVO: solo mis rotaciones
         )
         
-        headers = ["Name", "Role", "Badge", "Start Date", "End Date"]
+        headers = ["Name", "Role", "Badge", "Start Date", "End Date", "Created By"]
         self.table.setRowCount(len(records))
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
@@ -1808,6 +1906,7 @@ class RotationHistoryWidget(QWidget):
             self.table.setItem(row_idx, 2, QTableWidgetItem(record["badge"]))
             self.table.setItem(row_idx, 3, QTableWidgetItem(record["start_date"]))
             self.table.setItem(row_idx, 4, QTableWidgetItem(record["end_date"]))
+            self.table.setItem(row_idx, 5, QTableWidgetItem(record.get("created_by", "")))
 
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
@@ -2749,7 +2848,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.plan_widget, "📅 Plan Staff & Reports")
 
         # 2) Rotation History (new tab, no ID column)
-        self.rotation_widget = RotationHistoryWidget()
+        self.rotation_widget = RotationHistoryWidget(created_by=self.logged_username)  # ← NUEVO: solo mis registros
         tabs.addTab(self.rotation_widget, "🔁 Rotation History")
         # Refresh rotation history whenever plan saves a rotation
         self.plan_widget.rotation_changed.connect(self.rotation_widget.refresh_data)
@@ -2870,7 +2969,7 @@ class AdminMainWindow(QMainWindow):
         self.tabs.addTab(self.nm_plan, "📅 Newmont Plan Staff")
 
         # 5) Rotation History (global; no ID column)
-        self.rotation_history = RotationHistoryWidget()
+        self.rotation_history = RotationHistoryWidget(created_by=None) # AHORA (modo admin = None → sin filtro)
         self.tabs.addTab(self.rotation_history, "🔁 Rotation History")
         # Refresh when either plan tab writes a rotation
         self.rgm_plan.rotation_changed.connect(self.rotation_history.refresh_data)
@@ -2935,4 +3034,3 @@ class AdminMainWindow(QMainWindow):
     def handle_logout(self):
         self.logout_signal.emit()
         self.close()
-

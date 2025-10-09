@@ -1,7 +1,7 @@
 # Basado y extendido a partir del módulo original. Referencia: :contentReference[oaicite:0]{index=0}
 import sqlite3
 import json
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from typing import Tuple, List, Dict, Optional
 
 DB_FILE = "transporte_operaciones.db"
@@ -113,10 +113,27 @@ def setup_database():
             role TEXT,
             badge TEXT,
             start_date TEXT NOT NULL,
-            end_date TEXT NOT NULL
+            end_date TEXT NOT NULL,
+            created_by TEXT,
+            entry_date TEXT,
+            exit_date TEXT
         )
     """
     )
+    # --- Soft migrations for new columns ---
+    try:
+        cursor.execute("ALTER TABLE operations ADD COLUMN created_by TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE operations ADD COLUMN entry_date TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE operations ADD COLUMN exit_date TEXT")
+    except sqlite3.OperationalError:
+        pass
+
 
     # -------------------------
     # schedules (estado día a día)
@@ -192,6 +209,7 @@ def setup_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,
             source TEXT NOT NULL,
+            settings_json TEXT,
             UNIQUE(username, source)
         )
     """)
@@ -604,9 +622,7 @@ def delete_location_admin(loc_id: int) -> Tuple[bool, str]:
         conn.close()
 
 
-from datetime import date as _date
-
-def assign_user_location_range(badge: str, start_date: _date, end_date: _date,
+def assign_user_location_range(badge: str, start_date: date, end_date: date,
                                pickup: Optional[str], dropoff: Optional[str],
                                is_default: int = 0) -> None:
     """Inserta una asignación de pickup/dropoff para un rango de fechas."""
@@ -637,7 +653,7 @@ def set_user_default_locations(badge: str, pickup: Optional[str], dropoff: Optio
     conn.commit()
     conn.close()
 
-def get_user_location_for_date(badge: str, d: _date) -> Tuple[Optional[str], Optional[str]]:
+def get_user_location_for_date(badge: str, d: date) -> Tuple[Optional[str], Optional[str]]:
     """Busca primero una asignación de rango que cubra la fecha; si no existe, cae al default."""
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
@@ -691,12 +707,18 @@ def list_user_default_locations(source: str) -> List[Dict]:
 # ---------------------------------------------------------------------
 # Operations & schedules
 # ---------------------------------------------------------------------
-def add_operation(username: str, role: str, badge: str, start_date: date, end_date: date):
+def add_operation(username: str, role: str, badge: str, start_date: date, end_date: date, created_by: str, entry_date: Optional[date] = None, exit_date: Optional[date] = None):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO operations (username, role, badge, start_date, end_date) VALUES (?, ?, ?, ?, ?)",
-        (username, role, badge, start_date.isoformat(), end_date.isoformat()),
+        "INSERT INTO operations (username, role, badge, start_date, end_date, created_by, entry_date, exit_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            username, role, badge,
+            start_date.isoformat(), end_date.isoformat(),
+            created_by,
+            entry_date.isoformat() if entry_date else None,
+            exit_date.isoformat() if exit_date else None
+        ),
     )
     conn.commit()
     conn.close()
@@ -820,19 +842,19 @@ def get_all_operations() -> List[Dict]:
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, username, role, badge, start_date, end_date FROM operations ORDER BY id DESC"
+        "SELECT id, username, role, badge, start_date, end_date, created_by, entry_date, exit_date FROM operations ORDER BY id DESC"
     )
     res = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return res
 
-def get_operations_filtered(text: Optional[str], role: Optional[str], d_from: Optional[date], d_to: Optional[date], sort_by: str = 'start_date_desc') -> List[Dict]:
+def get_operations_filtered(text: Optional[str] = None, role: Optional[str] = None, d_from: Optional[date] = None, d_to: Optional[date] = None, sort_by: str = 'start_date_desc', created_by: Optional[str] = None) -> List[Dict]:
     """ Get filtered list of operations history. """
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    query = "SELECT id, username, role, badge, start_date, end_date FROM operations"
+    query = "SELECT id, username, role, badge, start_date, end_date, created_by, entry_date, exit_date FROM operations"
     conditions = []
     params: List = []
 
@@ -848,6 +870,10 @@ def get_operations_filtered(text: Optional[str], role: Optional[str], d_from: Op
         # Overlap logic: (StartA <= EndB) and (EndA >= StartB)
         conditions.append("(start_date <= ? AND end_date >= ?)")
         params.extend([d_to.isoformat(), d_from.isoformat()])
+    
+    if created_by:
+        conditions.append("created_by = ?")
+        params.append(created_by)
 
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
@@ -1065,3 +1091,4 @@ def delete_shift_type(type_id: int) -> Tuple[bool, str, Optional[str], Optional[
         return False, f"Database error: {e}", None, None
     finally:
         conn.close()
+
