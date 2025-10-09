@@ -39,7 +39,7 @@ class LoginWindow(QDialog):
     """Sign-in dialog."""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Sign In")
+        self.setWindowTitle("Log In")
         self.setModal(True)
 
         # Valores que leerá main.py tras un login exitoso
@@ -64,7 +64,7 @@ class LoginWindow(QDialog):
         ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
         cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         if ok_btn:
-            ok_btn.setText("Sign in")
+            ok_btn.setText("Log in")
             ok_btn.setProperty("variant", "primary")
         if cancel_btn:
             cancel_btn.setText("Cancel")

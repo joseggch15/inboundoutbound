@@ -11,7 +11,7 @@ from ui.theme import apply_app_theme
 
 class LauncherWindow(QWidget):
     """
-    Initial window with a single Sign In button.
+    Initial window with a single Log In button.
     """
     def __init__(self):
         super().__init__()
@@ -30,7 +30,7 @@ class LauncherWindow(QWidget):
         font = title.font(); font.setPointSize(20); font.setBold(True)
         title.setFont(font)
 
-        login_button = QPushButton("Sign In")
+        login_button = QPushButton("Log In")
         login_button.setFixedSize(220, 48)
         login_button.setProperty("variant", "primary")
 
