@@ -14,6 +14,14 @@
 # MODIFICACIÓN: La generación de reportes de transporte ahora
 # consulta la tabla 'operations' para usar las fechas y horas
 # de entrada/salida personalizadas si están disponibles.
+#
+# NUEVO: Agregada la función para generar el reporte de períodos
+# de estadía onsite para la gestión de campamentos.
+#
+# CORRECCIÓN (Onsite Stay Report): La lógica de cálculo de períodos
+# ahora analiza todas las fechas del Excel para identificar los
+# bloques de trabajo completos antes de filtrar por el rango del
+# reporte, solucionando la inconsistencia en las fechas de inicio.
 # ============================================================
 
 from __future__ import annotations
@@ -445,7 +453,7 @@ def update_plan_staff_excel(
 # ============================================================
 
 def find_conflicts(plan_staff_file: str, username: str, badge: str,
-                   schedule_start: date, schedule_end: date) -> List[Dict]:
+                  schedule_start: date, schedule_end: date) -> List[Dict]:
     """
     Devuelve [{'date': date, 'existing': 'ON/ON NS/OFF/...'}] si hay valores ya escritos en el rango.
     Busca fila por BADGE y luego por NAME, igual que update_plan_staff_excel.
@@ -993,7 +1001,7 @@ def generate_transport_report(
                 ws.write_datetime(i + row_start_index, col, time_obj, f_time)
             else:
                 ws.write(i + row_start_index, col, cell_data, f_default)
-                
+            
     for i, row_data in enumerate(out_rows_data):
         ws.write(i + row_start_index, 10, i + 1, f_default)
         for j, cell_data in enumerate(row_data):
@@ -1180,7 +1188,7 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
                 worksheet.write_datetime(i + 3, col, val, time_format)
             else:
                 worksheet.write(i + 3, col, val, data_format)
-                
+            
     for i, row_data in enumerate(out_rows_data):
         for col, val in enumerate(row_data):
             header_name = outbound_headers[col]
@@ -1233,6 +1241,134 @@ def apply_shift_type_update_to_excel(plan_staff_file: str, source: str, old_code
         return True, "Excel updated with new shift code/color."
     except Exception as e:
         return False, f"Excel update error: {e}"
+
+
+# ============================================================
+# NEW: Onsite Stay Period Report
+# ============================================================
+
+def generate_stay_period_report(plan_staff_file: str, start_date: date, end_date: date) -> Tuple[bytes, str]:
+    """
+    Generates an Excel report detailing the continuous onsite stay periods for each employee.
+    A stay period is a consecutive block of working days (not OFF or blank).
+    """
+    try:
+        wb_src = openpyxl.load_workbook(plan_staff_file, data_only=True)
+        ws_src = wb_src.active
+    except Exception as e:
+        return b"", f"Could not read Plan Staff file: {e}"
+
+    # --- 1. Map headers and dates ---
+    header_map: Dict[str, int] = {str(c.value): c.column for c in ws_src[1] if c.value}
+    date_cols: Dict[date, int] = {c.value.date(): c.column for c in ws_src[1] if isinstance(c.value, datetime)}
+
+    # --- 2. Determine template variant (RGM/Newmont) to get Name/Role ---
+    is_rgm = all(h in header_map for h in ("NAME", "ROLE"))
+    is_newmont = all(h in header_map for h in ("Last Name", "First Name", "Discipline"))
+
+    if not (is_rgm or is_newmont):
+        return b"", "Unsupported Plan Staff format. Could not find required Name/Role columns."
+
+    def get_employee_details(row_idx: int) -> Tuple[str, str]:
+        if is_rgm:
+            name = str(ws_src.cell(row=row_idx, column=header_map["NAME"]).value or "").strip()
+            role = str(ws_src.cell(row=row_idx, column=header_map["ROLE"]).value or "").strip()
+            return name, role
+        elif is_newmont:
+            last = str(ws_src.cell(row=row_idx, column=header_map["Last Name"]).value or "").strip()
+            first = str(ws_src.cell(row=row_idx, column=header_map["First Name"]).value or "").strip()
+            name = f"{last}, {first}" if last and first else (last or first)
+            role = str(ws_src.cell(row=row_idx, column=header_map["Discipline"]).value or "").strip()
+            return name, role
+        return "", ""
+
+    # --- 3. Calculate stay periods ---
+    stay_periods = []
+    # CORRECCIÓN: Se obtienen TODAS las fechas del Excel para analizar los bloques de trabajo
+    # completos, en lugar de pre-filtrar por el rango del reporte, lo que causaba el error.
+    sorted_dates = sorted(date_cols.keys())
+
+    for r_idx in range(2, ws_src.max_row + 1):
+        name, role = get_employee_details(r_idx)
+        if not name:
+            continue
+
+        current_period_start = None
+        # Iterar sobre todas las fechas para detectar los períodos de estadía completos
+        for i, d in enumerate(sorted_dates):
+            cell_val = ws_src.cell(row=r_idx, column=date_cols[d]).value
+            is_working = cell_val is not None and str(cell_val).strip().upper() != "OFF" and str(cell_val).strip() != ""
+
+            if is_working and current_period_start is None:
+                # Comienzo de un nuevo período de trabajo
+                current_period_start = d
+            
+            if not is_working and current_period_start is not None:
+                # Fin del período actual. El bloque está completo.
+                period_end = sorted_dates[i-1]
+                
+                # Ahora, se verifica si este período completo se superpone con el rango del reporte
+                if not (period_end < start_date or current_period_start > end_date):
+                    stay_periods.append({
+                        "name": name,
+                        "role": role,
+                        "start": current_period_start,
+                        "end": period_end
+                    })
+                current_period_start = None
+
+        # Verificar si un período estaba en curso hasta el último día del Excel
+        if current_period_start is not None:
+            period_end = sorted_dates[-1]
+            # También se verifica la superposición para este último período
+            if not (period_end < start_date or current_period_start > end_date):
+                stay_periods.append({
+                    "name": name,
+                    "role": role,
+                    "start": current_period_start,
+                    "end": period_end
+                })
+
+    # --- 4. Generate Excel report with xlsxwriter ---
+    output = io.BytesIO()
+    workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+    worksheet = workbook.add_worksheet("Onsite Stay Report")
+
+    # Formats
+    header_format = workbook.add_format({
+        'bold': True,
+        'font_color': 'white',
+        'bg_color': '#70AD47', # Green from image
+        'align': 'left',
+        'valign': 'vcenter',
+        'border': 1
+    })
+    cell_format = workbook.add_format({'border': 1, 'valign': 'vcenter'})
+    date_format_str = "%d/%m/%Y" # Using %d/%m/%Y as per image
+
+    # Set column widths
+    worksheet.set_column('A:A', 30)  # Name
+    worksheet.set_column('B:B', 30)  # Role
+    worksheet.set_column('C:C', 25)  # Staying period
+
+    # Write headers
+    headers = ["Name", "Role (R type)", "Staying period onsite"]
+    for col, header in enumerate(headers):
+        worksheet.write(0, col, header, header_format)
+
+    # Write data
+    row = 1
+    for period in sorted(stay_periods, key=lambda x: (x['name'], x['start'])):
+        period_str = f"{period['start'].strftime(date_format_str)} - {period['end'].strftime(date_format_str)}"
+        worksheet.write(row, 0, period['name'], cell_format)
+        worksheet.write(row, 1, period['role'], cell_format)
+        worksheet.write(row, 2, period_str, cell_format)
+        row += 1
+
+    workbook.close()
+    output.seek(0)
+
+    return output.read(), "Onsite stay report generated successfully."
 
 
 # ============================================================
@@ -1484,11 +1620,11 @@ def regenerate_plan_from_db(plan_staff_file: str, source: str) -> Tuple[bool, st
 def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]:
     """
     Sincroniza la información desde la BD hacia el Excel existente:
-      • Agrega usuarios faltantes (filas) por BADGE.
-      • Agrega columnas de fechas que existen en BD y no en el Excel.
-      • Escribe solo celdas VACÍAS con el estado proveniente de la BD
-        (no modifica valores ya presentes en el Excel).
-      • Aplica color y, si el status es un código, comenta 'IN-OUT' (HH:MM-HH:MM).
+        • Agrega usuarios faltantes (filas) por BADGE.
+        • Agrega columnas de fechas que existen en BD y no en el Excel.
+        • Escribe solo celdas VACÍAS con el estado proveniente de la BD
+          (no modifica valores ya presentes en el Excel).
+        • Aplica color y, si el status es un código, comenta 'IN-OUT' (HH:MM-HH:MM).
     """
     ok, _errors, _meta = validate_excel_structure(plan_staff_file)
     if not ok:

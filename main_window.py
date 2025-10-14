@@ -18,6 +18,7 @@
 # --- MODIFIED: Added 'created_by' tracking for rotation history, filtering the view based on the logged-in user.
 # --- NEW: Added separate entry/exit date feature in registration form, with UI toggle and updated hover card info.
 # --- MODIFICATION: Added time inputs for Entry/Exit dates and updated Hover Card to display them.
+# --- Integración Final: Se añade el botón y la lógica para "Generate Onsite Stay Report" en el PlanStaffWidget.
 
 import json
 import os
@@ -663,6 +664,14 @@ class PlanStaffWidget(QWidget):
         report_button.clicked.connect(self.generate_report)
         report_button.setProperty("variant", "primary")
         report_layout.addWidget(report_button)
+
+        # =======================================================
+        # NUEVA FUNCIONALIDAD: Botón para reporte de estadías
+        # =======================================================
+        self.stay_report_btn = QPushButton("🏕️ Onsite Stay Report")
+        self.stay_report_btn.clicked.connect(self._generate_stay_report)
+        self.stay_report_btn.setProperty("variant", "secondary")
+        report_layout.addWidget(self.stay_report_btn)
 
         export_button = QPushButton("📤 Export Plan Staff (.xlsx) from DB")
         export_button.clicked.connect(self.export_plan_from_db)
@@ -1579,6 +1588,63 @@ class PlanStaffWidget(QWidget):
         except Exception as e:
             QMessageBox.critical(
                 self, "Save Error", f"Could not save the file.\nError: {e}"
+            )
+            
+    # =======================================================
+    # NUEVA FUNCIONALIDAD: Lógica para el reporte de estadías
+    # =======================================================
+    def _generate_stay_report(self):
+        """Generates and saves the Onsite Stay Period report."""
+        start_date = self.report_start_date.date().toPyDate()
+        end_date = self.report_end_date.date().toPyDate()
+
+        if start_date > end_date:
+            QMessageBox.warning(self, "Date Range Error", "Start date cannot be after end date.")
+            return
+
+        try:
+            # Default filename suggestion
+            default_filename = f"Onsite_Stay_Report_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.xlsx"
+
+            # Open file dialog to choose where to save
+            filePath, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Onsite Stay Report",
+                default_filename,
+                "Excel Files (*.xlsx);;All Files (*)"
+            )
+
+            if not filePath:
+                return  # User cancelled
+
+            # Generate the report bytes
+            report_bytes, msg = excel.generate_stay_period_report(
+                self.excel_file,
+                start_date,
+                end_date
+            )
+
+            if report_bytes:
+                with open(filePath, "wb") as f:
+                    f.write(report_bytes)
+                
+                QMessageBox.information(self, "Report Generated", f"Successfully generated and saved report:\n{os.path.basename(filePath)}")
+                db.log_event(
+                    self.logged_username,
+                    self.source,
+                    "REPORT_STAY_GENERATED",
+                    f"Generated for range {start_date} to {end_date}."
+                )
+            else:
+                QMessageBox.critical(self, "Report Generation Failed", msg)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"An unexpected error occurred while generating the report: {e}")
+            db.log_event(
+                self.logged_username,
+                self.source,
+                "ERROR_REPORT_STAY",
+                f"Failed for range {start_date} to {end_date}: {e}"
             )
 
     def export_plan_from_db(self):
