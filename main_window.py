@@ -1002,7 +1002,7 @@ class PlanStaffWidget(QWidget):
         # Schedule (date) headers -> one line with date + weekday (abbrev)
         schedule_headers = []
         for d in date_cols:
-            schedule_headers.append(f"{d.isoformat()}\n{_weekday_full_en(d)}")
+            schedule_headers.append(f"{d.isoformat()}")
         self._date_col_dates = list(date_cols)  # keep exact order
 
         # Build tables
