@@ -133,11 +133,13 @@ def _get_transport_time_str(
     status: Optional[str],
     kind: str,
     comment: Optional[str],
-    custom_map: Dict
+    custom_map: Dict,
+    source: str = "RGM"  # <--- NUEVO PARÁMETRO
 ) -> str:
     """
     Determines the transport time ('HH:MM:SS') based on shift status.
     'kind' is either 'IN' or 'OUT'.
+    Includes logic for Newmont specific timings vs RGM defaults.
     """
     su = (status or "").strip().upper()
     
@@ -149,11 +151,24 @@ def _get_transport_time_str(
         if t:
             return _hhmmss(t) or "00:00:00"
 
-    # Priority 2: Standard shifts
-    if su == "ON":
-        return "06:00:00" if kind == "IN" else "18:00:00" # RGM Out time changed to 18:00
-    if su == "ON NS":
-        return "18:00:00" if kind == "IN" else "06:00:00" # RGM In/Out time changed to 18:00 / 06:00
+    # Priority 2: Standard shifts (LOGIC SPLIT BY SOURCE)
+    if source == "Newmont":
+        # Newmont Rules:
+        # ON (Día): Entrada 06:00, Salida 12:00
+        # ON NS (Noche): Entrada 12:00, Salida 06:00
+        if su == "ON":
+            return "06:00:00" if kind == "IN" else "12:00:00"
+        if su == "ON NS":
+            return "12:00:00" if kind == "IN" else "06:00:00"
+            
+    else:
+        # RGM / Default Rules:
+        # ON (Día): Entrada 06:00, Salida 18:00
+        # ON NS (Noche): Entrada 18:00, Salida 06:00
+        if su == "ON":
+            return "06:00:00" if kind == "IN" else "18:00:00"
+        if su == "ON NS":
+            return "18:00:00" if kind == "IN" else "06:00:00"
 
     # Priority 3: Fallback from cell comment (e.g., "08:00-17:00")
     if comment and "-" in str(comment):
@@ -166,7 +181,6 @@ def _get_transport_time_str(
 
     # Final fallback
     return "06:00:00" if kind == "IN" else "18:00:00"
-
 
 # ============================================================
 # Lecturas auxiliares / previews
@@ -923,8 +937,8 @@ def generate_transport_report(
 
             entry_date_to_use = d
             exit_date_to_use = d
-            time_in_str = _get_transport_time_str(st_d, "IN", cmt_d, custom_map)
-            time_out_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map)
+            time_in_str = _get_transport_time_str(st_d, "IN", cmt_d, custom_map, source=source)
+            time_out_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map, source=source)
             
             if operation and operation.get('entry_date') and operation.get('exit_date'):
                 try:
@@ -1143,8 +1157,8 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
             
             operation = _find_operation_for_date(badge, d, user_operations)
             entry_date_to_use, exit_date_to_use = d, d
-            time_in_str = _get_transport_time_str(st_d, "IN", cmt_d, custom_map)
-            time_out_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map)
+            time_in_str = _get_transport_time_str(st_d, "IN", cmt_d, custom_map, source="RGM")
+            time_out_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map, source="RGM")
             
             if operation and operation.get('entry_date') and operation.get('exit_date'):
                 try:
