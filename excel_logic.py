@@ -1738,4 +1738,51 @@ def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]
 
     except Exception as e:
         return False, f"Refresh error: {e}"
+    
+    # En excel_logic.py
+
+def remove_user_from_excel(plan_staff_file: str, badge: str) -> Tuple[bool, str]:
+    """
+    Elimina la fila completa de un usuario en el Excel basado en su BADGE.
+    Se usa para mantener la sincronía cuando se elimina un usuario de la BD.
+    """
+    if not os.path.exists(plan_staff_file):
+        return False, "File not found."
+
+    try:
+        wb = openpyxl.load_workbook(plan_staff_file)
+        ws = wb.active
+        
+        # Detectar columna de BADGE
+        header_map = {cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)}
+        
+        # Determinar la columna del badge según la variante (RGM vs Newmont)
+        badge_col_idx = None
+        if "BADGE" in header_map:
+            badge_col_idx = header_map["BADGE"]
+        elif "Company ID" in header_map:
+            badge_col_idx = header_map["Company ID"]
+            
+        if not badge_col_idx:
+            return False, "Badge column not found in Excel."
+
+        # Buscar la fila
+        row_to_delete = None
+        badge_str = str(badge).strip()
+        
+        for r in range(2, ws.max_row + 1):
+            cell_val = ws.cell(row=r, column=badge_col_idx).value
+            if cell_val and str(cell_val).strip() == badge_str:
+                row_to_delete = r
+                break
+        
+        if row_to_delete:
+            ws.delete_rows(row_to_delete, 1)
+            wb.save(plan_staff_file)
+            return True, f"User with badge {badge} removed from Excel."
+        else:
+            return False, "User not found in Excel file."
+
+    except Exception as e:
+        return False, f"Error modifying Excel: {e}"
 

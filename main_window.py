@@ -2211,6 +2211,8 @@ class CrudWidget(QWidget):
             self.refresh_ui_data()
             self.users_changed.emit(self.source)
 
+   # En main_window.py -> clase CrudWidget
+
     def delete_crud_user(self):
         if not self.current_user_id:
             box = QMessageBox(self)
@@ -2221,30 +2223,56 @@ class CrudWidget(QWidget):
             box.exec()
             return
 
+        # 1. Capturar el BADGE antes de borrar (lo necesitamos para buscar en Excel)
+        badge_to_remove = self.crud_badge_input.text().strip()
+
+        # Configurar cuadro de confirmación correctamente
         confirm = QMessageBox(self)
         confirm.setIcon(QMessageBox.Icon.Question)
-        confirm.setWindowTitle("Confirm Deletion")
-        confirm.setText(
-            f"Are you sure you want to delete {self.crud_name_input.text()}?"
-        )
+        confirm.setWindowTitle("Confirm User Deletion")
+        confirm.setText(f"Are you sure you want to delete user '{self.crud_name_input.text()}'?")
+        
+        # DEFINICIÓN CORRECTA DE LOS BOTONES
         yes_btn = confirm.addButton("Yes", QMessageBox.ButtonRole.YesRole)
         confirm.addButton("No", QMessageBox.ButtonRole.NoRole)
+        
         confirm.exec()
 
         if confirm.clickedButton() == yes_btn:
-            success, message = db.delete_user(self.current_user_id)
-            box = QMessageBox(self)
-            box.setIcon(
-                QMessageBox.Icon.Information if success else QMessageBox.Icon.Warning
-            )
-            box.setWindowTitle("Success" if success else "Error")
-            box.setText(message)
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
-            if success:
+            # 2. Borrar de BD (SSoT)
+            success_db, message_db = db.delete_user(self.current_user_id)
+            
+            final_msg = message_db
+            
+            if success_db:
+                # 3. Si se borró en BD, borrar también del Excel
+                success_excel, msg_excel = excel.remove_user_from_excel(self.excel_file, badge_to_remove)
+                
+                if success_excel:
+                    final_msg += f"\n\nAlso removed from Excel: {badge_to_remove}"
+                    # Log de auditoría
+                    db.log_event(
+                        self.logged_username, 
+                        self.source, 
+                        "USER_DELETE", 
+                        f"Deleted {badge_to_remove} from DB and Excel."
+                    )
+                else:
+                    final_msg += f"\n\nWarning: Could not remove from Excel ({msg_excel})"
+
+                # Emitimos señal para actualizar la UI
                 self._populate_role_filter()
                 self.refresh_ui_data()
                 self.users_changed.emit(self.source)
+
+            box = QMessageBox(self)
+            box.setIcon(
+                QMessageBox.Icon.Information if success_db else QMessageBox.Icon.Warning
+            )
+            box.setWindowTitle("Deletion Result")
+            box.setText(final_msg)
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+            box.exec()
 
     def import_users_from_excel(self):
         """
@@ -2979,8 +3007,8 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.settings_widget, "⚙️ Settings")
 
         # Hot sync
-        self.crud_widget.users_changed.connect(self._sync_after_users_changed)
-        self.crud_widget.import_done.connect(self._sync_after_users_changed)
+        self.crud_widget.users_changed.connect(lambda src: self.plan_widget.refresh_ui_data() if src == self.user_role else None)
+        self.crud_widget.import_done.connect(lambda src: self.plan_widget.refresh_ui_data() if src == self.user_role else None)
 
     def _sync_after_users_changed(self, src: str):
         if src == self.user_role:
@@ -3108,18 +3136,24 @@ class AdminMainWindow(QMainWindow):
         self.tabs.addTab(settings_container, "⚙️ Settings")
 
         # Hot sync
+        # CAMBIO: Usamos refresh_ui_data() en lugar de refresh_users_only()
+        # para forzar la recarga de la grilla (tabla) y que desaparezca la fila borrada.
+        
         self.rgm_crud.users_changed.connect(
-            lambda src: self.rgm_plan.refresh_users_only()
+            lambda src: self.rgm_plan.refresh_ui_data()
         )
         self.rgm_crud.import_done.connect(
-            lambda src: self.rgm_plan.refresh_users_only()
+            lambda src: self.rgm_plan.refresh_ui_data()
         )
 
         self.nm_crud.users_changed.connect(
-            lambda src: self.nm_plan.refresh_users_only()
+            lambda src: self.nm_plan.refresh_ui_data()
         )
-        self.nm_crud.import_done.connect(lambda src: self.nm_plan.refresh_users_only())
+        self.nm_crud.import_done.connect(
+            lambda src: self.nm_plan.refresh_ui_data()
+        )
 
+        # Estos de abajo ya estaban bien, los dejas igual:
         self.rgm_types.types_changed.connect(
             lambda src: self.rgm_plan.refresh_ui_data()
         )
