@@ -4,7 +4,7 @@
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QLineEdit, QMessageBox, QDialog,
-    QProgressBar, QDialogButtonBox
+    QProgressBar, QDialogButtonBox, QFrame, QApplication
 )
 from PyQt6.QtCore import Qt, QTimer
 
@@ -92,50 +92,91 @@ class LoginWindow(QDialog):
             self.password_input.clear()
 
 
-class LoadingWindow(QWidget):
-    """Loading splash shown after a successful login."""
-    def __init__(self, role):
-        super().__init__()
+class LoadingWindow(QDialog): # Cambiamos de QWidget a QDialog para mejor control modal
+    """
+    Loading splash shown after a successful login.
+    Controlled externally by real application events.
+    """
+    def __init__(self, role, parent=None):
+        super().__init__(parent)
         self.role = role
-        self.setWindowTitle("Loading.")
-        self.setFixedSize(400, 150)
+        self.setWindowTitle("Loading...")
+        self.setFixedSize(420, 180) # Tamaño fijo para evitar problemas de redimensionado
+        
+        # Flags críticas para estabilidad visual
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint | 
+            Qt.WindowType.Dialog | 
+            Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setModal(True) # Bloquea interacción con otras ventanas
 
         layout = QVBoxLayout(self)
-        self.label = QLabel()
+        layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Marco con estilo (Frame) para el borde y sombra
+        self.frame = QFrame()
+        self.frame.setStyleSheet("""
+            QFrame {
+                background-color: #FFFFFF;
+                border: 1px solid #CFD8DC;
+                border-radius: 12px;
+            }
+            QLabel { color: #374151; border: none; }
+        """)
+        
+        inner_layout = QVBoxLayout(self.frame)
+        inner_layout.setContentsMargins(20, 20, 20, 20)
+
+        self.label = QLabel("Initializing System...")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         font = self.label.font()
-        font.setPointSize(14)
+        font.setPointSize(13)
+        font.setBold(True)
         self.label.setFont(font)
+
+        self.status_label = QLabel("Please wait...")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setStyleSheet("color: #546E7A; font-size: 11px; margin-top: 5px;")
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(8)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: #ECEFF1;
+                border-radius: 4px;
+            }
+            QProgressBar::chunk {
+                background-color: #0288D1; 
+                border-radius: 4px;
+            }
+        """)
 
-        layout.addWidget(self.label)
-        layout.addWidget(self.progress_bar)
+        inner_layout.addStretch()
+        inner_layout.addWidget(self.label)
+        inner_layout.addSpacing(15)
+        inner_layout.addWidget(self.progress_bar)
+        inner_layout.addWidget(self.status_label)
+        inner_layout.addStretch()
 
+        layout.addWidget(self.frame)
         self.setup_ui_for_role()
-
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_progress)
-        self.timer.start(30)
-        self.progress_value = 0
 
     def setup_ui_for_role(self):
         if self.role == "RGM":
-            self.label.setText("Loading RGM Plan Staff Module.")
-            self.setStyleSheet("background-color: #E6F3FF;")
+            self.label.setText("Transport Manager: RGM")
         elif self.role == "Newmont":
-            self.label.setText("Loading Newmont Reports Module.")
-            self.setStyleSheet("background-color: #E8F8F5;")
+            self.label.setText("Transport Manager: Newmont")
         elif self.role == "Administrator":
-            self.label.setText("Loading Administrator Console.")
-            self.setStyleSheet("background-color: #FFF3CD;")
-        else:
-            self.label.setText("Loading application.")
+            self.label.setText("Administrator Console")
 
-    def update_progress(self):
-        self.progress_value += 1
-        self.progress_bar.setValue(self.progress_value)
-        if self.progress_value >= 100:
-            self.timer.stop()
-            self.close()
+    def update_progress(self, value, message):
+        self.progress_bar.setValue(value)
+        if message:
+            self.status_label.setText(message)
+        # Forzar repintado inmediato para evitar "congelamiento" visual
+        QApplication.processEvents()
