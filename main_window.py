@@ -655,7 +655,7 @@ class PlanStaffWidget(QWidget):
         report_layout.addWidget(self.report_start_date)
 
         report_layout.addWidget(QLabel("END Date:"))
-        self.report_end_date = QDateEdit(QDate.currentDate().addDays(30))
+        self.report_end_date = QDateEdit(QDate.currentDate().addDays(7))
         self.report_end_date.setCalendarPopup(True)
         self.report_end_date.setDisplayFormat("dd/MM/yyyy")
         report_layout.addWidget(self.report_end_date)
