@@ -286,6 +286,30 @@ def _weekday_full_en(d: pydate) -> str:
     names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     return names[d.weekday()]
 
+from datetime import time as dtime
+
+def _parse_hhmm_to_time(value, default: dtime) -> dtime:
+    """
+    Convierte 'HH:MM' o 'HH:MM:SS' a datetime.time.
+    - Si ya es datetime.time, lo devuelve tal cual.
+    - Si es None o cadena vacía, devuelve 'default'.
+    - Si falla el parseo, también devuelve 'default'.
+    """
+    if isinstance(value, dtime):
+        return value
+
+    if not value:
+        return default
+
+    try:
+        parts = str(value).strip().split(":")
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+        second = int(parts[2]) if len(parts) > 2 else 0
+        return dtime(hour, minute, second)
+    except Exception:
+        return default
+
 
 # -------------------------------------------------------------
 # Collapsible group used to free vertical space by default
@@ -1674,7 +1698,7 @@ class PlanStaffWidget(QWidget):
                     self._apply_base_background(it, "")
             return
 
-        # ---------------- Aplicar a cada columna (día) ----------------
+          # ---------------- Aplicar a cada columna (día) ----------------
         from datetime import datetime, time as dtime
 
         target_cols = col_range if apply_to_range else [c]
@@ -1693,13 +1717,14 @@ class PlanStaffWidget(QWidget):
                 entry_dt_for_save = entry_datetime
                 exit_dt_for_save = exit_datetime
             else:
-                # Comportamiento antiguo: día completo o según in/out_time
-                entry_dt_for_save = datetime.combine(
-                    start_date, in_time or dtime(0, 0)
-                )
-                exit_dt_for_save = datetime.combine(
-                    end_date, out_time or dtime(23, 59)
-                )
+                # Comportamiento antiguo: día completo o según in/out_time,
+                # pero asegurándonos de que sean datetime.time, no strings.
+                entry_time_obj = _parse_hhmm_to_time(in_time, dtime(0, 0))
+                exit_time_obj = _parse_hhmm_to_time(out_time, dtime(23, 59))
+
+                entry_dt_for_save = datetime.combine(start_date, entry_time_obj)
+                exit_dt_for_save = datetime.combine(end_date, exit_time_obj)
+
 
             # --- DB (SSoT) ---
             db.add_operation(
@@ -1960,13 +1985,16 @@ class PlanStaffWidget(QWidget):
                 in_time = st.get("in_time")
                 out_time = st.get("out_time")
 
+        # Convertir strings HH:MM a datetime.time antes de combinar
+        default_in = datetime.min.time()
+        default_out = datetime.max.time()
+
+        in_time_obj = _parse_hhmm_to_time(in_time, default_in)
+        out_time_obj = _parse_hhmm_to_time(out_time, default_out)
+
         # Guardar operación de 1 día (entry/exit = día con horas)
-        entry_datetime = datetime.combine(
-            start_date, in_time or datetime.min.time()
-        )
-        exit_datetime = datetime.combine(
-            end_date, out_time or datetime.max.time()
-        )
+        entry_datetime = datetime.combine(start_date, in_time_obj)
+        exit_datetime = datetime.combine(end_date, out_time_obj)
 
         # DB: operación
         db.add_operation(
