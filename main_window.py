@@ -1489,6 +1489,10 @@ class PlanStaffWidget(QWidget):
         shift_type = day_info.get("shift_type")
         remark = day_info.get("remark")
         pickup, dropoff = db.get_user_location_for_date(badge, base_date)
+        in_time = day_info.get("in_time")
+        out_time = day_info.get("out_time")
+
+
 
         if not schedule_status:
             # Si la celda ancla no tiene turno, no hay nada que copiar
@@ -1532,6 +1536,8 @@ class PlanStaffWidget(QWidget):
                         pickup=pickup,
                         dropoff=dropoff,
                         remark=remark,
+                        in_time=in_time,
+                        out_time=out_time,
                     )
 
                     # Actualizar celda visualmente
@@ -1969,32 +1975,52 @@ class PlanStaffWidget(QWidget):
         pickup: str | None,
         dropoff: str | None,
         remark: str | None,
+        in_time=None,
+        out_time=None,      
     ):
         """
         Aplica un período [start_date, end_date] a DB y Excel.
         Se basa en la misma lógica que save_plan_changes, pero
         sin mostrar diálogos.
         """
+                # -------------------------------------------------------
+        # 1) Decidir qué horas vamos a usar
+        #    - Si vienen in_time/out_time como parámetros (copiados
+        #      del día ancla), usamos esas tal cual.
+        #    - Si no, usamos las horas definidas en el shift_type.
+        # -------------------------------------------------------
+        if in_time or out_time:
+            # Caso 1: venimos de _apply_fill_from_anchor y ya tenemos horas
+            final_in_time = in_time
+            final_out_time = out_time
+        else:
+            # Caso 2: comportamiento normal → mirar el shift_type
+            final_in_time = None
+            final_out_time = None
+            if shift_type and self._custom_shift_map:
+                st = self._custom_shift_map.get(shift_type)
+                if st:
+                    final_in_time = st.get("in_time")
+                    final_out_time = st.get("out_time")
 
-        # Horas IN/OUT según shift_type si aplica
-        in_time = None
-        out_time = None
-        if shift_type and self._custom_shift_map:
-            st = self._custom_shift_map.get(shift_type)
-            if st:
-                in_time = st.get("in_time")
-                out_time = st.get("out_time")
+        # -------------------------------------------------------
+        # 2) Convertir esas horas HH:MM (o None) a datetime.time
+        # -------------------------------------------------------
+        entry_datetime = None
+        exit_datetime = None
 
-        # Convertir strings HH:MM a datetime.time antes de combinar
-        default_in = datetime.min.time()
-        default_out = datetime.max.time()
+        if final_in_time or final_out_time:
+            default_in = datetime.min.time()
+            default_out = datetime.max.time()
 
-        in_time_obj = _parse_hhmm_to_time(in_time, default_in)
-        out_time_obj = _parse_hhmm_to_time(out_time, default_out)
+            in_time_obj = _parse_hhmm_to_time(final_in_time, default_in)
+            out_time_obj = _parse_hhmm_to_time(final_out_time, default_out)
 
-        # Guardar operación de 1 día (entry/exit = día con horas)
-        entry_datetime = datetime.combine(start_date, in_time_obj)
-        exit_datetime = datetime.combine(end_date, out_time_obj)
+            # Guardar operación de 1 día (entry/exit = día con horas)
+            entry_datetime = datetime.combine(start_date, in_time_obj)
+            exit_datetime = datetime.combine(end_date, out_time_obj)
+
+      
 
         # DB: operación
         db.add_operation(
