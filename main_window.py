@@ -597,6 +597,47 @@ class DayScheduleEditor(QDialog):
         self.apply_to_range_chk = QCheckBox(
             "Apply to all selected cells to the right"
         )
+        
+        from PyQt6.QtCore import QDate, QTime
+
+        # --- Travel dates opcionales (igual concepto que en el formulario grande) ---
+        self.travel_diff_chk = QCheckBox("Travel dates are different from work day")
+
+        # Valores por defecto (puedes ajustarlos luego si quieres)
+        today = QDate.currentDate()
+        self.entry_date_edit = QDateEdit(today)
+        self.entry_date_edit.setCalendarPopup(True)
+        self.entry_date_edit.setDisplayFormat("dd/MM/yyyy")
+
+        self.entry_time_edit = QTimeEdit(QTime(6, 0))
+        self.entry_time_edit.setDisplayFormat("HH:mm")
+
+        self.exit_date_edit = QDateEdit(today)
+        self.exit_date_edit.setCalendarPopup(True)
+        self.exit_date_edit.setDisplayFormat("dd/MM/yyyy")
+
+        self.exit_time_edit = QTimeEdit(QTime(18, 0))
+        self.exit_time_edit.setDisplayFormat("HH:mm")
+
+        # Contenedor horizontal para Entry/Exit
+        self._travel_container = QWidget()
+        travel_layout = QHBoxLayout(self._travel_container)
+        travel_layout.setContentsMargins(0, 0, 0, 0)
+        travel_layout.addWidget(QLabel("Entry Date:"))
+        travel_layout.addWidget(self.entry_date_edit)
+        travel_layout.addWidget(QLabel("Time:"))
+        travel_layout.addWidget(self.entry_time_edit)
+        travel_layout.addSpacing(12)
+        travel_layout.addWidget(QLabel("Exit Date:"))
+        travel_layout.addWidget(self.exit_date_edit)
+        travel_layout.addWidget(QLabel("Time:"))
+        travel_layout.addWidget(self.exit_time_edit)
+        travel_layout.addStretch()
+
+        # Ocultamos el bloque hasta que el usuario marque el check
+        self._travel_container.setVisible(False)
+        self.travel_diff_chk.toggled.connect(self._travel_container.setVisible)
+
 
         # Form layout
         form = QFormLayout()
@@ -604,6 +645,9 @@ class DayScheduleEditor(QDialog):
         form.addRow("Pick Up:", self.pickup_combo)
         form.addRow("Drop Off:", self.dropoff_combo)
         form.addRow("Remarks:", self.remark_edit)
+        form.addRow("", self.travel_diff_chk)      # 👈 NUEVO
+        form.addRow("", self._travel_container)    # 👈 NUEVO
+
 
         # Botones
         btn_box = QDialogButtonBox(
@@ -618,14 +662,31 @@ class DayScheduleEditor(QDialog):
         layout.addWidget(btn_box)
 
     def result_payload(self):
+        from datetime import datetime
+
         selection = self.status_combo.currentData() or {}
+
+        entry_dt = None
+        exit_dt = None
+        if self.travel_diff_chk.isChecked():
+            entry_date = self.entry_date_edit.date().toPyDate()
+            entry_time = self.entry_time_edit.time().toPyTime()
+            exit_date = self.exit_date_edit.date().toPyDate()
+            exit_time = self.exit_time_edit.time().toPyTime()
+
+            entry_dt = datetime.combine(entry_date, entry_time)
+            exit_dt = datetime.combine(exit_date, exit_time)
+
         return {
-            "selection": selection,  # 👈 lo que usa _on_schedule_cell_changed
+            "selection": selection,
             "pickup": self.pickup_combo.currentData(),
             "dropoff": self.dropoff_combo.currentData(),
             "remark": self.remark_edit.text().strip(),
             "apply_to_range": self.apply_to_range_chk.isChecked(),
+            "entry_datetime": entry_dt,   # 👈 NUEVO
+            "exit_datetime": exit_dt,     # 👈 NUEVO
         }
+
 
 
 
@@ -877,6 +938,10 @@ class PlanStaffWidget(QWidget):
         # NEW: location dropdowns
         self.pickup_combo = QComboBox()
         self.dropoff_combo = QComboBox()
+        self.remark_edit = QLineEdit()
+        
+        self.apply_to_range_chk = QCheckBox("Apply to all selected cells to the right")
+
         
         # NEW: remarks input
         self.remarks_input = QLineEdit()
@@ -1567,6 +1632,23 @@ class PlanStaffWidget(QWidget):
         dropoff = payload["dropoff"]
         remark = payload["remark"]
         apply_to_range = payload["apply_to_range"]
+        
+        entry_datetime = payload.get("entry_datetime")
+        exit_datetime = payload.get("exit_datetime")
+
+        # Validación simple: si los dio y están invertidos, avisar y cancelar
+        if entry_datetime and exit_datetime and entry_datetime > exit_datetime:
+            QMessageBox.warning(
+                self,
+                "Date Error",
+                "Entry date/time cannot be after Exit date/time.",
+            )
+            # revertimos visualmente al valor anterior
+            with QSignalBlocker(self.schedule_table):
+                item.setText(old_text)
+            self._apply_base_background(item, old_text)
+            return
+
 
         # ---------------- Interpretar selección (igual que save_plan_changes) ----------------
         if not sel or sel.get("kind") in ("none", "separator"):
@@ -1606,13 +1688,18 @@ class PlanStaffWidget(QWidget):
                 badge, start_date, end_date, self.source
             )
 
-            # Construimos entry/exit datetime a partir de in/out_time (o extremos del día)
-            entry_datetime = datetime.combine(
-                start_date, in_time or dtime(0, 0)
-            )
-            exit_datetime = datetime.combine(
-                end_date, out_time or dtime(23, 59)
-            )
+            # Si el diálogo trajo travel dates, los usamos para TODAS las columnas
+            if entry_datetime and exit_datetime:
+                entry_dt_for_save = entry_datetime
+                exit_dt_for_save = exit_datetime
+            else:
+                # Comportamiento antiguo: día completo o según in/out_time
+                entry_dt_for_save = datetime.combine(
+                    start_date, in_time or dtime(0, 0)
+                )
+                exit_dt_for_save = datetime.combine(
+                    end_date, out_time or dtime(23, 59)
+                )
 
             # --- DB (SSoT) ---
             db.add_operation(
@@ -1622,9 +1709,10 @@ class PlanStaffWidget(QWidget):
                 start_date=start_date,
                 end_date=end_date,
                 created_by=self.logged_username,
-                entry_date=entry_datetime,
-                exit_date=exit_datetime,
+                entry_date=entry_dt_for_save,
+                exit_date=exit_dt_for_save,
             )
+
             db.upsert_schedule_range(
                 badge,
                 start_date,
