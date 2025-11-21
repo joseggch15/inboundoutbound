@@ -654,6 +654,8 @@ class PlanStaffWidget(QWidget):
         self._row_identities = []  # index -> {"name":..., "badge":...}
         self._date_col_dates = []  # schedule_table column index -> pydate
         self._warn_highlight_keys = set()  # {"<badge>|YYYY-MM-DD", ...}
+        self._bulk_editing = False  # para detectar relleno masivo por arrastre
+
 
         # ---------- root layout ----------
         root = QVBoxLayout(self)
@@ -832,13 +834,20 @@ class PlanStaffWidget(QWidget):
         self._rebuild_registration_grid(self._current_form_cols)
 
     def eventFilter(self, source, event):
-        # Hide the card when the mouse leaves the table area
-        if (
-            source is self.schedule_table.viewport()
-            and event.type() == QEvent.Type.Leave
-        ):
-            self._shift_info_card.hide()
+        # Comportamiento extra para la tabla de horario:
+        #  - Ocultar la tarjetita al salir
+        #  - Al soltar el mouse después de un arrastre, copiar el valor
+        #    de la celda actual al resto de celdas seleccionadas de esa fila.
+        if source is self.schedule_table.viewport():
+            if event.type() == QEvent.Type.Leave:
+                self._shift_info_card.hide()
+            elif (
+                event.type() == QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.LeftButton
+            ):
+                self._apply_fill_from_anchor()
         return super().eventFilter(source, event)
+
 
     # ---------- registration form (compact) ----------
     def _build_registration_form(self) -> QWidget:
@@ -1019,38 +1028,38 @@ class PlanStaffWidget(QWidget):
 
         # Base statuses with color chips
         self.status_selector.addItem(
-            _create_color_icon("#FFC7CE"),  # OFF color
-            "OFF",
-            {
-                "kind": "base",
-                "status": "OFF",
-                "shift_type": None,
-                "in_time": None,
-                "out_time": None,
-            },
+        _create_color_icon("#FFC7CE"),  # OFF color
+        "OFF",
+        {
+            "kind": "base",
+            "status": "OFF",
+            "shift_type": None,
+            "in_time": None,
+            "out_time": None,
+        },
         )
         self.status_selector.addItem(
-            _create_color_icon("#C6EFCE"),  # ON color
-            "ON (Day Shift)",
-            {
-                "kind": "base",
-                "status": "ON",
-                "shift_type": "Day Shift",
-                "in_time": None,
-                "out_time": None,
-            },
+        _create_color_icon("#C6EFCE"),  # ON color
+        "ON (Day Shift)",
+        {
+            "kind": "base",
+            "status": "ON",
+            "shift_type": "Day Shift",
+            "in_time": None,
+            "out_time": None,
+        },
         )
         self.status_selector.addItem(
-            _create_color_icon("#FFFF99"),  # ON NS color
-            "ON NS (Night Shift)",
-            {
-                "kind": "base",
-                "status": "ON NS",
-                "shift_type": "Night Shift",
-                "in_time": None,
-                "out_time": None,
-            },
-        )
+        _create_color_icon("#FFFF99"),  # ON NS color
+        "ON NS (Night Shift)",
+        {
+            "kind": "base",
+            "status": "ON NS",
+            "shift_type": "Night Shift",
+            "in_time": None,
+            "out_time": None,
+        },
+         )
 
         # Custom types
         types = db.get_shift_types(self.source)
@@ -1062,7 +1071,7 @@ class PlanStaffWidget(QWidget):
             for t in types:
                 label = f"{t['name']} [{t['code']}]  {t['in_time']}-{t['out_time']}"
                 self.status_selector.addItem(
-                    _create_color_icon(t["color_hex"]),  # Custom color
+                    _create_color_icon(t["color_hex"]),
                     label,
                     {
                         "kind": "custom",
@@ -1074,6 +1083,44 @@ class PlanStaffWidget(QWidget):
                 )
         self.status_selector.setCurrentIndex(0)
         self.status_selector.blockSignals(False)
+        
+    def _status_options_for_dialog(self):
+        """Devuelve la lista de opciones (icono, texto, payload) para los diálogos/combos."""
+        options = []
+
+        # Opción neutra (no marcar)
+        options.append(
+            (QIcon(), "— Do Not Mark Days —", {"kind": "none"})
+        )
+
+        # Base: OFF / ON / ON NS
+        options.append(
+            (QIcon(), "OFF", {"kind": "base", "status": "OFF", "shift_type": None})
+        )
+        options.append(
+            (QIcon(), "ON (Day)", {"kind": "base", "status": "ON", "shift_type": None})
+        )
+        options.append(
+            (
+                QIcon(),
+                "ON NS (Night)",
+                {"kind": "base", "status": "ON NS", "shift_type": None},
+            )
+        )
+
+        # Tipos de turno personalizados (self._custom_shift_map ya existe)
+        for code, info in (self._custom_shift_map or {}).items():
+            display_name = info.get("name") or code
+            options.append(
+                (
+                    QIcon(),
+                    display_name,
+                    {"kind": "custom", "status": "ON", "shift_type": code},
+                )
+            )
+
+        return options
+
 
     def _status_options_for_dialog(self):
         """
@@ -1304,9 +1351,123 @@ class PlanStaffWidget(QWidget):
             # leave as-is (could be a custom code already colored on load)
             pass
 
+    def _apply_base_background(self, item: QTableWidgetItem, value_upper: str):
+        """Apply default background based on the cell value."""
+        if value_upper == "ON":
+            item.setBackground(QColor("#C6EFCE"))
+        elif value_upper in ("ON NS", "NIGHT"):
+            item.setBackground(QColor("#FFFF99"))
+        elif value_upper in ("OFF", "BREAK", "KO", "LEAVE"):
+            item.setBackground(QColor("#FFC7CE"))
+        elif value_upper == "":
+            item.setBackground(QColor(255, 255, 255, 0))  # transparent/no fill
+        else:
+            # leave as-is (could be a custom code already colored on load)
+            pass
+
+    def _apply_fill_from_anchor(self):
+        """
+        Copia el turno del día (status + shift + pickup + dropoff + remark)
+        desde la celda actual a todas las celdas seleccionadas a lo largo
+        de la MISMA fila. Actualiza también DB + Excel.
+        """
+        current_item = self.schedule_table.currentItem()
+        if not current_item:
+            return
+
+        r = current_item.row()
+        c = current_item.column()
+
+        # Necesitamos identidad y fecha base válidas
+        if not (0 <= r < len(self._row_identities)) or not (0 <= c < len(self._date_col_dates)):
+            return
+
+        identity = self._row_identities[r]
+        username = identity.get("name") or ""
+        badge = identity.get("badge") or ""
+        role = identity.get("role") or ""
+        if not badge or not username:
+            return
+
+        base_date = self._date_col_dates[c]
+
+        # Leemos de DB el turno completo del día "ancla"
+        schedule_map = db.get_schedule_map_for_range(
+            badge, base_date, base_date, self.source
+        )
+        day_info = schedule_map.get(base_date.isoformat()) or {}
+        schedule_status = day_info.get("status")
+        shift_type = day_info.get("shift_type")
+        remark = day_info.get("remark")
+        pickup, dropoff = db.get_user_location_for_date(badge, base_date)
+
+        if not schedule_status:
+            # Si la celda ancla no tiene turno, no hay nada que copiar
+            return
+
+        # Determinar las otras columnas seleccionadas en la MISMA fila
+        selected_indexes = self.schedule_table.selectedIndexes()
+        if len(selected_indexes) <= 1:
+            return
+
+        target_cols = sorted(
+            {
+                idx.column()
+                for idx in selected_indexes
+                if idx.row() == r and idx.column() != c
+            }
+        )
+        if not target_cols:
+            return
+
+        # Activamos modo "bulk" para que no se dispare la lógica de edición por celda
+        self._bulk_editing = True
+        try:
+            from datetime import datetime as _dt
+
+            with QSignalBlocker(self.schedule_table):
+                for cc in target_cols:
+                    if not (0 <= cc < len(self._date_col_dates)):
+                        continue
+                    day_date = self._date_col_dates[cc]
+
+                    # Aplicar mismo turno / pickup / remark a ese día en DB + Excel
+                    self._apply_schedule_period(
+                        username=username,
+                        badge=badge,
+                        role=role,
+                        start_date=day_date,
+                        end_date=day_date,
+                        status=schedule_status,
+                        shift_type=shift_type,
+                        pickup=pickup,
+                        dropoff=dropoff,
+                        remark=remark,
+                    )
+
+                    # Actualizar celda visualmente
+                    item = self.schedule_table.item(r, cc)
+                    if item is None:
+                        item = QTableWidgetItem("")
+                        self.schedule_table.setItem(r, cc, item)
+                    item.setText(current_item.text())
+                    self._apply_base_background(item, current_item.text().strip().upper())
+        finally:
+            self._bulk_editing = False
+
+        # Volvemos a cargar desde DB para asegurarnos que todo está sincronizado
+        self.refresh_ui_data()
+        self.check_excel_health()
+        self.rotation_changed.emit()
+
+
+
+
+
+
     # ---------- REQ-001: inline OFF→ON/ON NS guard ----------
     def _on_schedule_cell_changed(self, item: QTableWidgetItem):
-        if self._loading_preview:
+        if self._loading_preview or self._bulk_editing:
             return
 
         r = item.row()
