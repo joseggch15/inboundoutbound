@@ -1456,103 +1456,171 @@ class PlanStaffWidget(QWidget):
 
     def _apply_fill_from_anchor(self):
         """
-        Copia el turno del día (status + shift + pickup + dropoff + remark)
-        desde la celda actual a todas las celdas seleccionadas a lo largo
-        de la MISMA fila. Actualiza también DB + Excel.
+        Excel-style fill: copy the current cell to the other selected cells.
+        CORRECCIÓN: Ahora calcula dinámicamente el entry_date y exit_date para el
+        nuevo rango completo, asegurando que se registren las horas (times)
+        consistentemente como en el Metodo 1 (Formulario).
         """
         current_item = self.schedule_table.currentItem()
         if not current_item:
             return
 
-        r = current_item.row()
-        c = current_item.column()
-
-        # Necesitamos identidad y fecha base válidas
-        if not (0 <= r < len(self._row_identities)) or not (0 <= c < len(self._date_col_dates)):
+        base_text = (current_item.text() or "").strip().upper()
+        if not base_text:
             return
 
-        identity = self._row_identities[r]
-        username = identity.get("name") or ""
-        badge = identity.get("badge") or ""
-        role = identity.get("role") or ""
-        if not badge or not username:
-            return
-
-        base_date = self._date_col_dates[c]
-
-        # Leemos de DB el turno completo del día "ancla"
-        schedule_map = db.get_schedule_map_for_range(
-            badge, base_date, base_date, self.source
-        )
-        day_info = schedule_map.get(base_date.isoformat()) or {}
-        schedule_status = day_info.get("status")
-        shift_type = day_info.get("shift_type")
-        remark = day_info.get("remark")
-        pickup, dropoff = db.get_user_location_for_date(badge, base_date)
-        in_time = day_info.get("in_time")
-        out_time = day_info.get("out_time")
-
-
-
-        if not schedule_status:
-            # Si la celda ancla no tiene turno, no hay nada que copiar
-            return
-
-        # Determinar las otras columnas seleccionadas en la MISMA fila
         selected_indexes = self.schedule_table.selectedIndexes()
         if len(selected_indexes) <= 1:
             return
 
-        target_cols = sorted(
+        anchor_row = current_item.row()
+        anchor_col = current_item.column()
+
+        # Solo celdas en la misma fila
+        target_columns = sorted(
             {
                 idx.column()
                 for idx in selected_indexes
-                if idx.row() == r and idx.column() != c
+                if idx.row() == anchor_row and idx.column() != anchor_col
             }
         )
-        if not target_cols:
+        if not target_columns:
             return
 
-        # Activamos modo "bulk" para que no se dispare la lógica de edición por celda
+        # --- Parte 1: Actualizar visualmente la tabla (UI) ---
         self._bulk_editing = True
         try:
-            from datetime import datetime as _dt
-
-            with QSignalBlocker(self.schedule_table):
-                for cc in target_cols:
-                    if not (0 <= cc < len(self._date_col_dates)):
-                        continue
-                    day_date = self._date_col_dates[cc]
-
-                    # Aplicar mismo turno / pickup / remark a ese día en DB + Excel
-                    self._apply_schedule_period(
-                        username=username,
-                        badge=badge,
-                        role=role,
-                        start_date=day_date,
-                        end_date=day_date,
-                        status=schedule_status,
-                        shift_type=shift_type,
-                        pickup=pickup,
-                        dropoff=dropoff,
-                        remark=remark,
-                        in_time=in_time,
-                        out_time=out_time,
-                    )
-
-                    # Actualizar celda visualmente
-                    item = self.schedule_table.item(r, cc)
-                    if item is None:
-                        item = QTableWidgetItem("")
-                        self.schedule_table.setItem(r, cc, item)
-                    item.setText(current_item.text())
-                    self._apply_base_background(item, current_item.text().strip().upper())
+            for col in target_columns:
+                item = self.schedule_table.item(anchor_row, col)
+                if item is None:
+                    item = QTableWidgetItem()
+                    self.schedule_table.setItem(anchor_row, col, item)
+                item.setText(base_text)
+                self._apply_base_background(item, base_text)
         finally:
             self._bulk_editing = False
 
-        # Volvemos a cargar desde DB para asegurarnos que todo está sincronizado
-        self.refresh_ui_data()
-        self.check_excel_health()
+        # --- Parte 2: Lógica de Persistencia (DB + Excel) ---
+        
+        # Validar identidad
+        if not (0 <= anchor_row < len(self._row_identities)):
+            return
+        identity = self._row_identities[anchor_row]
+        badge = (identity.get("badge") or "").strip()
+        username = (identity.get("name") or "").strip() or badge
+        role = (identity.get("role") or "").strip()
+
+        if not badge:
+            return
+
+        # Definir el Rango de Fechas Afectado (Start -> End)
+        all_cols = sorted(set(target_columns + [anchor_col]))
+        first_col, last_col = all_cols[0], all_cols[-1]
+        
+        if not (0 <= first_col < len(self._date_col_dates) and 0 <= last_col < len(self._date_col_dates)):
+            return
+
+        start_date = self._date_col_dates[first_col]  # Nueva fecha inicio del bloque
+        end_date = self._date_col_dates[last_col]     # Nueva fecha fin del bloque (donde soltaste el click)
+        anchor_date = self._date_col_dates[anchor_col]
+
+        # --- Obtener info BASE del día ancla ---
+        schedule_map = db.get_schedule_map_for_range(badge, anchor_date, anchor_date, self.source)
+        day_info = schedule_map.get(anchor_date.isoformat()) or {}
+
+        schedule_status = (day_info.get("status") or base_text).strip().upper()
+        shift_type = day_info.get("shift_type")
+        in_time = day_info.get("in_time")
+        out_time = day_info.get("out_time")
+        remark = day_info.get("remark")
+        
+        # Recuperar ubicación del ancla
+        pickup, dropoff = db.get_user_location_for_date(badge, anchor_date)
+
+        # Si faltan datos en BD, intentar inferir del mapa de tipos
+        if not shift_type or not in_time or not out_time:
+            if schedule_status in self._custom_shift_map:
+                info = self._custom_shift_map[schedule_status]
+                shift_type = shift_type or info.get("name")
+                in_time = in_time or info.get("in_time")
+                out_time = out_time or info.get("out_time")
+
+        # --- CRÍTICO: Calcular Entry/Exit Date CORRECTOS con Hora ---
+        # 1. Buscar si el ancla ya tenía una operación con horas definidas
+        operations = db.get_operations_filtered(text=badge, d_from=anchor_date, d_to=anchor_date)
+        operations = [op for op in operations if op.get("badge") == badge]
+        op_info = operations[0] if operations else None
+
+        # 2. Definir horas por defecto (06:00 / 18:00) si no existen
+        default_entry_time = datetime.strptime("06:00", "%H:%M").time()
+        default_exit_time = datetime.strptime("18:00", "%H:%M").time()
+        
+        final_entry_time = default_entry_time
+        final_exit_time = default_exit_time
+
+        # 3. Si el ancla tenía horas específicas, las heredamos
+        if op_info:
+            entry_dt_str = op_info.get("entry_date")
+            exit_dt_str = op_info.get("exit_date")
+            if entry_dt_str and " " in entry_dt_str:
+                try:
+                    final_entry_time = datetime.strptime(entry_dt_str, "%Y-%m-%d %H:%M").time()
+                except ValueError:
+                    pass
+            if exit_dt_str and " " in exit_dt_str:
+                try:
+                    final_exit_time = datetime.strptime(exit_dt_str, "%Y-%m-%d %H:%M").time()
+                except ValueError:
+                    pass
+        
+        # 4. Construir los nuevos timestamps usando las FECHAS del nuevo rango + las HORAS detectadas
+        # Esto asegura que el último día (donde soltaste el scroll) tenga la fecha correcta y la hora de salida.
+        new_entry_datetime = datetime.combine(start_date, final_entry_time)
+        new_exit_datetime = datetime.combine(end_date, final_exit_time)
+
+        # --- Guardar en BD (SSoT) ---
+        
+        # 1. Registrar operación con timestamps completos (SOLUCIÓN DEL PROBLEMA)
+        db.add_operation(
+            username=username,
+            role=role,
+            badge=badge,
+            start_date=start_date,
+            end_date=end_date,
+            created_by=self.logged_username,
+            entry_date=new_entry_datetime, # Ahora tiene la fecha correcta de inicio + hora
+            exit_date=new_exit_datetime    # Ahora tiene la fecha correcta de fin + hora
+        )
+
+        # 2. Actualizar schedules individuales
+        db.upsert_schedule_range(
+            badge, start_date, end_date, schedule_status, 
+            shift_type, self.source, in_time, out_time, remark
+        )
+
+        # 3. Ubicaciones
+        if pickup or dropoff:
+            db.assign_user_location_range(badge, start_date, end_date, pickup, dropoff)
+
+        # --- Guardar en Excel ---
+        success, message = excel.update_plan_staff_excel(
+            self.excel_file, username, role, badge,
+            schedule_status, shift_type, start_date, end_date,
+            self.source, in_time, out_time
+        )
+
+        # --- Auditoría ---
+        prev_map = db.get_schedule_map_for_range(badge, start_date, end_date, self.source) # solo referencia
+        new_map = db.get_schedule_map_for_range(badge, start_date, end_date, self.source)
+        
+        db.log_event(
+            self.logged_username, self.source, "SHIFT_MODIFICATION",
+            f"[DragFill] {username} ({badge}) {start_date}..{end_date} entry={new_entry_datetime} exit={new_exit_datetime}"
+        )
+
+        if not success:
+            QMessageBox.warning(self, "Excel Update", "Saved to DB, but Excel issue:\n" + message)
+
         self.rotation_changed.emit()
 
 
