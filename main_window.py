@@ -1991,18 +1991,37 @@ class PlanStaffWidget(QWidget):
         remark = day_info.get("remark")
 
 
+        # --- BLOQUE A MODIFICAR en _show_shift_tooltip ---
+
         # Determine Shift Title and Times
         shift_title = status_code
         in_time = day_info.get("in_time")
         out_time = day_info.get("out_time")
 
+        # LOGICA NUEVA: Inyectar horarios por defecto para ON / ON NS si no vienen de BD
         if status_code == "ON":
             shift_title = "ON (Day Shift)"
+            if not in_time: 
+                in_time = "06:00"
+            if not out_time:
+                # Regla de negocio: Newmont sale a las 12:00, RGM a las 18:00
+                out_time = "12:00" if self.source == "Newmont" else "18:00"
+
         elif status_code == "ON NS":
             shift_title = "ON NS (Night Shift)"
+            if not in_time:
+                # Regla de negocio: Newmont entra a las 12:00, RGM a las 18:00
+                in_time = "12:00" if self.source == "Newmont" else "18:00"
+            if not out_time:
+                out_time = "06:00"
+
         elif status_code in self._custom_shift_map:
             custom_info = self._custom_shift_map[status_code]
             shift_title = custom_info.get("name", status_code)
+            # Si faltan horas en el día específico, usar las del tipo de turno general
+            if not in_time: in_time = custom_info.get("in_time")
+            if not out_time: out_time = custom_info.get("out_time")
+            
         elif status_code == "OFF":
             shift_title = "OFF"
 
