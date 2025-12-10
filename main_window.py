@@ -1285,6 +1285,50 @@ class PlanStaffWidget(QWidget):
         # color mapping for custom codes
         custom_map = db.get_shift_type_map(self.source)
 
+        # -----------------------------------------------------------
+        # MODIFICACIÓN: Ordenar columnas cronológicamente antes de procesar
+        # -----------------------------------------------------------
+        
+        # 1. Identificar columnas fijas y columnas de fecha
+        all_cols = list(df.columns)
+        actual_frozen_count = min(len(all_cols), FROZEN_COLUMN_COUNT)
+        
+        frozen_part = all_cols[:actual_frozen_count]
+        date_part = all_cols[actual_frozen_count:]
+
+        # 2. Crear una lista de tuplas (ObjetoFecha, NombreColumnaOriginal)
+        date_mapping = []
+        for c in date_part:
+            d_obj = None
+            # Intentar extraer objeto fecha real
+            if hasattr(c, "to_pydatetime"):
+                d_obj = c.to_pydatetime().date()
+            elif isinstance(c, datetime):
+                d_obj = c.date()
+            elif isinstance(c, pydate):
+                d_obj = c
+            
+            # Si logramos obtener una fecha, la guardamos para ordenar
+            if d_obj:
+                date_mapping.append((d_obj, c))
+            else:
+                # Si no es fecha (raro), lo mandamos al final
+                date_mapping.append((pydate.max, c))
+
+        # 3. Ordenar la lista basándonos en la FECHA real (no texto)
+        date_mapping.sort(key=lambda x: x[0])
+
+        # 4. Reconstruir el DataFrame con el nuevo orden
+        # Esto asegura que los DATOS de las celdas coincidan con los encabezados
+        sorted_date_cols = [x[1] for x in date_mapping]
+        new_column_order = frozen_part + sorted_date_cols
+        
+        df = df[new_column_order]
+
+
+
+
+
         # Prepare headers
         cols = list(df.columns)
         # Identify date columns (right side)
@@ -1298,16 +1342,17 @@ class PlanStaffWidget(QWidget):
             else:
                 # not a date header
                 pass
-
+       
         # Frozen
         actual_frozen_count = min(df.shape[1], FROZEN_COLUMN_COUNT)
         frozen_headers = [str(c) for c in cols[:actual_frozen_count]]
-
+        
         # Schedule (date) headers -> one line with date + weekday (abbrev)
         schedule_headers = []
         for d in date_cols:
             schedule_headers.append(f"{d.isoformat()}")
         self._date_col_dates = list(date_cols)  # keep exact order
+        
 
         # Build tables
         self.frozen_table.setRowCount(df.shape[0])
