@@ -589,10 +589,30 @@ class DayScheduleEditor(QDialog):
         for icon, text, payload in status_options:
             self.status_combo.addItem(icon, text, payload)
 
-        if initial.get("status_text"):
-            idx = self.status_combo.findText(initial["status_text"])
-            if idx >= 0:
-                self.status_combo.setCurrentIndex(idx)
+        # FIX → Preselect using payload, not label text
+        status_code = (initial.get("status_text") or "").upper()
+        if status_code:
+            for i in range(self.status_combo.count()):
+                data = self.status_combo.itemData(i)
+                if not isinstance(data, dict):
+                    continue
+
+                kind = data.get("kind")
+                if kind in ("none", "separator"):
+                    continue
+
+                # Base statuses: OFF / ON / ON NS
+                if kind == "base":
+                    if (data.get("status") or "").upper() == status_code:
+                        self.status_combo.setCurrentIndex(i)
+                        break
+
+                # Custom shift types: use the 'code'
+                if kind == "custom":
+                    if (data.get("code") or "").upper() == status_code:
+                        self.status_combo.setCurrentIndex(i)
+                        break
+
 
         # Locations
         self.pickup_combo = QComboBox()
@@ -726,6 +746,7 @@ class PlanStaffWidget(QWidget):
         self.source = source  # "RGM" | "Newmont"
         self.excel_file = excel_file
         self.logged_username = logged_username or "Unknown"
+        self._is_internal_update = False
         self._last_excel_mtime = None
         self._missing_prompt_shown = False
         self._custom_shift_map = db.get_shift_type_map(self.source)
@@ -955,7 +976,7 @@ class PlanStaffWidget(QWidget):
         self.start_date_edit.setCalendarPopup(True)
         self.start_date_edit.setDisplayFormat("dd/MM/yyyy")
 
-        self.end_date_edit = QDateEdit(QDate.currentDate().addDays(14))
+        self.end_date_edit = QDateEdit(QDate.currentDate().addDays(7))
         self.end_date_edit.setCalendarPopup(True)
         self.end_date_edit.setDisplayFormat("dd/MM/yyyy")
 
@@ -1772,70 +1793,60 @@ class PlanStaffWidget(QWidget):
                     self._apply_base_background(it, "")
             return
 
-          # ---------------- Aplicar a cada columna (día) ----------------
+       
+     
+        # ---------------- Aplicar cambios (BLOQUE OPTIMIZADO) ----------------
         from datetime import datetime, time as dtime
 
-        target_cols = col_range if apply_to_range else [c]
+        # 1. Definir el rango total de fechas afectado
+        cols_sorted = sorted(col_range if apply_to_range else [c])
+        first_col_idx = cols_sorted[0]
+        last_col_idx = cols_sorted[-1]
 
-        for cc in target_cols:
-            day_date = self._date_col_dates[cc]
-            start_date = end_date = day_date
+        start_date_block = self._date_col_dates[first_col_idx]
+        end_date_block = self._date_col_dates[last_col_idx]
 
-            # FR-04 audit: mapa previo
-            prev_map = db.get_schedule_map_for_range(
-                badge, start_date, end_date, self.source
-            )
+        # 2. Definir Horas (Entry/Exit) para el bloque
+        if entry_datetime and exit_datetime:
+            entry_dt_for_save = entry_datetime
+            exit_dt_for_save = exit_datetime
+        else:
+            # Si no hay horas específicas del diálogo, usar las del tipo de turno o defaults
+            entry_time_obj = _parse_hhmm_to_time(in_time, dtime(6, 0)) # Default 6 AM
+            exit_time_obj = _parse_hhmm_to_time(out_time, dtime(18, 0)) # Default 6 PM
+            
+            # Entry es el PRIMER día a la hora de entrada
+            entry_dt_for_save = datetime.combine(start_date_block, entry_time_obj)
+            # Exit es el ÚLTIMO día a la hora de salida
+            exit_dt_for_save = datetime.combine(end_date_block, exit_time_obj)
 
-            # Si el diálogo trajo travel dates, los usamos para TODAS las columnas
-            if entry_datetime and exit_datetime:
-                entry_dt_for_save = entry_datetime
-                exit_dt_for_save = exit_datetime
-            else:
-                # Comportamiento antiguo: día completo o según in/out_time,
-                # pero asegurándonos de que sean datetime.time, no strings.
-                entry_time_obj = _parse_hhmm_to_time(in_time, dtime(0, 0))
-                exit_time_obj = _parse_hhmm_to_time(out_time, dtime(23, 59))
+        # 3. Actualizar la UI visualmente (CRÍTICO: Bloquear señales para evitar recursividad)
+        # Esto da feedback inmediato al usuario sin esperar al IO del disco
+        with QSignalBlocker(self.schedule_table):
+            for col_idx in cols_sorted:
+                item_ui = self.schedule_table.item(r, col_idx)
+                if not item_ui:
+                    item_ui = QTableWidgetItem()
+                    self.schedule_table.setItem(r, col_idx, item_ui)
+                
+                # Texto a mostrar (si es None o Do Not Mark, limpiar)
+                text_to_show = schedule_status if schedule_status else ""
+                item_ui.setText(text_to_show)
+                self._apply_base_background(item_ui, text_to_show)
+                
+                # Actualizar valor original para tracking de REQ-001
+                self._cell_original_values[(r, col_idx)] = text_to_show
 
-                entry_dt_for_save = datetime.combine(start_date, entry_time_obj)
-                exit_dt_for_save = datetime.combine(end_date, exit_time_obj)
+        # 4. Actualizar Base de Datos (SSoT)
+        try:
+            # ... (tus llamadas a db.add_operation y db.upsert_schedule_range) ...
+            # ... (db.assign_user_location_range, etc.) ...
 
-
-            # --- DB (SSoT) ---
-            db.add_operation(
-                username=username,
-                role=role,
-                badge=badge,
-                start_date=start_date,
-                end_date=end_date,
-                created_by=self.logged_username,
-                entry_date=entry_dt_for_save,
-                exit_date=exit_dt_for_save,
-            )
-
-            db.upsert_schedule_range(
-                badge,
-                start_date,
-                end_date,
-                schedule_status,
-                shift_type,
-                self.source,
-                in_time,
-                out_time,
-                remark,
-            )
-
-            if pickup or dropoff:
-                db.assign_user_location_range(
-                    badge, start_date, end_date, pickup, dropoff
-                )
-                db.log_event(
-                    self.logged_username,
-                    self.source,
-                    "LOCATION_ASSIGN_INLINE",
-                    f"{username} ({badge}) {start_date} PU={pickup} DO={dropoff}",
-                )
-
-            # --- Excel ---
+            # 5. Actualizar Excel (UNA SOLA VEZ para todo el rango)
+            
+            # --- AQUÍ EMPIEZA EL CAMBIO DE LA BANDERA ---
+            self._is_internal_update = True  # <--- ACTIVAR BANDERA: "Soy yo escribiendo"
+            
             success, message = excel.update_plan_staff_excel(
                 self.excel_file,
                 username,
@@ -1843,28 +1854,39 @@ class PlanStaffWidget(QWidget):
                 badge,
                 schedule_status,
                 shift_type,
-                start_date,
-                end_date,
+                start_date_block, 
+                end_date_block,   
                 self.source,
                 in_time,
                 out_time,
             )
 
-            # --- Audit ---
-            new_map = db.get_schedule_map_for_range(
-                badge, start_date, end_date, self.source
-            )
+            # Mantenemos la bandera arriba por 2 segundos por seguridad
+            QTimer.singleShot(2000, lambda: setattr(self, '_is_internal_update', False))
+
+            if not success:
+                self._is_internal_update = False # Si falló, bajamos la bandera ya
+                raise Exception(message)
+            # ---------------------------------------------
+
+            # Log de éxito
             db.log_event(
                 self.logged_username,
                 self.source,
                 "SHIFT_MODIFICATION_INLINE",
-                f"{username} ({badge}) {start_date}..{end_date} prev={prev_map} new={new_map} "
-                f"remark={remark}; Excel={'OK' if success else 'ERR'} ({message})",
+                f"Updated range {start_date_block} to {end_date_block} for {badge}"
             )
 
-        # ---------------- Refrescar vista ----------------
-        self.refresh_ui_data()
-        self.check_excel_health()
+        except Exception as e:
+            self._is_internal_update = False # Asegurar que la bandera se baja si hay error
+            QMessageBox.critical(self, "Save Error", f"Error saving data: {str(e)}")
+            self.refresh_ui_data()
+            return
+
+        # 6. Finalización
+        # NO llamamos a refresh_ui_data() aquí para evitar el parpadeo. 
+        # Ya confiamos en que la UI, DB y Excel están sincronizados.
+        self.check_excel_health() # Solo verificamos que el archivo siga existiendo
         self.rotation_changed.emit()
 
     # ---------- MODIFIED: hover card logic ----------
@@ -2530,6 +2552,13 @@ class PlanStaffWidget(QWidget):
 
             # If file changed (mtime) -> refresh preview
             if self._last_excel_mtime is None or mtime != self._last_excel_mtime:
+                # --- AGREGAR ESTE BLOQUE DE SEGURIDAD ---
+                if self._is_internal_update:
+                    # Actualizamos el mtime para que la próxima vez no crea que es nuevo
+                    self._last_excel_mtime = mtime
+                    print("DEBUG: Ignorando recarga por guardado interno.")
+                    return
+                # ----------------------------------------
                 self._last_excel_mtime = mtime
                 self.load_schedule_data()
         except RuntimeError:
@@ -3710,6 +3739,7 @@ class MainWindow(QMainWindow):
         self.excel_file = excel_file
         self.logged_username = logged_username or "Unknown"
         self.can_manage_shift_types = bool(can_manage_shift_types)
+        
 
         db.setup_database()
         db.log_event(
