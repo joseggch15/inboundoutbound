@@ -1368,7 +1368,7 @@ class PlanStaffWidget(QWidget):
 
         # Load rows
         for i, row in df.iterrows():
-            # identity
+           # identity
             badge_val = (
                 row.get("BADGE")
                 if hasattr(row, "get")
@@ -1379,10 +1379,20 @@ class PlanStaffWidget(QWidget):
                 if hasattr(row, "get")
                 else (row["NAME"] if "NAME" in df.columns else "")
             )
+            
+            # --- AGREGAR ESTO (INICIO) ---
+            role_val = (
+                row.get("ROLE")
+                if hasattr(row, "get")
+                else (row["ROLE"] if "ROLE" in df.columns else "")
+            )
+            # --- AGREGAR ESTO (FIN) ---
+
             self._row_identities.append(
                 {
                     "badge": str(badge_val) if badge_val is not None else "",
                     "name": str(name_val) if name_val is not None else "",
+                    "role": str(role_val) if role_val is not None else "", # <--- AGREGAR ESTA LÍNEA
                 }
             )
 
@@ -2240,7 +2250,7 @@ class PlanStaffWidget(QWidget):
 
     # ---------- actions ----------
     def save_plan_changes(self):
-        # Clear previous visual error states
+        # 1. Limpiar estados de error visuales
         mark_error(self.user_selector_combo, False)
         mark_error(self.role_display, False)
         mark_error(self.start_date_edit, False)
@@ -2248,22 +2258,55 @@ class PlanStaffWidget(QWidget):
         mark_error(self.entry_date_edit, False)
         mark_error(self.exit_date_edit, False)
 
-
+        # 2. Leer datos básicos del formulario
         username = self.user_selector_combo.currentText()
         badge = self.badge_display.text()
         role = self.role_display.text()
         start_date = self.start_date_edit.date().toPyDate()
         end_date = self.end_date_edit.date().toPyDate()
-
-        # NEW: read locations (optional)
+        
         pickup = self.pickup_combo.currentData() or None
         dropoff = self.dropoff_combo.currentData() or None
         remark = self.remarks_input.text().strip() or None
-        
-        # MODIFIED: read travel dates and times if checkbox is ticked
+
+        # 3. Validaciones básicas
+        if not username or username == "-- Select a user --":
+            mark_error(self.user_selector_combo, True)
+            QMessageBox.warning(self, "Incomplete Data", "Please select an employee.")
+            return
+
+        if not role:
+            mark_error(self.role_display, True)
+            QMessageBox.warning(self, "Incomplete Data", "Please select a role/department.")
+            return
+
+        if start_date > end_date:
+            mark_error(self.start_date_edit, True)
+            mark_error(self.end_date_edit, True)
+            QMessageBox.warning(self, "Date Error", "Start date cannot be after end date.")
+            return
+
+        # 4. Interpretar selección del turno (Status/Shift)
+        sel = self.status_selector.currentData()
+        if not sel or sel.get("kind") in ("none", "separator"):
+            schedule_status = None
+            shift_type = None
+            in_time_raw, out_time_raw = None, None
+        elif sel.get("kind") == "base":
+            schedule_status, shift_type = sel["status"], sel["shift_type"]
+            in_time_raw, out_time_raw = sel.get("in_time"), sel.get("out_time")
+        else:  # custom
+            schedule_status, shift_type = sel["code"], sel["name"]
+            in_time_raw, out_time_raw = sel.get("in_time"), sel.get("out_time")
+
+        # ---------------------------------------------------------------------
+        # 5. CÁLCULO DE FECHAS Y HORAS DE VIAJE (CORRECCIÓN PUNTUAL)
+        # ---------------------------------------------------------------------
         entry_datetime = None
         exit_datetime = None
+
         if self.travel_dates_check.isChecked():
+            # OPCIÓN A: El usuario define fechas específicas manualmente
             entry_date = self.entry_date_edit.date().toPyDate()
             entry_time = self.entry_time_edit.time().toPyTime()
             entry_datetime = datetime.combine(entry_date, entry_time)
@@ -2272,6 +2315,7 @@ class PlanStaffWidget(QWidget):
             exit_time = self.exit_time_edit.time().toPyTime()
             exit_datetime = datetime.combine(exit_date, exit_time)
             
+            # Validación lógica de viaje
             if entry_datetime > exit_datetime:
                 mark_error(self.entry_date_edit, True)
                 mark_error(self.exit_date_edit, True)
@@ -2280,56 +2324,46 @@ class PlanStaffWidget(QWidget):
 
             if entry_datetime.date() > start_date or exit_datetime.date() < end_date:
                 reply = QMessageBox.question(self, "Confirm Dates", 
-                "The travel period does not fully encompass the work period. This is unusual. Are you sure you want to proceed?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+                    "The travel period does not fully encompass the work period. Continue?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
                 if reply == QMessageBox.StandardButton.No:
                     return
 
+        elif schedule_status is not None:
+            # OPCIÓN B: Automático (Check desmarcado) -> Calcular Defaults
+            # Se usa la fecha de inicio del periodo para Entry y fin para Exit.
+            # Se inyectan las horas según el tipo de turno o reglas de negocio.
+            
+            # Hora por defecto base (06:00 / 18:00)
+            t_in = datetime.strptime("06:00", "%H:%M").time()
+            t_out = datetime.strptime("18:00", "%H:%M").time()
 
-        if not username or username == "-- Select a user --":
-            mark_error(self.user_selector_combo, True)
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Incomplete Data")
-            box.setText("Please select an employee.")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
-            return
+            # Lógica de Horas
+            if in_time_raw and out_time_raw:
+                # Si el turno (custom) ya trae horas definidas en DB
+                try: 
+                    t_in = datetime.strptime(str(in_time_raw)[:5], "%H:%M").time()
+                    t_out = datetime.strptime(str(out_time_raw)[:5], "%H:%M").time()
+                except: pass
+            else:
+                # Reglas Hardcoded (SSoT fallbacks)
+                is_newmont = (self.source == "Newmont")
+                if schedule_status == "ON": # Día
+                    t_in = datetime.strptime("06:00", "%H:%M").time()
+                    t_out = datetime.strptime("12:00" if is_newmont else "18:00", "%H:%M").time()
+                elif schedule_status == "ON NS": # Noche
+                    t_in = datetime.strptime("12:00" if is_newmont else "18:00", "%H:%M").time()
+                    t_out = datetime.strptime("06:00", "%H:%M").time()
 
-        if not role:
-            mark_error(self.role_display, True)
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Incomplete Data")
-            box.setText("Please select a role/department.")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
-            return
+            # Crear los datetimes finales para guardar en BD
+            entry_datetime = datetime.combine(start_date, t_in)
+            exit_datetime = datetime.combine(end_date, t_out)
+        
+        # ---------------------------------------------------------------------
+        # FIN DE LA CORRECCIÓN
+        # ---------------------------------------------------------------------
 
-        if start_date > end_date:
-            mark_error(self.start_date_edit, True)
-            mark_error(self.end_date_edit, True)
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Date Error")
-            box.setText("Start date cannot be after end date.")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
-            return
-
-        # Interpret current selection (status/shift)
-        sel = self.status_selector.currentData()
-        if not sel or sel.get("kind") in ("none", "separator"):
-            schedule_status = None
-            shift_type, in_time, out_time = None, None, None
-        elif sel.get("kind") == "base":
-            schedule_status, shift_type = sel["status"], sel["shift_type"]
-            in_time, out_time = sel.get("in_time"), sel.get("out_time")
-        else:  # custom
-            schedule_status, shift_type = sel["code"], sel["name"]
-            in_time, out_time = sel.get("in_time"), sel.get("out_time")
-
-        # FR-01: Overwrite confirmation (Excel + DB)
+        # 6. Detección de Conflictos (Overwrite check)
         conflicts_excel = excel.find_conflicts(
             self.excel_file, username, badge, start_date, end_date
         )
@@ -2345,16 +2379,16 @@ class PlanStaffWidget(QWidget):
             box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
             box.exec()
             if box.clickedButton() != accept_btn:
-                return  # abort
+                return
 
-        # FR-04: previous mapping (for audit details)
+        # Para auditoría
         prev_map = db.get_schedule_map_for_range(
             badge, start_date, end_date, self.source
         )
 
-        # --- DB (SSoT) ---
+        # 7. Guardar en BD (SSoT)
         if schedule_status is not None:
-            # MODIFIED: Save the operation with new datetimes
+            # Aquí es donde se guardan los datetimes calculados (entry_datetime/exit_datetime)
             db.add_operation(
                 username=username,
                 role=role,
@@ -2362,8 +2396,8 @@ class PlanStaffWidget(QWidget):
                 start_date=start_date,
                 end_date=end_date,
                 created_by=self.logged_username,
-                entry_date=entry_datetime,
-                exit_date=exit_datetime,
+                entry_date=entry_datetime, # Ahora siempre tendrá valor si hay turno
+                exit_date=exit_datetime,   # Ahora siempre tendrá valor si hay turno
             )
             db.upsert_schedule_range(
                 badge,
@@ -2372,14 +2406,14 @@ class PlanStaffWidget(QWidget):
                 schedule_status,
                 shift_type,
                 self.source,
-                in_time,
-                out_time,
+                in_time_raw,
+                out_time_raw,
                 remark,
             )
-        else:  # clear range
+        else:  # Limpiar rango ("Do Not Mark Days")
             db.clear_schedule_range(badge, start_date, end_date, self.source)
 
-        # NEW: persist location assignment for the selected range (if provided)
+        # Guardar ubicación si aplica
         if pickup or dropoff:
             db.assign_user_location_range(badge, start_date, end_date, pickup, dropoff)
             db.log_event(
@@ -2389,7 +2423,8 @@ class PlanStaffWidget(QWidget):
                 f"{username} ({badge}) {start_date}..{end_date} PU={pickup} DO={dropoff}",
             )
 
-        # --- Excel (derived artifact; created if missing) ---
+        # 8. Actualizar Excel
+        self._is_internal_update = True  # Flag para evitar recarga innecesaria
         success, message = excel.update_plan_staff_excel(
             self.excel_file,
             username,
@@ -2400,14 +2435,13 @@ class PlanStaffWidget(QWidget):
             start_date,
             end_date,
             self.source,
-            in_time,
-            out_time,
+            in_time_raw,
+            out_time_raw,
         )
+        QTimer.singleShot(2000, lambda: setattr(self, '_is_internal_update', False))
 
-        # --- Audit (FR-04)
-        new_map = db.get_schedule_map_for_range(
-            badge, start_date, end_date, self.source
-        )
+        # 9. Auditoría y Finalización
+        new_map = db.get_schedule_map_for_range(badge, start_date, end_date, self.source)
         db.log_event(
             self.logged_username,
             self.source,
@@ -2415,20 +2449,15 @@ class PlanStaffWidget(QWidget):
             f"{username} ({badge}) {start_date}..{end_date} prev={prev_map} new={new_map} remark={remark}; Excel={'OK' if success else 'ERR'}",
         )
 
-        # --- Message
         box = QMessageBox(self)
-        box.setIcon(
-            QMessageBox.Icon.Information if success else QMessageBox.Icon.Warning
-        )
+        box.setIcon(QMessageBox.Icon.Information if success else QMessageBox.Icon.Warning)
         box.setWindowTitle("Success" if success else "Warning")
         box.setText(message if success else ("Saved to DB. " + message))
         box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
         box.exec()
 
-        # Refresh preview/combo
         self.refresh_ui_data()
         self.check_excel_health()
-        # Notify Rotation History tab to refresh
         self.rotation_changed.emit()
 
     def generate_report(self):
@@ -3084,6 +3113,23 @@ class CrudWidget(QWidget):
         else:
             success, message = db.add_user(name, role, badge, self.source)
 
+        # --- INICIO DEL CAMBIO ---
+        if success:
+            # 1. Sincronizar Excel inmediatamente (Escribir el usuario en el archivo físico)
+            # Esto permite que el PlanStaffWidget lo lea al instante.
+            try:
+                excel.refresh_excel_from_db(self.excel_file, self.source)
+            except Exception as e:
+                print(f"Auto-refresh failed: {e}")
+
+            # 2. Actualizar la UI local
+            self._populate_role_filter()
+            self.refresh_ui_data()
+            
+            # 3. Avisar a otras pestañas que hubo cambios
+            self.users_changed.emit(self.source)
+        # --- FIN DEL CAMBIO ---
+
         box = QMessageBox(self)
         box.setIcon(
             QMessageBox.Icon.Information if success else QMessageBox.Icon.Warning
@@ -3092,11 +3138,6 @@ class CrudWidget(QWidget):
         box.setText(message)
         box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
         box.exec()
-        
-        if success:
-            self._populate_role_filter()
-            self.refresh_ui_data()
-            self.users_changed.emit(self.source)
 
    # En main_window.py -> clase CrudWidget
 
