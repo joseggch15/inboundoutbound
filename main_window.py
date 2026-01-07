@@ -1891,16 +1891,52 @@ class PlanStaffWidget(QWidget):
                 
                 # Actualizar valor original para tracking de REQ-001
                 self._cell_original_values[(r, col_idx)] = text_to_show
-
-        # 4. Actualizar Base de Datos (SSoT)
+# 4. Actualizar Base de Datos (SSoT)
         try:
-            # ... (tus llamadas a db.add_operation y db.upsert_schedule_range) ...
-            # ... (db.assign_user_location_range, etc.) ...
+            # A. Registrar la Operación (Historial)
+            db.add_operation(
+                username=username,
+                role=role,
+                badge=badge,
+                start_date=start_date_block,
+                end_date=end_date_block,
+                created_by=self.logged_username,
+                entry_date=entry_dt_for_save,
+                exit_date=exit_dt_for_save
+            )
 
-            # 5. Actualizar Excel (UNA SOLA VEZ para todo el rango)
-            
-            # --- AQUÍ EMPIEZA EL CAMBIO DE LA BANDERA ---
-            self._is_internal_update = True  # <--- ACTIVAR BANDERA: "Soy yo escribiendo"
+            # B. Guardar el Schedule (CORRECCIÓN: Se agrega 'remark')
+            db.upsert_schedule_range(
+                badge,
+                start_date_block,
+                end_date_block,
+                schedule_status,
+                shift_type,
+                self.source,
+                in_time,        # hora entrada (str)
+                out_time,       # hora salida (str)
+                remark          # <--- CORRECCIÓN CRÍTICA: Antes no se enviaba
+            )
+
+            # C. Guardar Ubicaciones (CORRECCIÓN: Antes faltaba este bloque en el diálogo)
+            if pickup or dropoff:
+                db.assign_user_location_range(
+                    badge, 
+                    start_date_block, 
+                    end_date_block, 
+                    pickup, 
+                    dropoff
+                )
+                # Log opcional para auditoría
+                db.log_event(
+                    self.logged_username,
+                    self.source,
+                    "LOCATION_ASSIGN_INLINE",
+                    f"{badge} {start_date_block}..{end_date_block} PU={pickup} DO={dropoff}"
+                )
+
+            # 5. Actualizar Excel (SSoT secundario)
+            self._is_internal_update = True  
             
             success, message = excel.update_plan_staff_excel(
                 self.excel_file,
@@ -1916,24 +1952,22 @@ class PlanStaffWidget(QWidget):
                 out_time,
             )
 
-            # Mantenemos la bandera arriba por 2 segundos por seguridad
+            # ... resto del código (QTimer, logs, etc) sigue igual ...
             QTimer.singleShot(2000, lambda: setattr(self, '_is_internal_update', False))
 
             if not success:
-                self._is_internal_update = False # Si falló, bajamos la bandera ya
+                self._is_internal_update = False 
                 raise Exception(message)
-            # ---------------------------------------------
 
-            # Log de éxito
             db.log_event(
                 self.logged_username,
                 self.source,
                 "SHIFT_MODIFICATION_INLINE",
-                f"Updated range {start_date_block} to {end_date_block} for {badge}"
+                f"Updated range {start_date_block} to {end_date_block} for {badge}. Remark: {remark}"
             )
 
         except Exception as e:
-            self._is_internal_update = False # Asegurar que la bandera se baja si hay error
+            self._is_internal_update = False 
             QMessageBox.critical(self, "Save Error", f"Error saving data: {str(e)}")
             self.refresh_ui_data()
             return
