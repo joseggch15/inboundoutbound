@@ -13,15 +13,16 @@ def limpiar_base_datos():
     cursor = conn.cursor()
     
     # Lista de tablas a vaciar
+  # Lista de tablas a vaciar
     tablas = [
         "schedules",
         "operations",
         "user_locations",
         "users",
         "audit_log",
-        # "shift_types",  <-- Descomenta si quieres borrar tipos de turno
-        # "location",     <-- Descomenta si quieres borrar lugares
-        # "report_settings" 
+        "shift_types",  
+        "location",   
+        "report_settings" 
     ]
 
     try:
