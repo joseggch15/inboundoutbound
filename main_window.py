@@ -1803,17 +1803,48 @@ class PlanStaffWidget(QWidget):
                 right = sel.rightColumn()
                 col_range = list(range(left, right + 1))
 
-        # ---------------- Valores iniciales para el diálogo ----------------
+       # ---------------- Valores iniciales para el diálogo ----------------
         # Leemos info actual de BD (status, remark, pickup/dropoff) para el día base
         schedule_map = db.get_schedule_map_for_range(
             badge, base_date, base_date, self.source
         )
         day_info = schedule_map.get(base_date.isoformat(), {}) or {}
-        current_status_text = (day_info.get("status") or new_text or "").upper()
+
+        # --- CORRECCIÓN CRÍTICA DE SELECCIÓN (INICIO) ---
+        # El texto en la celda puede ser "ON (Day Shift)", pero el código interno es "ON".
+        # Debemos "traducir" lo que ve el usuario al código real para que el diálogo lo reconozca.
+        
+        raw_cell_text = new_text if new_text else ""
+        resolved_status_code = raw_cell_text # Valor por defecto (si no encontramos coincidencia)
+
+        # Obtenemos las mismas opciones que usa el combo
+        possible_options = self._status_options_for_dialog()
+
+        for icon, label, data in possible_options:
+            if not isinstance(data, dict): continue
+            
+            # 1. ¿Coincide con la etiqueta visual? (Ej: "ON (Day Shift)" == "ON (Day Shift)")
+            if label.strip().upper() == raw_cell_text:
+                if data.get('kind') == 'base':
+                    resolved_status_code = data.get('status')
+                elif data.get('kind') == 'custom':
+                    resolved_status_code = data.get('code')
+                break
+            
+            # 2. ¿Coincide con el código interno? (Ej: "ON" == "ON")
+            # Esto pasa si el dato vino de Excel y no se ha tocado
+            internal_code = data.get('status') if data.get('kind') == 'base' else data.get('code')
+            if internal_code and str(internal_code).upper() == raw_cell_text:
+                resolved_status_code = internal_code
+                break
+        
+        # Usamos el código resuelto ("ON") en lugar del texto largo ("ON (Day Shift)")
+        current_status_text = resolved_status_code
+        # --- CORRECCIÓN CRÍTICA DE SELECCIÓN (FIN) ---
 
         pickup_init, dropoff_init = db.get_user_location_for_date(badge, base_date)
         initial = {
-            "status_text": current_status_text,
+            "status_text": current_status_text, 
             "pickup": pickup_init,
             "dropoff": dropoff_init,
             "remark": day_info.get("remark") or "",
