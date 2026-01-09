@@ -1281,6 +1281,23 @@ class PlanStaffWidget(QWidget):
             self.schedule_table.setRowCount(0)
             self._loading_preview = False
             return
+        """
+        Loads data from Excel + DB into the table widget.
+        Uses a helper thread to avoid freezing UI (conceptually).
+        """
+        # --- NUEVO: HORIZONTE MÓVIL AUTOMÁTICO ---
+        # Antes de cargar nada, aseguramos que el Excel tenga las columnas futuras
+        # según la fecha de hoy.
+        try:
+            ok_horizon, msg_horizon = excel.ensure_rolling_horizon_columns(self.excel_file)
+            if ok_horizon:
+                print(f"[AUTO-HORIZON] {msg_horizon}") # Log de consola
+                # Opcional: Mostrar mensaje no intrusivo en barra de estado si existiera
+            elif "Error" in msg_horizon:
+                print(f"[AUTO-HORIZON ERROR] {msg_horizon}")
+        except Exception as e:
+            print(f"[AUTO-HORIZON CRITICAL] Failed: {e}")
+        # -------------------------------------------
 
         # color mapping for custom codes
         custom_map = db.get_shift_type_map(self.source)

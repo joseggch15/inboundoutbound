@@ -36,6 +36,7 @@ import openpyxl
 import xlsxwriter
 from openpyxl.styles import PatternFill
 from openpyxl.comments import Comment
+import calendar  # <--- Necesario para calcular el último día del mes
 
 # ============================================================
 # Helpers / Normalización
@@ -1786,3 +1787,98 @@ def remove_user_from_excel(plan_staff_file: str, badge: str) -> Tuple[bool, str]
     except Exception as e:
         return False, f"Error modifying Excel: {e}"
 
+# ============================================================
+# HORIZONTE MÓVIL (Rolling Horizon)
+# ============================================================
+
+def ensure_rolling_horizon_columns(plan_staff_file: str) -> Tuple[bool, str]:
+    """
+    Garantiza que el Excel tenga columnas de fecha hasta N meses en el futuro
+    según la fecha actual del sistema.
+    
+    Regla:
+      - Si hoy es día 1-7: Horizonte = Mes actual + 3 meses.
+      - Si hoy es día >7:  Horizonte = Mes actual + 2 meses.
+      - Extiende hasta el ÚLTIMO día de ese mes objetivo.
+      
+    Ejemplo:
+      - Hoy 10-Ene-2026 -> Meta: 31-Mar-2026.
+      - Hoy 05-Mar-2026 -> Meta: 30-Jun-2026.
+      
+    No altera celdas existentes, solo agrega encabezados vacíos datetime al final.
+    """
+    if not os.path.exists(plan_staff_file):
+        return False, f"File not found: {plan_staff_file}"
+
+    try:
+        # 1. Calcular Fecha Objetivo (Target Date)
+        today = date.today()
+        
+        # Regla de la primera semana
+        months_ahead = 3 if today.day <= 7 else 2
+        
+        target_year = today.year
+        target_month = today.month + months_ahead
+        
+        # Ajuste de año (si nos pasamos de diciembre)
+        while target_month > 12:
+            target_month -= 12
+            target_year += 1
+            
+        # Obtener el último día del mes objetivo
+        _, last_day = calendar.monthrange(target_year, target_month)
+        target_date = date(target_year, target_month, last_day)
+
+        # 2. Cargar Excel para inspección y edición
+        wb = openpyxl.load_workbook(plan_staff_file)
+        ws = wb.active
+        
+        # 3. Detectar última fecha existente
+        max_existing_date = None
+        existing_dates = set()
+        
+        # Escanear fila 1 buscando datetimes
+        for cell in ws[1]:
+            if isinstance(cell.value, datetime):
+                d = cell.value.date()
+                existing_dates.add(d)
+                if max_existing_date is None or d > max_existing_date:
+                    max_existing_date = d
+            # Soporte por si openpyxl leyó como Timestamp de pandas (raro en header pero posible)
+            elif hasattr(cell.value, 'date'): 
+                 d = cell.value.date()
+                 existing_dates.add(d)
+                 if max_existing_date is None or d > max_existing_date:
+                    max_existing_date = d
+
+        # Si no hay fechas (archivo nuevo o corrupto), asumimos ayer para empezar desde hoy
+        if max_existing_date is None:
+            max_existing_date = today - timedelta(days=1)
+
+        # 4. Verificar si hace falta extender
+        if max_existing_date >= target_date:
+            return False, "Horizon already sufficient."
+
+        # 5. Agregar columnas faltantes
+        current_date = max_existing_date + timedelta(days=1)
+        columns_added = 0
+        
+        while current_date <= target_date:
+            if current_date not in existing_dates:
+                new_col_idx = ws.max_column + 1
+                # Escribimos el objeto datetime. OpenPyXL aplicará formato fecha por defecto.
+                # Al agregar columna, las filas de abajo (usuarios) quedan vacías (None) automáticamente.
+                ws.cell(row=1, column=new_col_idx, value=datetime(current_date.year, current_date.month, current_date.day))
+                columns_added += 1
+            
+            current_date += timedelta(days=1)
+
+        # 6. Guardar cambios si hubo adiciones
+        if columns_added > 0:
+            wb.save(plan_staff_file)
+            return True, f"Horizon extended: added {columns_added} days until {target_date}."
+            
+        return False, "No new columns needed (dates might be sparse but cover range)."
+
+    except Exception as e:
+        return False, f"Error ensuring rolling horizon: {e}"
