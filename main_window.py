@@ -761,6 +761,9 @@ class PlanStaffWidget(QWidget):
         self._date_col_dates = []  # schedule_table column index -> pydate
         self._warn_highlight_keys = set()  # {"<badge>|YYYY-MM-DD", ...}
         self._bulk_editing = False  # para detectar relleno masivo por arrastre
+        
+        # --- NUEVO: Bandera para evitar doble apertura de diálogo ---
+        self._is_handling_change = False
 
 
         # ---------- root layout ----------
@@ -1738,331 +1741,295 @@ class PlanStaffWidget(QWidget):
         self.rotation_changed.emit()
 
 
-    # ---------- REQ-001: inline OFF→ON/ON NS guard ----------
+# ---------- REQ-001: inline OFF→ON/ON NS guard ----------
     def _on_schedule_cell_changed(self, item: QTableWidgetItem):
-        if self._loading_preview or self._bulk_editing:
+        # 1. AGREGAR: Chequeo de la bandera _is_handling_change
+        if self._loading_preview or self._bulk_editing or getattr(self, '_is_handling_change', False):
             return
 
-        r = item.row()
-        c = item.column()
-        new_text = (item.text() or "").strip().upper()
-        old_text = (self._cell_original_values.get((r, c), "") or "").strip().upper()
+        # 2. ACTIVAR BANDERA
+        self._is_handling_change = True
+        
+        try:
+            r = item.row()
+            c = item.column()
+            new_text = (item.text() or "").strip().upper()
+            old_text = (self._cell_original_values.get((r, c), "") or "").strip().upper()
 
-        # ---------------- REQ-001: OFF/blank -> ON / ON NS ----------------
-        if old_text in ("OFF", "") and new_text in ("ON", "ON NS"):
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Confirm Change")
-            box.setText("The employee is on a day off. Do you want to set it to ON?")
-            accept_btn = box.addButton("Accept", QMessageBox.ButtonRole.AcceptRole)
-            box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-            box.exec()
-            if box.clickedButton() != accept_btn:
-                # Revertir a valor original y color base
+            # ---------------- REQ-001: OFF/blank -> ON / ON NS ----------------
+            if old_text in ("OFF", "") and new_text in ("ON", "ON NS"):
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Icon.Warning)
+                box.setWindowTitle("Confirm Change")
+                box.setText("The employee is on a day off. Do you want to set it to ON?")
+                accept_btn = box.addButton("Accept", QMessageBox.ButtonRole.AcceptRole)
+                box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+                box.exec()
+                if box.clickedButton() != accept_btn:
+                    # Revertir a valor original y color base
+                    with QSignalBlocker(self.schedule_table):
+                        item.setText(old_text)
+                    self._apply_base_background(item, old_text)
+                    return
+                else:
+                    # Mantener el nuevo valor, marcar warn suave
+                    with QSignalBlocker(self.schedule_table):
+                        item.setText(new_text)  # normalizar mayúsculas
+                    item.setBackground(QColor(WARN_BG_HEX))
+                    self._warn_highlight_keys.add(self._warn_key_for(r, c))
+            else:
+                # Sin guard especial; color base y limpiar warn si aplica
+                self._apply_base_background(item, new_text)
+                key = self._warn_key_for(r, c)
+                if new_text not in ("ON", "ON NS") and key in self._warn_highlight_keys:
+                    self._warn_highlight_keys.discard(key)
+
+            # ---------------- Identidad de fila / columna ----------------
+            if r < 0 or r >= len(self._row_identities):
+                return
+            if c < 0 or c >= len(self._date_col_dates):
+                return
+
+            identity = self._row_identities[r]
+            username = identity.get("name") or ""
+            badge = identity.get("badge") or ""
+            role = identity.get("role") or ""
+
+            if not badge:
+                # Sin badge no podemos guardar nada consistente
+                return
+
+            base_date = self._date_col_dates[c]
+
+            # ---------------- Rango horizontal (para autofill) ----------------
+            selected_ranges = self.schedule_table.selectedRanges()
+            col_range = [c]
+            if selected_ranges:
+                sel = selected_ranges[0]
+                if sel.topRow() <= r <= sel.bottomRow():
+                    left = max(c, sel.leftColumn())
+                    right = sel.rightColumn()
+                    col_range = list(range(left, right + 1))
+
+            # ---------------- Valores iniciales para el diálogo ----------------
+            # Leemos info actual de BD (status, remark, pickup/dropoff) para el día base
+            schedule_map = db.get_schedule_map_for_range(
+                badge, base_date, base_date, self.source
+            )
+            day_info = schedule_map.get(base_date.isoformat(), {}) or {}
+
+            # --- Lógica de resolución de código (MANTENER TU ARREGLO PREVIO) ---
+            raw_cell_text = new_text if new_text else ""
+            resolved_status_code = raw_cell_text 
+
+            possible_options = self._status_options_for_dialog()
+
+            for icon, label, data in possible_options:
+                if not isinstance(data, dict): continue
+                
+                # 1. ¿Coincide con la etiqueta visual? 
+                if label.strip().upper() == raw_cell_text:
+                    if data.get('kind') == 'base':
+                        resolved_status_code = data.get('status')
+                    elif data.get('kind') == 'custom':
+                        resolved_status_code = data.get('code')
+                    break
+                
+                # 2. ¿Coincide con el código interno? 
+                internal_code = data.get('status') if data.get('kind') == 'base' else data.get('code')
+                if internal_code and str(internal_code).upper() == raw_cell_text:
+                    resolved_status_code = internal_code
+                    break
+            
+            current_status_text = resolved_status_code
+            # -----------------------------------------------------------------
+
+            pickup_init, dropoff_init = db.get_user_location_for_date(badge, base_date)
+            initial = {
+                "status_text": current_status_text, 
+                "pickup": pickup_init,
+                "dropoff": dropoff_init,
+                "remark": day_info.get("remark") or "",
+            }
+
+            locations = [loc["pickup_location"] for loc in db.get_locations(self.source)]
+
+            editor = DayScheduleEditor(
+                self,
+                status_options=self._status_options_for_dialog(),
+                locations=locations,
+                initial=initial,
+            )
+            
+            # --- AQUÍ OCURRÍA EL DOBLE TRIGGER ---
+            # Al ejecutarse editor.exec(), se pierde foco, se dispara itemChanged de nuevo.
+            # Pero como _is_handling_change es True, la segunda llamada entra al 'if' inicial y retorna.
+            if editor.exec() != QDialog.DialogCode.Accepted:
+                # Usuario canceló: revertimos el cambio visual y salimos
                 with QSignalBlocker(self.schedule_table):
                     item.setText(old_text)
                 self._apply_base_background(item, old_text)
                 return
-            else:
-                # Mantener el nuevo valor, marcar warn suave
+
+            payload = editor.result_payload()
+            sel = payload["selection"]
+            pickup = payload["pickup"]
+            dropoff = payload["dropoff"]
+            remark = payload["remark"]
+            apply_to_range = payload["apply_to_range"]
+            
+            entry_datetime = payload.get("entry_datetime")
+            exit_datetime = payload.get("exit_datetime")
+
+            # Validación simple
+            if entry_datetime and exit_datetime and entry_datetime > exit_datetime:
+                QMessageBox.warning(
+                    self,
+                    "Date Error",
+                    "Entry date/time cannot be after Exit date/time.",
+                )
                 with QSignalBlocker(self.schedule_table):
-                    item.setText(new_text)  # normalizar mayúsculas
-                item.setBackground(QColor(WARN_BG_HEX))
-                self._warn_highlight_keys.add(self._warn_key_for(r, c))
-        else:
-            # Sin guard especial; color base y limpiar warn si aplica
-            self._apply_base_background(item, new_text)
-            key = self._warn_key_for(r, c)
-            if new_text not in ("ON", "ON NS") and key in self._warn_highlight_keys:
-                self._warn_highlight_keys.discard(key)
+                    item.setText(old_text)
+                self._apply_base_background(item, old_text)
+                return
 
-        # ---------------- Identidad de fila / columna ----------------
-        if r < 0 or r >= len(self._row_identities):
-            return
-        if c < 0 or c >= len(self._date_col_dates):
-            return
+            # Interpretar selección
+            if not sel or sel.get("kind") in ("none", "separator"):
+                schedule_status = None
+                shift_type = None
+                in_time = out_time = None
+            elif sel.get("kind") == "base":
+                schedule_status, shift_type = sel["status"], sel["shift_type"]
+                in_time, out_time = sel.get("in_time"), sel.get("out_time")
+            else:  # custom
+                schedule_status, shift_type = sel["code"], sel["name"]
+                in_time, out_time = sel.get("in_time"), sel.get("out_time")
 
-        identity = self._row_identities[r]
-        username = identity.get("name") or ""
-        badge = identity.get("badge") or ""
-        role = identity.get("role") or ""
+            # Si "Do Not Mark Days"
+            if schedule_status is None:
+                with QSignalBlocker(self.schedule_table):
+                    for cc in ([c] if not apply_to_range else col_range):
+                        it = self.schedule_table.item(r, cc)
+                        if it is None:
+                            it = QTableWidgetItem("")
+                            self.schedule_table.setItem(r, cc, it)
+                        it.setText("")
+                        self._apply_base_background(it, "")
+                return
 
-        if not badge:
-            # Sin badge no podemos guardar nada consistente
-            return
+            # Aplicar cambios (Fechas y Horas)
+            from datetime import datetime, time as dtime
 
-        base_date = self._date_col_dates[c]
+            cols_sorted = sorted(col_range if apply_to_range else [c])
+            first_col_idx = cols_sorted[0]
+            last_col_idx = cols_sorted[-1]
 
-        # ---------------- Rango horizontal (para autofill) ----------------
-        selected_ranges = self.schedule_table.selectedRanges()
-        col_range = [c]
-        if selected_ranges:
-            sel = selected_ranges[0]
-            if sel.topRow() <= r <= sel.bottomRow():
-                left = max(c, sel.leftColumn())
-                right = sel.rightColumn()
-                col_range = list(range(left, right + 1))
+            start_date_block = self._date_col_dates[first_col_idx]
+            end_date_block = self._date_col_dates[last_col_idx]
 
-       # ---------------- Valores iniciales para el diálogo ----------------
-        # Leemos info actual de BD (status, remark, pickup/dropoff) para el día base
-        schedule_map = db.get_schedule_map_for_range(
-            badge, base_date, base_date, self.source
-        )
-        day_info = schedule_map.get(base_date.isoformat(), {}) or {}
+            if entry_datetime and exit_datetime:
+                entry_dt_for_save = entry_datetime
+                exit_dt_for_save = exit_datetime
+            else:
+                from datetime import time as dtime
+                def_in = dtime(6, 0)
+                def_out = dtime(18, 0) 
 
-        # --- CORRECCIÓN CRÍTICA DE SELECCIÓN (INICIO) ---
-        # El texto en la celda puede ser "ON (Day Shift)", pero el código interno es "ON".
-        # Debemos "traducir" lo que ve el usuario al código real para que el diálogo lo reconozca.
-        
-        raw_cell_text = new_text if new_text else ""
-        resolved_status_code = raw_cell_text # Valor por defecto (si no encontramos coincidencia)
+                if self.source == "Newmont":
+                    if schedule_status == "ON NS": 
+                        def_in = dtime(12, 0)
+                        def_out = dtime(6, 0)
+                    elif schedule_status == "ON": 
+                        def_in = dtime(6, 0)
+                        def_out = dtime(12, 0)
+                else: # RGM
+                    if schedule_status == "ON NS": 
+                        def_in = dtime(18, 0)
+                        def_out = dtime(6, 0)
 
-        # Obtenemos las mismas opciones que usa el combo
-        possible_options = self._status_options_for_dialog()
+                entry_time_obj = _parse_hhmm_to_time(in_time, def_in) 
+                exit_time_obj = _parse_hhmm_to_time(out_time, def_out) 
 
-        for icon, label, data in possible_options:
-            if not isinstance(data, dict): continue
+                entry_dt_for_save = datetime.combine(start_date_block, entry_time_obj)
+                exit_dt_for_save = datetime.combine(end_date_block, exit_time_obj)
             
-            # 1. ¿Coincide con la etiqueta visual? (Ej: "ON (Day Shift)" == "ON (Day Shift)")
-            if label.strip().upper() == raw_cell_text:
-                if data.get('kind') == 'base':
-                    resolved_status_code = data.get('status')
-                elif data.get('kind') == 'custom':
-                    resolved_status_code = data.get('code')
-                break
-            
-            # 2. ¿Coincide con el código interno? (Ej: "ON" == "ON")
-            # Esto pasa si el dato vino de Excel y no se ha tocado
-            internal_code = data.get('status') if data.get('kind') == 'base' else data.get('code')
-            if internal_code and str(internal_code).upper() == raw_cell_text:
-                resolved_status_code = internal_code
-                break
-        
-        # Usamos el código resuelto ("ON") en lugar del texto largo ("ON (Day Shift)")
-        current_status_text = resolved_status_code
-        # --- CORRECCIÓN CRÍTICA DE SELECCIÓN (FIN) ---
-
-        pickup_init, dropoff_init = db.get_user_location_for_date(badge, base_date)
-        initial = {
-            "status_text": current_status_text, 
-            "pickup": pickup_init,
-            "dropoff": dropoff_init,
-            "remark": day_info.get("remark") or "",
-        }
-
-        locations = [loc["pickup_location"] for loc in db.get_locations(self.source)]
-
-        editor = DayScheduleEditor(
-            self,
-            status_options=self._status_options_for_dialog(),
-            locations=locations,
-            initial=initial,
-        )
-        if editor.exec() != QDialog.DialogCode.Accepted:
-            # Usuario canceló: revertimos el cambio visual y salimos
+            # Actualizar UI visualmente
             with QSignalBlocker(self.schedule_table):
-                item.setText(old_text)
-            self._apply_base_background(item, old_text)
-            return
+                for col_idx in cols_sorted:
+                    item_ui = self.schedule_table.item(r, col_idx)
+                    if not item_ui:
+                        item_ui = QTableWidgetItem()
+                        self.schedule_table.setItem(r, col_idx, item_ui)
+                    
+                    text_to_show = schedule_status if schedule_status else ""
+                    item_ui.setText(text_to_show)
+                    self._apply_base_background(item_ui, text_to_show)
+                    self._cell_original_values[(r, col_idx)] = text_to_show
 
-        payload = editor.result_payload()
-        sel = payload["selection"]
-        pickup = payload["pickup"]
-        dropoff = payload["dropoff"]
-        remark = payload["remark"]
-        apply_to_range = payload["apply_to_range"]
-        
-        entry_datetime = payload.get("entry_datetime")
-        exit_datetime = payload.get("exit_datetime")
-
-        # Validación simple: si los dio y están invertidos, avisar y cancelar
-        if entry_datetime and exit_datetime and entry_datetime > exit_datetime:
-            QMessageBox.warning(
-                self,
-                "Date Error",
-                "Entry date/time cannot be after Exit date/time.",
-            )
-            # revertimos visualmente al valor anterior
-            with QSignalBlocker(self.schedule_table):
-                item.setText(old_text)
-            self._apply_base_background(item, old_text)
-            return
-
-
-        # ---------------- Interpretar selección (igual que save_plan_changes) ----------------
-        if not sel or sel.get("kind") in ("none", "separator"):
-            schedule_status = None
-            shift_type = None
-            in_time = out_time = None
-        elif sel.get("kind") == "base":
-            schedule_status, shift_type = sel["status"], sel["shift_type"]
-            in_time, out_time = sel.get("in_time"), sel.get("out_time")
-        else:  # custom
-            schedule_status, shift_type = sel["code"], sel["name"]
-            in_time, out_time = sel.get("in_time"), sel.get("out_time")
-
-        # Si eligió "Do Not Mark Days" limpiamos celdas y no tocamos BD/Excel
-        if schedule_status is None:
-            with QSignalBlocker(self.schedule_table):
-                for cc in ([c] if not apply_to_range else col_range):
-                    it = self.schedule_table.item(r, cc)
-                    if it is None:
-                        it = QTableWidgetItem("")
-                        self.schedule_table.setItem(r, cc, it)
-                    it.setText("")
-                    self._apply_base_background(it, "")
-            return
-
-       
-     
-        # ---------------- Aplicar cambios (BLOQUE OPTIMIZADO) ----------------
-        from datetime import datetime, time as dtime
-
-        # 1. Definir el rango total de fechas afectado
-        cols_sorted = sorted(col_range if apply_to_range else [c])
-        first_col_idx = cols_sorted[0]
-        last_col_idx = cols_sorted[-1]
-
-        start_date_block = self._date_col_dates[first_col_idx]
-        end_date_block = self._date_col_dates[last_col_idx]
-
-        # 2. Definir Horas (Entry/Exit) para el bloque
-        if entry_datetime and exit_datetime:
-            entry_dt_for_save = entry_datetime
-            exit_dt_for_save = exit_datetime
-        else:
-            # Si no hay horas específicas del diálogo, usar las del tipo de turno o defaults
-            # --- CORRECCIÓN INICIO: Lógica dinámica por Source (Newmont/RGM) ---
-            from datetime import time as dtime
-            
-            # Valores por defecto base
-            def_in = dtime(6, 0)
-            def_out = dtime(18, 0) # Default RGM
-
-            if self.source == "Newmont":
-                if schedule_status == "ON NS": 
-                    def_in = dtime(12, 0)
-                    def_out = dtime(6, 0)
-                elif schedule_status == "ON": 
-                    def_in = dtime(6, 0)
-                    def_out = dtime(12, 0)
-            else: # RGM
-                if schedule_status == "ON NS": 
-                    def_in = dtime(18, 0)
-                    def_out = dtime(6, 0)
-
-            entry_time_obj = _parse_hhmm_to_time(in_time, def_in) 
-            exit_time_obj = _parse_hhmm_to_time(out_time, def_out) 
-            # --- CORRECCIÓN FIN ---
-
-            # Entry es el PRIMER día a la hora de entrada
-            entry_dt_for_save = datetime.combine(start_date_block, entry_time_obj)
-            # Exit es el ÚLTIMO día a la hora de salida
-            exit_dt_for_save = datetime.combine(end_date_block, exit_time_obj)
-          
-
-        # 3. Actualizar la UI visualmente (CRÍTICO: Bloquear señales para evitar recursividad)
-        # Esto da feedback inmediato al usuario sin esperar al IO del disco
-        with QSignalBlocker(self.schedule_table):
-            for col_idx in cols_sorted:
-                item_ui = self.schedule_table.item(r, col_idx)
-                if not item_ui:
-                    item_ui = QTableWidgetItem()
-                    self.schedule_table.setItem(r, col_idx, item_ui)
-                
-                # Texto a mostrar (si es None o Do Not Mark, limpiar)
-                text_to_show = schedule_status if schedule_status else ""
-                item_ui.setText(text_to_show)
-                self._apply_base_background(item_ui, text_to_show)
-                
-                # Actualizar valor original para tracking de REQ-001
-                self._cell_original_values[(r, col_idx)] = text_to_show
-# 4. Actualizar Base de Datos (SSoT)
-        try:
-            # A. Registrar la Operación (Historial)
-            db.add_operation(
-                username=username,
-                role=role,
-                badge=badge,
-                start_date=start_date_block,
-                end_date=end_date_block,
-                created_by=self.logged_username,
-                entry_date=entry_dt_for_save,
-                exit_date=exit_dt_for_save
-            )
-
-            # B. Guardar el Schedule (CORRECCIÓN: Se agrega 'remark')
-            db.upsert_schedule_range(
-                badge,
-                start_date_block,
-                end_date_block,
-                schedule_status,
-                shift_type,
-                self.source,
-                in_time,        # hora entrada (str)
-                out_time,       # hora salida (str)
-                remark          # <--- CORRECCIÓN CRÍTICA: Antes no se enviaba
-            )
-
-            # C. Guardar Ubicaciones (CORRECCIÓN: Antes faltaba este bloque en el diálogo)
-            if pickup or dropoff:
-                db.assign_user_location_range(
-                    badge, 
-                    start_date_block, 
-                    end_date_block, 
-                    pickup, 
-                    dropoff
+            # Actualizar Base de Datos
+            try:
+                db.add_operation(
+                    username=username,
+                    role=role,
+                    badge=badge,
+                    start_date=start_date_block,
+                    end_date=end_date_block,
+                    created_by=self.logged_username,
+                    entry_date=entry_dt_for_save,
+                    exit_date=exit_dt_for_save
                 )
-                # Log opcional para auditoría
-                db.log_event(
-                    self.logged_username,
+
+                db.upsert_schedule_range(
+                    badge,
+                    start_date_block,
+                    end_date_block,
+                    schedule_status,
+                    shift_type,
                     self.source,
-                    "LOCATION_ASSIGN_INLINE",
-                    f"{badge} {start_date_block}..{end_date_block} PU={pickup} DO={dropoff}"
+                    in_time,        
+                    out_time,       
+                    remark          
                 )
 
-            # 5. Actualizar Excel (SSoT secundario)
-            self._is_internal_update = True  
-            
-            success, message = excel.update_plan_staff_excel(
-                self.excel_file,
-                username,
-                role,
-                badge,
-                schedule_status,
-                shift_type,
-                start_date_block, 
-                end_date_block,   
-                self.source,
-                in_time,
-                out_time,
-            )
+                if pickup or dropoff:
+                    db.assign_user_location_range(
+                        badge, start_date_block, end_date_block, pickup, dropoff
+                    )
+                    db.log_event(
+                        self.logged_username, self.source, "LOCATION_ASSIGN_INLINE",
+                        f"{badge} {start_date_block}..{end_date_block} PU={pickup} DO={dropoff}"
+                    )
 
-            # ... resto del código (QTimer, logs, etc) sigue igual ...
-            QTimer.singleShot(2000, lambda: setattr(self, '_is_internal_update', False))
+                # Actualizar Excel
+                self._is_internal_update = True  
+                success, message = excel.update_plan_staff_excel(
+                    self.excel_file, username, role, badge, schedule_status, shift_type,
+                    start_date_block, end_date_block, self.source, in_time, out_time,
+                )
+                QTimer.singleShot(2000, lambda: setattr(self, '_is_internal_update', False))
 
-            if not success:
+                if not success:
+                    self._is_internal_update = False 
+                    raise Exception(message)
+
+                db.log_event(
+                    self.logged_username, self.source, "SHIFT_MODIFICATION_INLINE",
+                    f"Updated range {start_date_block} to {end_date_block} for {badge}. Remark: {remark}"
+                )
+
+            except Exception as e:
                 self._is_internal_update = False 
-                raise Exception(message)
+                QMessageBox.critical(self, "Save Error", f"Error saving data: {str(e)}")
+                self.refresh_ui_data()
+                return
 
-            db.log_event(
-                self.logged_username,
-                self.source,
-                "SHIFT_MODIFICATION_INLINE",
-                f"Updated range {start_date_block} to {end_date_block} for {badge}. Remark: {remark}"
-            )
+            # Finalización
+            self.check_excel_health() 
+            self.rotation_changed.emit()
 
-        except Exception as e:
-            self._is_internal_update = False 
-            QMessageBox.critical(self, "Save Error", f"Error saving data: {str(e)}")
-            self.refresh_ui_data()
-            return
-
-        # 6. Finalización
-        # NO llamamos a refresh_ui_data() aquí para evitar el parpadeo. 
-        # Ya confiamos en que la UI, DB y Excel están sincronizados.
-        self.check_excel_health() # Solo verificamos que el archivo siga existiendo
-        self.rotation_changed.emit()
+        finally:
+            # 3. LIBERAR BANDERA (CRÍTICO)
+            self._is_handling_change = False
 
     # ---------- MODIFIED: hover card logic ----------
     def _show_shift_tooltip(self, row: int, col: int):
