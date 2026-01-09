@@ -2070,14 +2070,18 @@ class PlanStaffWidget(QWidget):
         )
         day_info = schedule_data.get(hover_date.isoformat())
         pickup, dropoff = db.get_user_location_for_date(badge, hover_date)
-
-        # NEW: Fetch the operation record to get the correct travel dates
+        
         operations = db.get_operations_filtered(
             text=badge, d_from=hover_date, d_to=hover_date
         )
-        # Filter for exact badge match and take the latest one if multiple overlap
-        operations = [op for op in operations if op.get("badge") == badge]
-        operation_info = operations[0] if operations else None
+
+       # Filter for exact badge match...
+        valid_ops = [op for op in operations if op.get("badge") == badge]
+        
+        # --- FIX: ORDENAR POR ID DESCENDENTE (El más nuevo primero) ---
+        valid_ops.sort(key=lambda x: x.get("id", 0), reverse=True)
+        
+        operation_info = valid_ops[0] if valid_ops else None
 
 
         if not day_info:
@@ -2134,7 +2138,9 @@ class PlanStaffWidget(QWidget):
             content_lines.append(f"<p {schedule_style}>⏰ {in_time} – {out_time}</p>")
 
         # MODIFIED: Add travel dates and exact times from the operation record
-        if operation_info:
+        # MODIFIED: Add travel dates and exact times from the operation record
+        # FIX: Solo mostrar info de viaje si NO es un día OFF
+        if operation_info and status_code != "OFF": 
             entry_dt_str = operation_info.get('entry_date', '')
             exit_dt_str = operation_info.get('exit_date', '')
             
