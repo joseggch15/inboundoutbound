@@ -1644,9 +1644,30 @@ class PlanStaffWidget(QWidget):
         operations = [op for op in operations if op.get("badge") == badge]
         op_info = operations[0] if operations else None
 
-        # 2. Definir horas por defecto (06:00 / 18:00) si no existen
-        default_entry_time = datetime.strptime("06:00", "%H:%M").time()
-        default_exit_time = datetime.strptime("18:00", "%H:%M").time()
+       # 2. Definir horas por defecto según Proyecto (Source)
+        # Regla Newmont: 06:00 - 12:00 (Día) | 12:00 - 06:00 (Noche)
+        # Regla RGM:     06:00 - 18:00 (Día) | 18:00 - 06:00 (Noche)
+        
+        # Valores base (RGM Dia)
+        def_in_str = "06:00"
+        def_out_str = "18:00"
+
+        # Ajuste dinámico según Source y Status
+        if self.source == "Newmont":
+            if schedule_status == "ON NS": # Noche Newmont
+                def_in_str = "12:00"
+                def_out_str = "06:00"
+            elif schedule_status == "ON": # Día Newmont
+                def_in_str = "06:00"
+                def_out_str = "12:00"
+        else: # RGM
+            if schedule_status == "ON NS": # Noche RGM
+                def_in_str = "18:00"
+                def_out_str = "06:00"
+            # else: Dia RGM se queda con el base 06:00-18:00
+
+        default_entry_time = datetime.strptime(def_in_str, "%H:%M").time()
+        default_exit_time = datetime.strptime(def_out_str, "%H:%M").time()
         
         final_entry_time = default_entry_time
         final_exit_time = default_exit_time
@@ -1715,10 +1736,6 @@ class PlanStaffWidget(QWidget):
             QMessageBox.warning(self, "Excel Update", "Saved to DB, but Excel issue:\n" + message)
 
         self.rotation_changed.emit()
-
-
-
-
 
 
     # ---------- REQ-001: inline OFF→ON/ON NS guard ----------
@@ -1884,13 +1901,34 @@ class PlanStaffWidget(QWidget):
             exit_dt_for_save = exit_datetime
         else:
             # Si no hay horas específicas del diálogo, usar las del tipo de turno o defaults
-            entry_time_obj = _parse_hhmm_to_time(in_time, dtime(6, 0)) # Default 6 AM
-            exit_time_obj = _parse_hhmm_to_time(out_time, dtime(18, 0)) # Default 6 PM
+            # --- CORRECCIÓN INICIO: Lógica dinámica por Source (Newmont/RGM) ---
+            from datetime import time as dtime
             
+            # Valores por defecto base
+            def_in = dtime(6, 0)
+            def_out = dtime(18, 0) # Default RGM
+
+            if self.source == "Newmont":
+                if schedule_status == "ON NS": 
+                    def_in = dtime(12, 0)
+                    def_out = dtime(6, 0)
+                elif schedule_status == "ON": 
+                    def_in = dtime(6, 0)
+                    def_out = dtime(12, 0)
+            else: # RGM
+                if schedule_status == "ON NS": 
+                    def_in = dtime(18, 0)
+                    def_out = dtime(6, 0)
+
+            entry_time_obj = _parse_hhmm_to_time(in_time, def_in) 
+            exit_time_obj = _parse_hhmm_to_time(out_time, def_out) 
+            # --- CORRECCIÓN FIN ---
+
             # Entry es el PRIMER día a la hora de entrada
             entry_dt_for_save = datetime.combine(start_date_block, entry_time_obj)
             # Exit es el ÚLTIMO día a la hora de salida
             exit_dt_for_save = datetime.combine(end_date_block, exit_time_obj)
+          
 
         # 3. Actualizar la UI visualmente (CRÍTICO: Bloquear señales para evitar recursividad)
         # Esto da feedback inmediato al usuario sin esperar al IO del disco
