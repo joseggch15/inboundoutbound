@@ -613,7 +613,6 @@ class DayScheduleEditor(QDialog):
                         self.status_combo.setCurrentIndex(i)
                         break
 
-
         # Locations
         self.pickup_combo = QComboBox()
         self.dropoff_combo = QComboBox()
@@ -637,17 +636,21 @@ class DayScheduleEditor(QDialog):
         self.remark_edit = QLineEdit(initial.get("remark", ""))
         self.remark_edit.setPlaceholderText("Optional: add a note for this day...")
 
-        # Autofill a la derecha
+        # ---------------------------------------------------------------------
+        # MODIFICACIÓN: Instanciamos los checkboxes pero NO los mostramos
+        # Mantenemos los objetos en memoria para no romper la lógica interna.
+        # ---------------------------------------------------------------------
         self.apply_to_range_chk = QCheckBox(
             "Apply to all selected cells to the right"
         )
-        
-        from PyQt6.QtCore import QDate, QTime
+        self.apply_to_range_chk.setVisible(False) # Aseguramos que sea invisible
 
-        # --- Travel dates opcionales (igual concepto que en el formulario grande) ---
+        # --- Travel dates opcionales ---
         self.travel_diff_chk = QCheckBox("Travel dates are different from work day")
+        self.travel_diff_chk.setVisible(False)    # Aseguramos que sea invisible
 
         # Valores por defecto (puedes ajustarlos luego si quieres)
+        from PyQt6.QtCore import QDate, QTime
         today = QDate.currentDate()
         self.entry_date_edit = QDateEdit(today)
         self.entry_date_edit.setCalendarPopup(True)
@@ -678,10 +681,9 @@ class DayScheduleEditor(QDialog):
         travel_layout.addWidget(self.exit_time_edit)
         travel_layout.addStretch()
 
-        # Ocultamos el bloque hasta que el usuario marque el check
+        # Ocultamos el bloque por defecto (y como el checkbox no es visible, nunca se mostrará)
         self._travel_container.setVisible(False)
         self.travel_diff_chk.toggled.connect(self._travel_container.setVisible)
-
 
         # Form layout
         form = QFormLayout()
@@ -689,9 +691,10 @@ class DayScheduleEditor(QDialog):
         form.addRow("Pick Up:", self.pickup_combo)
         form.addRow("Drop Off:", self.dropoff_combo)
         form.addRow("Remarks:", self.remark_edit)
-        form.addRow("", self.travel_diff_chk)      # 👈 NUEVO
-        form.addRow("", self._travel_container)    # 👈 NUEVO
-
+        
+        # NOTA: NO agregamos travel_diff_chk ni _travel_container al layout visual
+        # form.addRow("", self.travel_diff_chk) 
+        # form.addRow("", self._travel_container)
 
         # Botones
         btn_box = QDialogButtonBox(
@@ -702,7 +705,10 @@ class DayScheduleEditor(QDialog):
         btn_box.rejected.connect(self.reject)
 
         layout.addLayout(form)
-        layout.addWidget(self.apply_to_range_chk)
+        
+        # NOTA: NO agregamos apply_to_range_chk al layout visual
+        # layout.addWidget(self.apply_to_range_chk)
+        
         layout.addWidget(btn_box)
 
     def result_payload(self):
@@ -712,6 +718,9 @@ class DayScheduleEditor(QDialog):
 
         entry_dt = None
         exit_dt = None
+        
+        # Esta condición siempre será False porque el checkbox está oculto y desmarcado,
+        # lo cual es correcto para ocultar la funcionalidad.
         if self.travel_diff_chk.isChecked():
             entry_date = self.entry_date_edit.date().toPyDate()
             entry_time = self.entry_time_edit.time().toPyTime()
@@ -726,9 +735,9 @@ class DayScheduleEditor(QDialog):
             "pickup": self.pickup_combo.currentData(),
             "dropoff": self.dropoff_combo.currentData(),
             "remark": self.remark_edit.text().strip(),
-            "apply_to_range": self.apply_to_range_chk.isChecked(),
-            "entry_datetime": entry_dt,   # 👈 NUEVO
-            "exit_datetime": exit_dt,     # 👈 NUEVO
+            "apply_to_range": self.apply_to_range_chk.isChecked(), # Será False
+            "entry_datetime": entry_dt,   # Será None (se calculará por defecto fuera)
+            "exit_datetime": exit_dt,     # Será None (se calculará por defecto fuera)
         }
 
 
