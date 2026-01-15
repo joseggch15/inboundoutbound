@@ -42,6 +42,7 @@ import calendar  # <--- Necesario para calcular el último día del mes
 # Helpers / Normalización
 # ============================================================
 
+
 def _is_blank_series(s: pd.Series) -> bool:
     """True si toda la serie es NaN o strings vacíos."""
     if s is None:
@@ -49,15 +50,15 @@ def _is_blank_series(s: pd.Series) -> bool:
     if s.isna().all():
         return True
     s_str = s.astype(str).str.strip().str.lower()
-    return (s_str.eq('') | s_str.eq('nan') | s_str.eq('none') | s_str.eq('null')).all()
+    return (s_str.eq("") | s_str.eq("nan") | s_str.eq("none") | s_str.eq("null")).all()
 
 
 def _prefix_for_file(plan_staff_file: str) -> str:
     """Prefijo de badge basado en el archivo."""
     base = os.path.basename(plan_staff_file).lower()
-    if 'newmont' in base:
-        return 'NM'
-    return 'ID'
+    if "newmont" in base:
+        return "NM"
+    return "ID"
 
 
 def _normalize_status(v: object) -> Tuple[Optional[str], Optional[str]]:
@@ -91,7 +92,7 @@ def _is_date_header(col) -> bool:
     """Detecta si el encabezado es una fecha (datetime o pandas.Timestamp)."""
     if isinstance(col, datetime):
         return True
-    return getattr(col, '__class__', None).__name__ == 'Timestamp'
+    return getattr(col, "__class__", None).__name__ == "Timestamp"
 
 
 def _to_pydate(col) -> Optional[date]:
@@ -109,9 +110,15 @@ def _fill_for_base_status(status: Optional[str]) -> Optional[PatternFill]:
     if status is None:
         return None
     s = str(status).strip().upper()
-    green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # ON día
-    red   = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")  # OFF
-    yel   = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")  # ON NS
+    green = PatternFill(
+        start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"
+    )  # ON día
+    red = PatternFill(
+        start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"
+    )  # OFF
+    yel = PatternFill(
+        start_color="FFFF99", end_color="FFFF99", fill_type="solid"
+    )  # ON NS
     if s == "ON":
         return green
     if s == "OFF":
@@ -120,9 +127,11 @@ def _fill_for_base_status(status: Optional[str]) -> Optional[PatternFill]:
         return yel
     return None
 
+
 # =================================================================
 # SHARED REPORTING HELPERS
 # =================================================================
+
 
 def _hhmmss(t: Optional[str]) -> Optional[str]:
     """Ensure time string is in HH:MM:SS format."""
@@ -130,12 +139,13 @@ def _hhmmss(t: Optional[str]) -> Optional[str]:
         return t + ":00"
     return t
 
+
 def _get_transport_time_str(
     status: Optional[str],
     kind: str,
     comment: Optional[str],
     custom_map: Dict,
-    source: str = "RGM"  # <--- NUEVO PARÁMETRO
+    source: str = "RGM",  # <--- NUEVO PARÁMETRO
 ) -> str:
     """
     Determines the transport time ('HH:MM:SS') based on shift status.
@@ -143,7 +153,7 @@ def _get_transport_time_str(
     Includes logic for Newmont specific timings vs RGM defaults.
     """
     su = (status or "").strip().upper()
-    
+
     # Priority 1: Custom shift types from DB
     info = custom_map.get(su)
     if info:
@@ -161,15 +171,15 @@ def _get_transport_time_str(
             return "06:00:00" if kind == "IN" else "12:00:00"
         if su == "ON NS":
             return "12:00:00" if kind == "IN" else "06:00:00"
-            
+
     else:
         # RGM / Default Rules:
-        # ON (Día): Entrada 06:00, Salida 18:00
-        # ON NS (Noche): Entrada 18:00, Salida 06:00
+        # ON (Día): Entrada 07:00, Salida 07:00
+        # ON NS (Noche): Entrada 07:00, Salida 07:00
         if su == "ON":
-            return "06:00:00" if kind == "IN" else "18:00:00"
+            return "07:00:00" if kind == "IN" else "07:00:00"
         if su == "ON NS":
-            return "18:00:00" if kind == "IN" else "06:00:00"
+            return "07:00:00" if kind == "IN" else "07:00:00"
 
     # Priority 3: Fallback from cell comment (e.g., "08:00-17:00")
     if comment and "-" in str(comment):
@@ -181,11 +191,13 @@ def _get_transport_time_str(
             pass
 
     # Final fallback
-    return "06:00:00" if kind == "IN" else "18:00:00"
+    return "07:00:00" if kind == "IN" else "07:00:00"
+
 
 # ============================================================
 # Lecturas auxiliares / previews
 # ============================================================
+
 
 def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
     """
@@ -197,7 +209,7 @@ def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     try:
-        df = pd.read_excel(plan_staff_file, engine='openpyxl')
+        df = pd.read_excel(plan_staff_file, engine="openpyxl")
         # Detectar columnas base
         cols = list(df.columns)
         base_cols = []
@@ -231,7 +243,14 @@ def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
         for c in date_cols:
             if c in df_out.columns:
                 df_out[c] = df_out[c].apply(
-                    lambda v: "" if (v is None or str(v).strip().lower() in ("nan", "none", "null")) else v
+                    lambda v: (
+                        ""
+                        if (
+                            v is None
+                            or str(v).strip().lower() in ("nan", "none", "null")
+                        )
+                        else v
+                    )
                 )
 
         return df_out
@@ -247,7 +266,11 @@ def get_roles_from_excel(plan_staff_file: str) -> list:
         wb = openpyxl.load_workbook(plan_staff_file, read_only=True, data_only=True)
         ws = wb.active
         header_map = {cell.value: cell.column for cell in ws[1]}
-        role_header = "ROLE" if "ROLE" in header_map else ("Discipline" if "Discipline" in header_map else None)
+        role_header = (
+            "ROLE"
+            if "ROLE" in header_map
+            else ("Discipline" if "Discipline" in header_map else None)
+        )
         if not role_header:
             return ["ROLE/Discipline column not found"]
         col_idx = header_map[role_header]
@@ -272,51 +295,65 @@ def get_users_from_excel(plan_staff_file: str) -> list:
     if not os.path.exists(plan_staff_file):
         return []
     try:
-        df = pd.read_excel(plan_staff_file, engine='openpyxl')
+        df = pd.read_excel(plan_staff_file, engine="openpyxl")
 
-        rgm_cols = ['NAME', 'ROLE', 'BADGE']
-        newmont_cols = ['Last Name', 'First Name', 'Discipline', 'Company ID']
+        rgm_cols = ["NAME", "ROLE", "BADGE"]
+        newmont_cols = ["Last Name", "First Name", "Discipline", "Company ID"]
 
         users_df = None
 
         if all(col in df.columns for col in rgm_cols):
             users_df = df[rgm_cols].copy()
             # Badges faltantes
-            if _is_blank_series(users_df['BADGE']):
+            if _is_blank_series(users_df["BADGE"]):
                 prefix = _prefix_for_file(plan_staff_file)
-                users_df['BADGE'] = [f"{prefix}{i+1:05d}" for i in range(len(users_df))]
+                users_df["BADGE"] = [f"{prefix}{i+1:05d}" for i in range(len(users_df))]
             else:
                 prefix = _prefix_for_file(plan_staff_file)
-                badge_series = users_df['BADGE'].astype(str)
-                is_missing = users_df['BADGE'].isna() | badge_series.str.strip().eq('') | badge_series.str.lower().isin(['nan', 'none', 'null'])
+                badge_series = users_df["BADGE"].astype(str)
+                is_missing = (
+                    users_df["BADGE"].isna()
+                    | badge_series.str.strip().eq("")
+                    | badge_series.str.lower().isin(["nan", "none", "null"])
+                )
                 seq = (f"{prefix}{i+1:05d}" for i in range(is_missing.sum()))
-                users_df.loc[is_missing, 'BADGE'] = [next(seq) for _ in range(is_missing.sum())]
+                users_df.loc[is_missing, "BADGE"] = [
+                    next(seq) for _ in range(is_missing.sum())
+                ]
 
         elif all(col in df.columns for col in newmont_cols):
             df_copy = df[newmont_cols].copy()
-            df_copy['NAME'] = df_copy['Last Name'].astype(str).str.strip() + ', ' + df_copy['First Name'].astype(str).str.strip()
-            df_copy.rename(columns={'Discipline': 'ROLE', 'Company ID': 'BADGE'}, inplace=True)
-            users_df = df_copy[['NAME', 'ROLE', 'BADGE']]
-            if _is_blank_series(users_df['BADGE']):
+            df_copy["NAME"] = (
+                df_copy["Last Name"].astype(str).str.strip()
+                + ", "
+                + df_copy["First Name"].astype(str).str.strip()
+            )
+            df_copy.rename(
+                columns={"Discipline": "ROLE", "Company ID": "BADGE"}, inplace=True
+            )
+            users_df = df_copy[["NAME", "ROLE", "BADGE"]]
+            if _is_blank_series(users_df["BADGE"]):
                 prefix = _prefix_for_file(plan_staff_file)
-                users_df['BADGE'] = [f"{prefix}{i+1:05d}" for i in range(len(users_df))]
+                users_df["BADGE"] = [f"{prefix}{i+1:05d}" for i in range(len(users_df))]
         else:
             # Fallback si vienen NAME/ROLE solamente
-            if all(col in df.columns for col in ['NAME', 'ROLE']):
+            if all(col in df.columns for col in ["NAME", "ROLE"]):
                 prefix = _prefix_for_file(plan_staff_file)
-                users_df = df[['NAME', 'ROLE']].copy()
-                users_df['BADGE'] = [f"{prefix}{i+1:05d}" for i in range(len(users_df))]
+                users_df = df[["NAME", "ROLE"]].copy()
+                users_df["BADGE"] = [f"{prefix}{i+1:05d}" for i in range(len(users_df))]
             else:
                 return []
 
-        users_df['NAME'] = users_df['NAME'].astype(str).str.strip()
-        users_df['ROLE'] = users_df['ROLE'].astype(str).str.strip()
-        users_df['BADGE'] = users_df['BADGE'].astype(str).str.strip()
+        users_df["NAME"] = users_df["NAME"].astype(str).str.strip()
+        users_df["ROLE"] = users_df["ROLE"].astype(str).str.strip()
+        users_df["BADGE"] = users_df["BADGE"].astype(str).str.strip()
 
-        users_df = users_df[(users_df['NAME'] != '') & (users_df['BADGE'] != '')]
-        users_df.drop_duplicates(subset=['BADGE'], keep='first', inplace=True)
-        users_df.rename(columns={'NAME': 'name', 'ROLE': 'role', 'BADGE': 'badge'}, inplace=True)
-        return users_df.to_dict('records')
+        users_df = users_df[(users_df["NAME"] != "") & (users_df["BADGE"] != "")]
+        users_df.drop_duplicates(subset=["BADGE"], keep="first", inplace=True)
+        users_df.rename(
+            columns={"NAME": "name", "ROLE": "role", "BADGE": "badge"}, inplace=True
+        )
+        return users_df.to_dict("records")
     except Exception:
         return []
 
@@ -324,6 +361,7 @@ def get_users_from_excel(plan_staff_file: str) -> list:
 # ============================================================
 # Escritura / actualización del plan staff (Excel)
 # ============================================================
+
 
 def update_plan_staff_excel(
     plan_staff_file: str,
@@ -336,7 +374,7 @@ def update_plan_staff_excel(
     schedule_end: date,
     source: str,
     in_time: Optional[str] = None,
-    out_time: Optional[str] = None
+    out_time: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """
     Actualiza (o crea si no existe) la fila del empleado en el Excel:
@@ -361,13 +399,22 @@ def update_plan_staff_excel(
                 ws.cell(row=1, column=col_idx, value=h)
 
         # Colores base
-        green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # ON día
-        red   = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")  # OFF
-        yel   = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")  # ON NS noche
+        green = PatternFill(
+            start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"
+        )  # ON día
+        red = PatternFill(
+            start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"
+        )  # OFF
+        yel = PatternFill(
+            start_color="FFFF99", end_color="FFFF99", fill_type="solid"
+        )  # ON NS noche
 
         # Mapa de tipos personalizados (para colores)
         try:
-            from database_logic import get_shift_type_map  # import diferido para evitar ciclos
+            from database_logic import (
+                get_shift_type_map,
+            )  # import diferido para evitar ciclos
+
             custom_map = get_shift_type_map(source)
         except Exception:
             custom_map = {}
@@ -384,13 +431,15 @@ def update_plan_staff_excel(
                 return red
             # código personalizado
             info = custom_map.get(s)
-            if info and info.get('color_hex'):
-                hex6 = info['color_hex'].lstrip('#').upper()
+            if info and info.get("color_hex"):
+                hex6 = info["color_hex"].lstrip("#").upper()
                 return PatternFill(start_color=hex6, end_color=hex6, fill_type="solid")
             return None
 
         # Mapas de cabecera
-        header_map = {cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)}
+        header_map = {
+            cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)
+        }
         date_map: Dict[date, int] = {}
         for cell in ws[1]:
             v = cell.value
@@ -429,7 +478,7 @@ def update_plan_staff_excel(
         if schedule_status:
             text = str(schedule_status).strip().upper()
             fill = _fill_for_status(text)
-        else: # clearing range
+        else:  # clearing range
             text = None
             fill = None
 
@@ -467,8 +516,14 @@ def update_plan_staff_excel(
 # FR-01: Detección de conflictos (sobrescritura)
 # ============================================================
 
-def find_conflicts(plan_staff_file: str, username: str, badge: str,
-                  schedule_start: date, schedule_end: date) -> List[Dict]:
+
+def find_conflicts(
+    plan_staff_file: str,
+    username: str,
+    badge: str,
+    schedule_start: date,
+    schedule_end: date,
+) -> List[Dict]:
     """
     Devuelve [{'date': date, 'existing': 'ON/ON NS/OFF/...'}] si hay valores ya escritos en el rango.
     Busca fila por BADGE y luego por NAME, igual que update_plan_staff_excel.
@@ -479,8 +534,14 @@ def find_conflicts(plan_staff_file: str, username: str, badge: str,
         wb = openpyxl.load_workbook(plan_staff_file, data_only=True)
         ws = wb.active
 
-        header_map = {cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)}
-        date_map = {cell.value.date(): cell.column for cell in ws[1] if isinstance(cell.value, datetime)}
+        header_map = {
+            cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)
+        }
+        date_map = {
+            cell.value.date(): cell.column
+            for cell in ws[1]
+            if isinstance(cell.value, datetime)
+        }
 
         # localizar fila por BADGE y luego por NAME
         row_idx = None
@@ -505,7 +566,7 @@ def find_conflicts(plan_staff_file: str, username: str, badge: str,
             if d in date_map:
                 col = date_map[d]
                 val = ws.cell(row=row_idx, column=col).value
-                if val not in (None, '', ' '):
+                if val not in (None, "", " "):
                     conflicts.append({"date": d, "existing": str(val)})
             d += timedelta(days=1)
         return conflicts
@@ -516,6 +577,7 @@ def find_conflicts(plan_staff_file: str, username: str, badge: str,
 # ============================================================
 # FR-02: Importar Excel -> DB (usuarios + schedules) con validación
 # ============================================================
+
 
 def import_excel_to_db(plan_staff_file: str, source: str) -> Tuple[int, int, int]:
     """
@@ -529,9 +591,15 @@ def import_excel_to_db(plan_staff_file: str, source: str) -> Tuple[int, int, int
     # Validación previa estricta
     ok, errors, _meta = validate_excel_structure(plan_staff_file)
     if not ok:
-        raise ValueError("Invalid Plan Staff structure:\n" + "\n".join(f"- {e}" for e in errors))
+        raise ValueError(
+            "Invalid Plan Staff structure:\n" + "\n".join(f"- {e}" for e in errors)
+        )
 
-    from database_logic import add_users_bulk, get_all_users, upsert_schedule_day  # import diferido
+    from database_logic import (
+        add_users_bulk,
+        get_all_users,
+        upsert_schedule_day,
+    )  # import diferido
 
     users_in_file = get_users_from_excel(plan_staff_file)
     if not users_in_file:
@@ -539,10 +607,10 @@ def import_excel_to_db(plan_staff_file: str, source: str) -> Tuple[int, int, int
 
     # Insertar usuarios (evitando duplicados por badge)
     before = get_all_users(source)
-    before_badges = {u['badge'] for u in before}
+    before_badges = {u["badge"] for u in before}
     inserted = add_users_bulk(users_in_file, source)
     after = get_all_users(source)
-    after_badges = {u['badge'] for u in after}
+    after_badges = {u["badge"] for u in after}
     skipped = len(before_badges & after_badges)  # aproximado para el mensaje
 
     # ---- Validación de tipos de turno personalizados (códigos) ----
@@ -551,11 +619,14 @@ def import_excel_to_db(plan_staff_file: str, source: str) -> Tuple[int, int, int
     # Cualquier otro valor se considera un "código" de turno que debe existir en shift_types.
     try:
         from database_logic import get_shift_type_map
-        _custom_map = {k.strip().upper(): v for k,v in get_shift_type_map(source).items()}
+
+        _custom_map = {
+            k.strip().upper(): v for k, v in get_shift_type_map(source).items()
+        }
     except Exception:
         _custom_map = {}
     try:
-        df_codes = pd.read_excel(plan_staff_file, engine='openpyxl')
+        df_codes = pd.read_excel(plan_staff_file, engine="openpyxl")
         date_cols_all = [c for c in df_codes.columns if _is_date_header(c)]
         unknown_codes = set()
         for dcol in date_cols_all:
@@ -579,9 +650,9 @@ def import_excel_to_db(plan_staff_file: str, source: str) -> Tuple[int, int, int
         if unknown_codes:
             # abortar importación (la UI capturará este ValueError y lo mostrará en un QMessageBox)
             raise ValueError(
-                "Se detectaron turnos/códigos no registrados en 'shift_types':\n  - " +
-                "\n  - ".join(sorted(unknown_codes)) +
-                "\n\nRegístrelos primero (nombre, código y horarios IN/OUT) en 'Shift Types' para continuar."
+                "Se detectaron turnos/códigos no registrados en 'shift_types':\n  - "
+                + "\n  - ".join(sorted(unknown_codes))
+                + "\n\nRegístrelos primero (nombre, código y horarios IN/OUT) en 'Shift Types' para continuar."
             )
     except ValueError:
         # re-lanzar para que la capa UI lo muestre
@@ -593,10 +664,18 @@ def import_excel_to_db(plan_staff_file: str, source: str) -> Tuple[int, int, int
     # Importar schedules (solo estados base reconocidos)
     upserts = 0
     try:
-        df = pd.read_excel(plan_staff_file, engine='openpyxl')
+        df = pd.read_excel(plan_staff_file, engine="openpyxl")
         # detectar identificadores
-        role_field = 'ROLE' if 'ROLE' in df.columns else ('Discipline' if 'Discipline' in df.columns else None)
-        badge_field = 'BADGE' if 'BADGE' in df.columns else ('Company ID' if 'Company ID' in df.columns else None)
+        role_field = (
+            "ROLE"
+            if "ROLE" in df.columns
+            else ("Discipline" if "Discipline" in df.columns else None)
+        )
+        badge_field = (
+            "BADGE"
+            if "BADGE" in df.columns
+            else ("Company ID" if "Company ID" in df.columns else None)
+        )
 
         if not badge_field:
             return inserted, skipped, 0
@@ -624,12 +703,13 @@ def import_excel_to_db(plan_staff_file: str, source: str) -> Tuple[int, int, int
 # FR-03: Exportar Excel desde la BD (manteniendo plantilla)
 # ============================================================
 
+
 def export_plan_from_db(
     template_path: str,
     users: List[Dict],
     schedules: List[Dict],
     output_path: str,
-    source: str
+    source: str,
 ) -> Tuple[bool, str]:
     """
     users: [{'name','role','badge'}]
@@ -642,6 +722,7 @@ def export_plan_from_db(
 
         try:
             from database_logic import get_shift_type_map  # import diferido
+
             custom_map = get_shift_type_map(source)
         except Exception:
             custom_map = {}
@@ -649,16 +730,24 @@ def export_plan_from_db(
         wb = openpyxl.load_workbook(template_path)
         ws = wb.active
 
-        header_map = {cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)}
+        header_map = {
+            cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)
+        }
 
         # Detectar variante de plantilla
         variant = None
         if all(h in header_map for h in ("NAME", "ROLE", "BADGE")):
             variant = "RGM"
-        elif all(h in header_map for h in ("Last Name", "First Name", "Discipline", "Company ID")):
+        elif all(
+            h in header_map
+            for h in ("Last Name", "First Name", "Discipline", "Company ID")
+        ):
             variant = "Newmont"
         else:
-            return False, "Unsupported template: expected RGM (NAME/ROLE/BADGE) or Newmont (Last/First/Discipline/Company ID)."
+            return (
+                False,
+                "Unsupported template: expected RGM (NAME/ROLE/BADGE) or Newmont (Last/First/Discipline/Company ID).",
+            )
 
         # Mapas de fechas existentes
         date_map: Dict[date, int] = {}
@@ -668,8 +757,8 @@ def export_plan_from_db(
 
         # Colores base
         green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-        red   = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-        yel   = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
+        red = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        yel = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
 
         def _fill_for(status: Optional[str]) -> Optional[PatternFill]:
             if status is None:
@@ -682,23 +771,23 @@ def export_plan_from_db(
             if s == "ON":
                 return green
             info = custom_map.get(s)
-            if info and info.get('color_hex'):
-                hex6 = info['color_hex'].lstrip('#').upper()
+            if info and info.get("color_hex"):
+                hex6 = info["color_hex"].lstrip("#").upper()
                 return PatternFill(start_color=hex6, end_color=hex6, fill_type="solid")
             return None
 
         # Schedules -> mapa por badge y fecha
         sched_by_badge: Dict[str, Dict[str, Dict[str, Optional[str]]]] = {}
         for s in schedules:
-            b = str(s.get('badge', '')).strip()
-            d = str(s.get('date', '')).strip()  # 'YYYY-MM-DD'
+            b = str(s.get("badge", "")).strip()
+            d = str(s.get("date", "")).strip()  # 'YYYY-MM-DD'
             if not b or not d:
                 continue
             sched_by_badge.setdefault(b, {})[d] = {
-                'status': s.get('status'),
-                'shift_type': s.get('shift_type'),
-                'in_time': s.get('in_time'),
-                'out_time': s.get('out_time')
+                "status": s.get("status"),
+                "shift_type": s.get("shift_type"),
+                "in_time": s.get("in_time"),
+                "out_time": s.get("out_time"),
             }
 
         # Helper para nombre en Newmont
@@ -716,7 +805,9 @@ def export_plan_from_db(
 
         # Escribir/actualizar usuarios
         # Índice rápido por badge ya existente
-        badge_col = header_map["BADGE"] if variant == "RGM" else header_map["Company ID"]
+        badge_col = (
+            header_map["BADGE"] if variant == "RGM" else header_map["Company ID"]
+        )
         existing_rows_by_badge: Dict[str, int] = {}
         for i in range(2, ws.max_row + 1):
             v = ws.cell(row=i, column=badge_col).value
@@ -724,9 +815,9 @@ def export_plan_from_db(
                 existing_rows_by_badge[str(v).strip()] = i
 
         for u in users:
-            name = u.get('name', '').strip()
-            role = u.get('role', '').strip()
-            badge = str(u.get('badge', '')).strip()
+            name = u.get("name", "").strip()
+            role = u.get("role", "").strip()
+            badge = str(u.get("badge", "")).strip()
             if not badge:
                 continue
 
@@ -754,13 +845,17 @@ def export_plan_from_db(
                 cell = ws.cell(row=row_idx, column=col_idx)
                 info = sched_by_badge.get(badge, {}).get(d.isoformat(), None)
                 if info:
-                    st = (info.get('status') or '').strip().upper() if info.get('status') else None
+                    st = (
+                        (info.get("status") or "").strip().upper()
+                        if info.get("status")
+                        else None
+                    )
                     cell.value = st
                     cell.fill = _fill_for(st) or PatternFill(fill_type=None)
                     # comentario para personalizados si tenemos HH:MM
                     if st and st not in ("ON", "ON NS", "OFF"):
-                        it = (info.get('in_time') or '').strip()
-                        ot = (info.get('out_time') or '').strip()
+                        it = (info.get("in_time") or "").strip()
+                        ot = (info.get("out_time") or "").strip()
                         if it and ot:
                             cell.comment = Comment(f"{it}-{ot}", "ShiftType")
                         else:
@@ -787,7 +882,7 @@ def export_plan_from_db(
             date_map[d] = new_col
             # escribir valores para cada usuario
             for u in users:
-                badge = str(u.get('badge', '')).strip()
+                badge = str(u.get("badge", "")).strip()
                 if not badge:
                     continue
                 row_idx = existing_rows_by_badge.get(badge)
@@ -796,12 +891,16 @@ def export_plan_from_db(
                 info = sched_by_badge.get(badge, {}).get(d.isoformat(), None)
                 cell = ws.cell(row=row_idx, column=new_col)
                 if info:
-                    st = (info.get('status') or '').strip().upper() if info.get('status') else None
+                    st = (
+                        (info.get("status") or "").strip().upper()
+                        if info.get("status")
+                        else None
+                    )
                     cell.value = st
                     cell.fill = _fill_for(st) or PatternFill(fill_type=None)
                     if st and st not in ("ON", "ON NS", "OFF"):
-                        it = info.get('in_time')
-                        ot = info.get('out_time')
+                        it = info.get("in_time")
+                        ot = info.get("out_time")
                         if it and ot:
                             cell.comment = Comment(f"{it}-{ot}", "ShiftType")
                         else:
@@ -821,11 +920,9 @@ def export_plan_from_db(
 # Reporte de transporte (IN/OUT) — MODIFIED to use xlsxwriter
 # ============================================================
 
+
 def generate_transport_report(
-    plan_staff_file: str,
-    start_date: date,
-    end_date: date,
-    settings: Dict
+    plan_staff_file: str, start_date: date, end_date: date, settings: Dict
 ) -> Tuple[bytes, str]:
     """
     Generates the transport Excel report using xlsxwriter to apply custom formatting.
@@ -834,23 +931,35 @@ def generate_transport_report(
     # ---- 1) Inferir source por nombre de archivo ----
     fname = os.path.basename(plan_staff_file).lower()
     source = "Newmont" if "newmont" in fname else "RGM"
-    
+
     if source == "RGM":
-        return generate_rgm_transport_report(plan_staff_file, start_date, end_date, settings)
+        return generate_rgm_transport_report(
+            plan_staff_file, start_date, end_date, settings
+        )
 
     # ---- 2) Cargar datos de BD (tipos de turno, ubicaciones y operaciones) ----
     try:
-        from database_logic import get_shift_type_map, get_user_location_for_date, get_all_operations
-        custom_map: Dict[str, Dict] = {k.strip().upper(): v for k, v in get_shift_type_map(source).items()}
+        from database_logic import (
+            get_shift_type_map,
+            get_user_location_for_date,
+            get_all_operations,
+        )
+
+        custom_map: Dict[str, Dict] = {
+            k.strip().upper(): v for k, v in get_shift_type_map(source).items()
+        }
         # Crear un mapa de operaciones por badge para búsqueda rápida
         ops_by_badge = {}
         for op in get_all_operations():
-            b = op.get('badge')
-            if b: ops_by_badge.setdefault(b, []).append(op)
+            b = op.get("badge")
+            if b:
+                ops_by_badge.setdefault(b, []).append(op)
     except Exception:
         custom_map = {}
         ops_by_badge = {}
-        def get_user_location_for_date(b, d): return (None, None)
+
+        def get_user_location_for_date(b, d):
+            return (None, None)
 
     # ---- 3) Abrir plan staff y extraer datos ----
     try:
@@ -860,26 +969,40 @@ def generate_transport_report(
         return b"", f"Could not read Plan Staff file: {e}"
 
     # ---- 4) Resolver esquema de columnas (RGM vs Newmont) ----
-    header_map: Dict[str, int] = {c.value: c.column for c in ws_src[1] if isinstance(c.value, str)}
-    date_cols: Dict[int, date] = {c.column: c.value.date() for c in ws_src[1] if isinstance(c.value, datetime)}
+    header_map: Dict[str, int] = {
+        c.value: c.column for c in ws_src[1] if isinstance(c.value, str)
+    }
+    date_cols: Dict[int, date] = {
+        c.column: c.value.date() for c in ws_src[1] if isinstance(c.value, datetime)
+    }
 
     is_rgm = all(h in header_map for h in ("NAME", "ROLE", "BADGE"))
-    is_new = all(h in header_map for h in ("Last Name", "First Name", "Discipline", "Company ID"))
+    is_new = all(
+        h in header_map for h in ("Last Name", "First Name", "Discipline", "Company ID")
+    )
     if not (is_rgm or is_new):
         return b"", "Unsupported Plan Staff format."
 
     # ---- 5) Helpers and Data Extraction ----
     OFF_LIKE = {"OFF", "BREAK", "KO", "LEAVE"}
+
     def _norm_status(v):
-        if v is None: return None
+        if v is None:
+            return None
         s = str(v).strip()
-        if not s: return None
+        if not s:
+            return None
         su = s.upper()
-        if su in OFF_LIKE: return "OFF"
-        if su in ("ON", "ON NS"): return su
-        if su.isdigit() or su == "OK" or "DAY" in su: return "ON"
+        if su in OFF_LIKE:
+            return "OFF"
+        if su in ("ON", "ON NS"):
+            return su
+        if su.isdigit() or su == "OK" or "DAY" in su:
+            return "ON"
         return su
-    def _is_working(s): return bool(s and s not in ("OFF", "BREAK", "KO", "LEAVE"))
+
+    def _is_working(s):
+        return bool(s and s not in ("OFF", "BREAK", "KO", "LEAVE"))
 
     # ---- 6) Data processing: Collect IN/OUT rows ----
     all_in_events, all_out_events = [], []
@@ -887,11 +1010,12 @@ def generate_transport_report(
     dates_sorted = sorted(date_cols.values())
 
     def _find_operation_for_date(badge: str, target_date: date, user_ops: List[Dict]):
-        if not user_ops: return None
+        if not user_ops:
+            return None
         for op in user_ops:
             try:
-                op_start = datetime.fromisoformat(op['start_date']).date()
-                op_end = datetime.fromisoformat(op['end_date']).date()
+                op_start = datetime.fromisoformat(op["start_date"]).date()
+                op_end = datetime.fromisoformat(op["end_date"]).date()
                 if op_start <= target_date <= op_end:
                     return op
             except (ValueError, TypeError):
@@ -899,13 +1023,28 @@ def generate_transport_report(
         return None
 
     if is_rgm:
-        name_col, role_col, badge_col = header_map["NAME"], header_map["ROLE"], header_map["BADGE"]
+        name_col, role_col, badge_col = (
+            header_map["NAME"],
+            header_map["ROLE"],
+            header_map["BADGE"],
+        )
+
         def get_name(r):
             nm = str(ws_src.cell(row=r, column=name_col).value or "").strip()
-            if "," in nm: last, first = nm.split(",", 1); return last.strip(), first.strip()
-            parts = nm.split(); return (parts[-1], " ".join(parts[:-1])) if len(parts) >= 2 else (nm, "")
+            if "," in nm:
+                last, first = nm.split(",", 1)
+                return last.strip(), first.strip()
+            parts = nm.split()
+            return (parts[-1], " ".join(parts[:-1])) if len(parts) >= 2 else (nm, "")
+
     else:
-        ln_col, fn_col, role_col, badge_col = header_map["Last Name"], header_map["First Name"], header_map["Discipline"], header_map["Company ID"]
+        ln_col, fn_col, role_col, badge_col = (
+            header_map["Last Name"],
+            header_map["First Name"],
+            header_map["Discipline"],
+            header_map["Company ID"],
+        )
+
         def get_name(r):
             ln = str(ws_src.cell(row=r, column=ln_col).value or "").strip()
             fn = str(ws_src.cell(row=r, column=fn_col).value or "").strip()
@@ -913,57 +1052,99 @@ def generate_transport_report(
 
     for r_idx in range(2, ws_src.max_row + 1):
         badge = str(ws_src.cell(row=r_idx, column=badge_col).value or "").strip()
-        if not badge: continue
-        role, (last, first) = str(ws_src.cell(row=r_idx, column=role_col).value or "").strip(), get_name(r_idx)
+        if not badge:
+            continue
+        role, (last, first) = str(
+            ws_src.cell(row=r_idx, column=role_col).value or ""
+        ).strip(), get_name(r_idx)
         user_operations = ops_by_badge.get(badge, [])
-        
+
         per_day: Dict[date, Tuple[Optional[str], Optional[str]]] = {}
         for c, d in date_cols.items():
             cell = ws_src.cell(row=r_idx, column=c)
-            per_day[d] = (_norm_status(cell.value), (cell.comment.text if cell.comment else None))
+            per_day[d] = (
+                _norm_status(cell.value),
+                (cell.comment.text if cell.comment else None),
+            )
 
-        if not per_day: continue
-        
+        if not per_day:
+            continue
+
         for i, d in enumerate(dates_sorted):
             st_d, cmt_d = per_day.get(d, (None, None))
-            if not _is_working(st_d): continue
-            
-            prev_d = dates_sorted[i-1] if i > 0 else (d - timedelta(days=1))
-            next_d = dates_sorted[i+1] if i < len(dates_sorted)-1 else (d + timedelta(days=1))
-            st_prev, _ = per_day.get(prev_d, (None,None))
-            st_next, _ = per_day.get(next_d, (None,None))
+            if not _is_working(st_d):
+                continue
+
+            prev_d = dates_sorted[i - 1] if i > 0 else (d - timedelta(days=1))
+            next_d = (
+                dates_sorted[i + 1]
+                if i < len(dates_sorted) - 1
+                else (d + timedelta(days=1))
+            )
+            st_prev, _ = per_day.get(prev_d, (None, None))
+            st_next, _ = per_day.get(next_d, (None, None))
 
             # --- NEW: Determine date and time, with override from operations DB ---
             operation = _find_operation_for_date(badge, d, user_operations)
 
             entry_date_to_use = d
             exit_date_to_use = d
-            time_in_str = _get_transport_time_str(st_d, "IN", cmt_d, custom_map, source=source)
-            time_out_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map, source=source)
-            
-            if operation and operation.get('entry_date') and operation.get('exit_date'):
+            time_in_str = _get_transport_time_str(
+                st_d, "IN", cmt_d, custom_map, source=source
+            )
+            time_out_str = _get_transport_time_str(
+                st_d, "OUT", cmt_d, custom_map, source=source
+            )
+
+            if operation and operation.get("entry_date") and operation.get("exit_date"):
                 try:
-                    entry_dt = datetime.strptime(operation['entry_date'], '%Y-%m-%d %H:%M')
-                    exit_dt = datetime.strptime(operation['exit_date'], '%Y-%m-%d %H:%M')
-                    
+                    entry_dt = datetime.strptime(
+                        operation["entry_date"], "%Y-%m-%d %H:%M"
+                    )
+                    exit_dt = datetime.strptime(
+                        operation["exit_date"], "%Y-%m-%d %H:%M"
+                    )
+
                     entry_date_to_use = entry_dt.date()
-                    time_in_str = entry_dt.strftime('%H:%M:%S')
+                    time_in_str = entry_dt.strftime("%H:%M:%S")
                     exit_date_to_use = exit_dt.date()
-                    time_out_str = exit_dt.strftime('%H:%M:%S')
+                    time_out_str = exit_dt.strftime("%H:%M:%S")
                 except (ValueError, TypeError):
-                    pass # Fallback to defaults
+                    pass  # Fallback to defaults
 
             is_entry = not _is_working(st_prev)
             is_exit = not _is_working(st_next)
 
             if is_entry:
                 pu, _ = get_user_location_for_date(badge, d)
-                all_in_events.append([last, first, badge, company_default, role, pu or "", entry_date_to_use, time_in_str])
-            
+                all_in_events.append(
+                    [
+                        last,
+                        first,
+                        badge,
+                        company_default,
+                        role,
+                        pu or "",
+                        entry_date_to_use,
+                        time_in_str,
+                    ]
+                )
+
             if is_exit:
                 _, do = get_user_location_for_date(badge, d)
-                all_out_events.append([last, first, badge, company_default, role, do or "", exit_date_to_use, time_out_str])
-    
+                all_out_events.append(
+                    [
+                        last,
+                        first,
+                        badge,
+                        company_default,
+                        role,
+                        do or "",
+                        exit_date_to_use,
+                        time_out_str,
+                    ]
+                )
+
     # Filter events by report date range and sort them
     in_rows_data = [row for row in all_in_events if start_date <= row[6] <= end_date]
     out_rows_data = [row for row in all_out_events if start_date <= row[6] <= end_date]
@@ -972,37 +1153,82 @@ def generate_transport_report(
 
     # ---- 7) Write to xlsxwriter workbook ----
     output = io.BytesIO()
-    workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+    workbook = xlsxwriter.Workbook(output, {"in_memory": True})
     ws = workbook.add_worksheet("travel list")
 
     # --- Formats ---
-    base_font_settings = {'font_name': settings.get('font_name', 'Calibri'), 'valign': 'vcenter'}
-    
-    f_title = workbook.add_format({'bold': True, 'font_name': base_font_settings['font_name'], 'underline': True, 'font_size': 11})
-    
-    f_header = workbook.add_format({
-        'bold': True, 
-        'font_name': base_font_settings['font_name'], 
-        'font_color': settings.get('header_font_color'), 
-        'bg_color': settings.get('header_bg_color'), 
-        'align': 'center', 'valign': 'vcenter', 'border': 1
-    })
-    
-    f_default = workbook.add_format({**base_font_settings, 'border': 1})
-    f_date = workbook.add_format({**base_font_settings, 'border': 1, 'num_format': settings.get('date_format', 'dd-mmm-yy'), 'font_color': 'red'})
-    f_time = workbook.add_format({**base_font_settings, 'border': 1, 'num_format': 'hh:mm', 'font_color': 'red'})
+    base_font_settings = {
+        "font_name": settings.get("font_name", "Calibri"),
+        "valign": "vcenter",
+    }
+
+    f_title = workbook.add_format(
+        {
+            "bold": True,
+            "font_name": base_font_settings["font_name"],
+            "underline": True,
+            "font_size": 11,
+        }
+    )
+
+    f_header = workbook.add_format(
+        {
+            "bold": True,
+            "font_name": base_font_settings["font_name"],
+            "font_color": settings.get("header_font_color"),
+            "bg_color": settings.get("header_bg_color"),
+            "align": "center",
+            "valign": "vcenter",
+            "border": 1,
+        }
+    )
+
+    f_default = workbook.add_format({**base_font_settings, "border": 1})
+    f_date = workbook.add_format(
+        {
+            **base_font_settings,
+            "border": 1,
+            "num_format": settings.get("date_format", "dd-mmm-yy"),
+            "font_color": "red",
+        }
+    )
+    f_time = workbook.add_format(
+        {**base_font_settings, "border": 1, "num_format": "hh:mm", "font_color": "red"}
+    )
 
     # --- Write Content ---
-    ws.write('A1', "MERIAN TRANSPORTATION REQUEST", f_title)
-    ws.write('A3', "IN", workbook.add_format({'bold': True}))
-    ws.write('B3', "TRAVEL TO SITE", workbook.add_format({'bold': True}))
-    ws.write('K3', "OUT", workbook.add_format({'bold': True}))
-    ws.write('L3', "TRAVEL FROM SITE", workbook.add_format({'bold': True}))
+    ws.write("A1", "MERIAN TRANSPORTATION REQUEST", f_title)
+    ws.write("A3", "IN", workbook.add_format({"bold": True}))
+    ws.write("B3", "TRAVEL TO SITE", workbook.add_format({"bold": True}))
+    ws.write("K3", "OUT", workbook.add_format({"bold": True}))
+    ws.write("L3", "TRAVEL FROM SITE", workbook.add_format({"bold": True}))
 
-    headers_in = ["#", "NAME", "FIRST NAME", "GID", "COMPANY", "DEPT", "FROM", "DATE", "TIME"]
-    headers_out = ["#", "NAME", "FIRST NAME", "GID", "COMPANY", "DEPT", "TO", "DATE", "TIME"]
-    for i, h in enumerate(headers_in): ws.write(3, i, h, f_header)
-    for i, h in enumerate(headers_out): ws.write(3, i + 10, h, f_header)
+    headers_in = [
+        "#",
+        "NAME",
+        "FIRST NAME",
+        "GID",
+        "COMPANY",
+        "DEPT",
+        "FROM",
+        "DATE",
+        "TIME",
+    ]
+    headers_out = [
+        "#",
+        "NAME",
+        "FIRST NAME",
+        "GID",
+        "COMPANY",
+        "DEPT",
+        "TO",
+        "DATE",
+        "TIME",
+    ]
+    for i, h in enumerate(headers_in):
+        ws.write(3, i, h, f_header)
+    for i, h in enumerate(headers_out):
+        ws.write(3, i + 10, h, f_header)
 
     row_start_index = 4
     for i, row_data in enumerate(in_rows_data):
@@ -1012,11 +1238,11 @@ def generate_transport_report(
             if headers_in[col] == "DATE":
                 ws.write_datetime(i + row_start_index, col, cell_data, f_date)
             elif headers_in[col] == "TIME":
-                time_obj = datetime.strptime(cell_data, '%H:%M:%S')
+                time_obj = datetime.strptime(cell_data, "%H:%M:%S")
                 ws.write_datetime(i + row_start_index, col, time_obj, f_time)
             else:
                 ws.write(i + row_start_index, col, cell_data, f_default)
-            
+
     for i, row_data in enumerate(out_rows_data):
         ws.write(i + row_start_index, 10, i + 1, f_default)
         for j, cell_data in enumerate(row_data):
@@ -1024,11 +1250,11 @@ def generate_transport_report(
             if headers_out[col - 10] == "DATE":
                 ws.write_datetime(i + row_start_index, col, cell_data, f_date)
             elif headers_out[col - 10] == "TIME":
-                time_obj = datetime.strptime(cell_data, '%H:%M:%S')
+                time_obj = datetime.strptime(cell_data, "%H:%M:%S")
                 ws.write_datetime(i + row_start_index, col, time_obj, f_time)
             else:
                 ws.write(i + row_start_index, col, cell_data, f_default)
-    
+
     ws.autofit()
     workbook.close()
     output.seek(0)
@@ -1038,58 +1264,128 @@ def generate_transport_report(
 # ============================================================
 # NEW RGM-specific Report
 # ============================================================
-def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_date: date, settings: Dict) -> Tuple[bytes, str]:
+def generate_rgm_transport_report(
+    plan_staff_file: str, start_date: date, end_date: date, settings: Dict
+) -> Tuple[bytes, str]:
     output = io.BytesIO()
-    workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+    workbook = xlsxwriter.Workbook(output, {"in_memory": True})
     worksheet = workbook.add_worksheet("Sheet1")
 
     # Formats
-    title_format = workbook.add_format({'bold': True, 'font_color': 'red', 'align': 'center', 'valign': 'vcenter', 'font_size': 18})
-    header_format = workbook.add_format({'bold': True, 'bg_color': '#00B0F0', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-    yellow_header_format = workbook.add_format({'bold': True, 'bg_color': 'yellow', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-    data_format = workbook.add_format({'align': 'left', 'valign': 'vcenter', 'border': 1})
-    time_format = workbook.add_format({'align': 'left', 'valign': 'vcenter', 'border': 1, 'num_format': 'h:mm AM/PM'})
-    date_format = workbook.add_format({'align': 'left', 'valign': 'vcenter', 'border': 1, 'num_format': settings.get('date_format', 'dd/mm/yyyy')})
-    
+    title_format = workbook.add_format(
+        {
+            "bold": True,
+            "font_color": "red",
+            "align": "center",
+            "valign": "vcenter",
+            "font_size": 18,
+        }
+    )
+    header_format = workbook.add_format(
+        {
+            "bold": True,
+            "bg_color": "#00B0F0",
+            "font_color": "white",
+            "align": "center",
+            "valign": "vcenter",
+            "border": 1,
+        }
+    )
+    yellow_header_format = workbook.add_format(
+        {
+            "bold": True,
+            "bg_color": "yellow",
+            "align": "center",
+            "valign": "vcenter",
+            "border": 1,
+        }
+    )
+    data_format = workbook.add_format(
+        {"align": "left", "valign": "vcenter", "border": 1}
+    )
+    time_format = workbook.add_format(
+        {"align": "left", "valign": "vcenter", "border": 1, "num_format": "h:mm AM/PM"}
+    )
+    date_format = workbook.add_format(
+        {
+            "align": "left",
+            "valign": "vcenter",
+            "border": 1,
+            "num_format": settings.get("date_format", "dd/mm/yyyy"),
+        }
+    )
+
     # Set column widths
-    worksheet.set_column('A:A', 5)
-    worksheet.set_column('B:B', 25) # NAME
-    worksheet.set_column('C:D', 15) # DEPARTMENT, BADGE
-    worksheet.set_column('E:F', 20) # POSITION, CREW
-    worksheet.set_column('G:H', 25) # PICKUP, INBOUND DATE
-    worksheet.set_column('I:K', 15) # METHOD, LOCATION, DEPT TIME
-    worksheet.set_column('L:L', 2) # Spacer
-    worksheet.set_column('M:M', 25) # NAME
-    worksheet.set_column('N:P', 15) # DEPARTMENT, BADGE, POSITION
-    worksheet.set_column('Q:R', 20) # CREW, OUTBOUND DATE
-    worksheet.set_column('S:T', 25) # METHOD, LOCATION
-    worksheet.set_column('U:U', 15) # DEPT TIME
+    worksheet.set_column("A:A", 5)
+    worksheet.set_column("B:B", 25)  # NAME
+    worksheet.set_column("C:D", 15)  # DEPARTMENT, BADGE
+    worksheet.set_column("E:F", 20)  # POSITION, CREW
+    worksheet.set_column("G:H", 25)  # PICKUP, INBOUND DATE
+    worksheet.set_column("I:K", 15)  # METHOD, LOCATION, DEPT TIME
+    worksheet.set_column("L:L", 2)  # Spacer
+    worksheet.set_column("M:M", 25)  # NAME
+    worksheet.set_column("N:P", 15)  # DEPARTMENT, BADGE, POSITION
+    worksheet.set_column("Q:R", 20)  # CREW, OUTBOUND DATE
+    worksheet.set_column("S:T", 25)  # METHOD, LOCATION
+    worksheet.set_column("U:U", 15)  # DEPT TIME
 
     # Inbound Section
-    worksheet.merge_range('A1:K2', 'INBOUND', title_format)
-    inbound_headers = ["NR", "NAME (Last, First Name)", "DEPARTMENT", "BADGE #", "POSITION / TITLE", "CREW A/B/C", "PICK UP LOCATION", "IN BOUND DATE", "Method Of Transport", "Location", "DEPT TIME"]
+    worksheet.merge_range("A1:K2", "INBOUND", title_format)
+    inbound_headers = [
+        "NR",
+        "NAME (Last, First Name)",
+        "DEPARTMENT",
+        "BADGE #",
+        "POSITION / TITLE",
+        "CREW A/B/C",
+        "PICK UP LOCATION",
+        "IN BOUND DATE",
+        "Method Of Transport",
+        "Location",
+        "DEPT TIME",
+    ]
     for col, header in enumerate(inbound_headers):
         fmt = yellow_header_format if header == "PICK UP LOCATION" else header_format
         worksheet.write(2, col, header, fmt)
 
     # Outbound Section
-    worksheet.merge_range('M1:U2', 'OUTBOUND', title_format)
-    outbound_headers = ["NAME (Last, First Name)", "DEPARTMENT", "BADGE #", "POSITION / TITLE", "CREW A/B/C", "ROSEBEL SITE OUT BOUND DATE", "Method Of Transport", "Location", "DEPT TIME"]
+    worksheet.merge_range("M1:U2", "OUTBOUND", title_format)
+    outbound_headers = [
+        "NAME (Last, First Name)",
+        "DEPARTMENT",
+        "BADGE #",
+        "POSITION / TITLE",
+        "CREW A/B/C",
+        "ROSEBEL SITE OUT BOUND DATE",
+        "Method Of Transport",
+        "Location",
+        "DEPT TIME",
+    ]
     for col, header in enumerate(outbound_headers):
         worksheet.write(2, col + 12, header, header_format)
 
     # --- Data Extraction Logic (MODIFIED) ---
     try:
-        from database_logic import get_shift_type_map, get_user_location_for_date, get_all_operations
-        custom_map: Dict[str, Dict] = {k.strip().upper(): v for k, v in get_shift_type_map("RGM").items()}
+        from database_logic import (
+            get_shift_type_map,
+            get_user_location_for_date,
+            get_all_operations,
+        )
+
+        custom_map: Dict[str, Dict] = {
+            k.strip().upper(): v for k, v in get_shift_type_map("RGM").items()
+        }
         ops_by_badge = {}
         for op in get_all_operations():
-            b = op.get('badge')
-            if b: ops_by_badge.setdefault(b, []).append(op)
+            b = op.get("badge")
+            if b:
+                ops_by_badge.setdefault(b, []).append(op)
     except Exception:
         custom_map = {}
         ops_by_badge = {}
-        def get_user_location_for_date(b, d): return (None, None)
+
+        def get_user_location_for_date(b, d):
+            return (None, None)
 
     try:
         wb_src = openpyxl.load_workbook(plan_staff_file, data_only=True)
@@ -1098,93 +1394,152 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
         workbook.close()
         return b"", f"Could not read Plan Staff file: {e}"
 
-    header_map: Dict[str, int] = {c.value: c.column for c in ws_src[1] if isinstance(c.value, str)}
-    date_cols: Dict[int, date] = {c.column: c.value.date() for c in ws_src[1] if isinstance(c.value, datetime)}
-    
+    header_map: Dict[str, int] = {
+        c.value: c.column for c in ws_src[1] if isinstance(c.value, str)
+    }
+    date_cols: Dict[int, date] = {
+        c.column: c.value.date() for c in ws_src[1] if isinstance(c.value, datetime)
+    }
+
     OFF_LIKE = {"OFF", "BREAK", "KO", "LEAVE"}
+
     def _norm_status(v):
-        if v is None: return None
-        s = str(v).strip();
-        if not s: return None
+        if v is None:
+            return None
+        s = str(v).strip()
+        if not s:
+            return None
         su = s.upper()
-        if su in OFF_LIKE: return "OFF"
-        if su.isdigit() or su in ("OK", "ON") or "DAY" in su: return "ON"
-        if "ON NS" in su or "NIGHT" in su: return "ON NS"
+        if su in OFF_LIKE:
+            return "OFF"
+        if su.isdigit() or su in ("OK", "ON") or "DAY" in su:
+            return "ON"
+        if "ON NS" in su or "NIGHT" in su:
+            return "ON NS"
         return su
-    def _is_working(s): return bool(s and s != "OFF")
+
+    def _is_working(s):
+        return bool(s and s != "OFF")
 
     def _get_crew_from_name(name: str):
-        if 'day' in name.lower(): return "A 14/7 DAY"
-        if 'night' in name.lower(): return "B 7/7/7 DAY/NIGHT"
+        if "day" in name.lower():
+            return "A 14/7 DAY"
+        if "night" in name.lower():
+            return "B 7/7/7 DAY/NIGHT"
         return "C 14/7 DAY"
 
     def _find_operation_for_date(badge: str, target_date: date, user_ops: List[Dict]):
-        if not user_ops: return None
+        if not user_ops:
+            return None
         for op in user_ops:
             try:
-                op_start = datetime.fromisoformat(op['start_date']).date()
-                op_end = datetime.fromisoformat(op['end_date']).date()
+                op_start = datetime.fromisoformat(op["start_date"]).date()
+                op_end = datetime.fromisoformat(op["end_date"]).date()
                 if op_start <= target_date <= op_end:
                     return op
             except (ValueError, TypeError):
                 continue
         return None
-    
+
     all_in_events, all_out_events = [], []
     dates_sorted = sorted(date_cols.values())
 
     for r_idx in range(2, ws_src.max_row + 1):
-        badge = str(ws_src.cell(row=r_idx, column=header_map["BADGE"]).value or "").strip()
-        if not badge: continue
+        badge = str(
+            ws_src.cell(row=r_idx, column=header_map["BADGE"]).value or ""
+        ).strip()
+        if not badge:
+            continue
 
         name = str(ws_src.cell(row=r_idx, column=header_map["NAME"]).value or "")
         department = str(ws_src.cell(row=r_idx, column=header_map["ROLE"]).value or "")
-        position = "Technician" # Placeholder
+        position = "Technician"  # Placeholder
         user_operations = ops_by_badge.get(badge, [])
-        
+
         per_day: Dict[date, Tuple[Optional[str], Optional[str]]] = {}
         for c, d in date_cols.items():
             cell = ws_src.cell(row=r_idx, column=c)
-            per_day[d] = (_norm_status(cell.value), (cell.comment.text if cell.comment else None))
+            per_day[d] = (
+                _norm_status(cell.value),
+                (cell.comment.text if cell.comment else None),
+            )
 
         for i, d in enumerate(dates_sorted):
             st_d, cmt_d = per_day.get(d, (None, None))
-            if not _is_working(st_d): continue
+            if not _is_working(st_d):
+                continue
 
-            prev_d = dates_sorted[i-1] if i > 0 else (d - timedelta(days=1))
-            next_d = dates_sorted[i+1] if i < len(dates_sorted) - 1 else (d + timedelta(days=1))
+            prev_d = dates_sorted[i - 1] if i > 0 else (d - timedelta(days=1))
+            next_d = (
+                dates_sorted[i + 1]
+                if i < len(dates_sorted) - 1
+                else (d + timedelta(days=1))
+            )
             st_prev, _ = per_day.get(prev_d, (None, None))
             st_next, _ = per_day.get(next_d, (None, None))
-            
+
             operation = _find_operation_for_date(badge, d, user_operations)
             entry_date_to_use, exit_date_to_use = d, d
-            time_in_str = _get_transport_time_str(st_d, "IN", cmt_d, custom_map, source="RGM")
-            time_out_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map, source="RGM")
-            
-            if operation and operation.get('entry_date') and operation.get('exit_date'):
+            time_in_str = _get_transport_time_str(
+                st_d, "IN", cmt_d, custom_map, source="RGM"
+            )
+            time_out_str = _get_transport_time_str(
+                st_d, "OUT", cmt_d, custom_map, source="RGM"
+            )
+
+            if operation and operation.get("entry_date") and operation.get("exit_date"):
                 try:
-                    entry_dt = datetime.strptime(operation['entry_date'], '%Y-%m-%d %H:%M')
-                    exit_dt = datetime.strptime(operation['exit_date'], '%Y-%m-%d %H:%M')
+                    entry_dt = datetime.strptime(
+                        operation["entry_date"], "%Y-%m-%d %H:%M"
+                    )
+                    exit_dt = datetime.strptime(
+                        operation["exit_date"], "%Y-%m-%d %H:%M"
+                    )
                     entry_date_to_use = entry_dt.date()
-                    time_in_str = entry_dt.strftime('%H:%M:%S')
+                    time_in_str = entry_dt.strftime("%H:%M:%S")
                     exit_date_to_use = exit_dt.date()
-                    time_out_str = exit_dt.strftime('%H:%M:%S')
+                    time_out_str = exit_dt.strftime("%H:%M:%S")
                 except (ValueError, TypeError):
                     pass
-            
+
             # INBOUND event
             if not _is_working(st_prev):
                 pu, _ = get_user_location_for_date(badge, d)
                 crew = _get_crew_from_name(st_d if st_d else "")
                 dept_time = datetime.strptime(time_in_str, "%H:%M:%S")
-                all_in_events.append([name, department, badge, position, crew, pu or "N/A", entry_date_to_use, "RGM TRANSPORT", "PARAMARIBO", dept_time])
+                all_in_events.append(
+                    [
+                        name,
+                        department,
+                        badge,
+                        position,
+                        crew,
+                        pu or "N/A",
+                        entry_date_to_use,
+                        "RGM TRANSPORT",
+                        "PARAMARIBO",
+                        dept_time,
+                    ]
+                )
 
             # OUTBOUND event
             if not _is_working(st_next):
                 _, do = get_user_location_for_date(badge, d)
                 crew = _get_crew_from_name(st_d if st_d else "")
                 dept_time = datetime.strptime(time_out_str, "%H:%M:%S")
-                all_out_events.append([name, department, badge, position, crew, exit_date_to_use, "RGM TRANSPORT", do or "PARAMARIBO", dept_time])
+                all_out_events.append(
+                    [
+                        name,
+                        department,
+                        badge,
+                        position,
+                        crew,
+                        exit_date_to_use,
+                        "RGM TRANSPORT",
+                        do or "PARAMARIBO",
+                        dept_time,
+                    ]
+                )
 
     # Filter and sort events
     in_rows_data = [row for row in all_in_events if start_date <= row[6] <= end_date]
@@ -1203,7 +1558,7 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
                 worksheet.write_datetime(i + 3, col, val, time_format)
             else:
                 worksheet.write(i + 3, col, val, data_format)
-            
+
     for i, row_data in enumerate(out_rows_data):
         for col, val in enumerate(row_data):
             header_name = outbound_headers[col]
@@ -1223,7 +1578,10 @@ def generate_rgm_transport_report(plan_staff_file: str, start_date: date, end_da
 # Utilidad: Propagar cambios de código/color a Excel (inmediato)
 # ============================================================
 
-def apply_shift_type_update_to_excel(plan_staff_file: str, source: str, old_code: str, new_code: str, color_hex: str) -> Tuple[bool, str]:
+
+def apply_shift_type_update_to_excel(
+    plan_staff_file: str, source: str, old_code: str, new_code: str, color_hex: str
+) -> Tuple[bool, str]:
     """
     Reemplaza en TODO el archivo Excel el código viejo por el nuevo y aplica el color indicado.
     No altera comentarios ni otros contenidos.
@@ -1235,7 +1593,7 @@ def apply_shift_type_update_to_excel(plan_staff_file: str, source: str, old_code
         wb = openpyxl.load_workbook(plan_staff_file)
         ws = wb.active
 
-        hex6 = color_hex.lstrip('#').upper()
+        hex6 = color_hex.lstrip("#").upper()
         fill = PatternFill(start_color=hex6, end_color=hex6, fill_type="solid")
 
         # Hallar columnas de fecha para no tocar cabeceras no relacionadas
@@ -1262,7 +1620,10 @@ def apply_shift_type_update_to_excel(plan_staff_file: str, source: str, old_code
 # NEW: Onsite Stay Period Report
 # ============================================================
 
-def generate_stay_period_report(plan_staff_file: str, start_date: date, end_date: date) -> Tuple[bytes, str]:
+
+def generate_stay_period_report(
+    plan_staff_file: str, start_date: date, end_date: date
+) -> Tuple[bytes, str]:
     """
     Generates an Excel report detailing the continuous onsite stay periods for each employee.
     A stay period is a consecutive block of working days (not OFF or blank).
@@ -1275,25 +1636,40 @@ def generate_stay_period_report(plan_staff_file: str, start_date: date, end_date
 
     # --- 1. Map headers and dates ---
     header_map: Dict[str, int] = {str(c.value): c.column for c in ws_src[1] if c.value}
-    date_cols: Dict[date, int] = {c.value.date(): c.column for c in ws_src[1] if isinstance(c.value, datetime)}
+    date_cols: Dict[date, int] = {
+        c.value.date(): c.column for c in ws_src[1] if isinstance(c.value, datetime)
+    }
 
     # --- 2. Determine template variant (RGM/Newmont) to get Name/Role ---
     is_rgm = all(h in header_map for h in ("NAME", "ROLE"))
     is_newmont = all(h in header_map for h in ("Last Name", "First Name", "Discipline"))
 
     if not (is_rgm or is_newmont):
-        return b"", "Unsupported Plan Staff format. Could not find required Name/Role columns."
+        return (
+            b"",
+            "Unsupported Plan Staff format. Could not find required Name/Role columns.",
+        )
 
     def get_employee_details(row_idx: int) -> Tuple[str, str]:
         if is_rgm:
-            name = str(ws_src.cell(row=row_idx, column=header_map["NAME"]).value or "").strip()
-            role = str(ws_src.cell(row=row_idx, column=header_map["ROLE"]).value or "").strip()
+            name = str(
+                ws_src.cell(row=row_idx, column=header_map["NAME"]).value or ""
+            ).strip()
+            role = str(
+                ws_src.cell(row=row_idx, column=header_map["ROLE"]).value or ""
+            ).strip()
             return name, role
         elif is_newmont:
-            last = str(ws_src.cell(row=row_idx, column=header_map["Last Name"]).value or "").strip()
-            first = str(ws_src.cell(row=row_idx, column=header_map["First Name"]).value or "").strip()
+            last = str(
+                ws_src.cell(row=row_idx, column=header_map["Last Name"]).value or ""
+            ).strip()
+            first = str(
+                ws_src.cell(row=row_idx, column=header_map["First Name"]).value or ""
+            ).strip()
             name = f"{last}, {first}" if last and first else (last or first)
-            role = str(ws_src.cell(row=row_idx, column=header_map["Discipline"]).value or "").strip()
+            role = str(
+                ws_src.cell(row=row_idx, column=header_map["Discipline"]).value or ""
+            ).strip()
             return name, role
         return "", ""
 
@@ -1312,24 +1688,30 @@ def generate_stay_period_report(plan_staff_file: str, start_date: date, end_date
         # Iterar sobre todas las fechas para detectar los períodos de estadía completos
         for i, d in enumerate(sorted_dates):
             cell_val = ws_src.cell(row=r_idx, column=date_cols[d]).value
-            is_working = cell_val is not None and str(cell_val).strip().upper() != "OFF" and str(cell_val).strip() != ""
+            is_working = (
+                cell_val is not None
+                and str(cell_val).strip().upper() != "OFF"
+                and str(cell_val).strip() != ""
+            )
 
             if is_working and current_period_start is None:
                 # Comienzo de un nuevo período de trabajo
                 current_period_start = d
-            
+
             if not is_working and current_period_start is not None:
                 # Fin del período actual. El bloque está completo.
-                period_end = sorted_dates[i-1]
-                
+                period_end = sorted_dates[i - 1]
+
                 # Ahora, se verifica si este período completo se superpone con el rango del reporte
                 if not (period_end < start_date or current_period_start > end_date):
-                    stay_periods.append({
-                        "name": name,
-                        "role": role,
-                        "start": current_period_start,
-                        "end": period_end
-                    })
+                    stay_periods.append(
+                        {
+                            "name": name,
+                            "role": role,
+                            "start": current_period_start,
+                            "end": period_end,
+                        }
+                    )
                 current_period_start = None
 
         # Verificar si un período estaba en curso hasta el último día del Excel
@@ -1337,34 +1719,38 @@ def generate_stay_period_report(plan_staff_file: str, start_date: date, end_date
             period_end = sorted_dates[-1]
             # También se verifica la superposición para este último período
             if not (period_end < start_date or current_period_start > end_date):
-                stay_periods.append({
-                    "name": name,
-                    "role": role,
-                    "start": current_period_start,
-                    "end": period_end
-                })
+                stay_periods.append(
+                    {
+                        "name": name,
+                        "role": role,
+                        "start": current_period_start,
+                        "end": period_end,
+                    }
+                )
 
     # --- 4. Generate Excel report with xlsxwriter ---
     output = io.BytesIO()
-    workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+    workbook = xlsxwriter.Workbook(output, {"in_memory": True})
     worksheet = workbook.add_worksheet("Onsite Stay Report")
 
     # Formats
-    header_format = workbook.add_format({
-        'bold': True,
-        'font_color': 'white',
-        'bg_color': '#70AD47', # Green from image
-        'align': 'left',
-        'valign': 'vcenter',
-        'border': 1
-    })
-    cell_format = workbook.add_format({'border': 1, 'valign': 'vcenter'})
-    date_format_str = "%d/%m/%Y" # Using %d/%m/%Y as per image
+    header_format = workbook.add_format(
+        {
+            "bold": True,
+            "font_color": "white",
+            "bg_color": "#70AD47",  # Green from image
+            "align": "left",
+            "valign": "vcenter",
+            "border": 1,
+        }
+    )
+    cell_format = workbook.add_format({"border": 1, "valign": "vcenter"})
+    date_format_str = "%d/%m/%Y"  # Using %d/%m/%Y as per image
 
     # Set column widths
-    worksheet.set_column('A:A', 30)  # Name
-    worksheet.set_column('B:B', 30)  # Role
-    worksheet.set_column('C:C', 25)  # Staying period
+    worksheet.set_column("A:A", 30)  # Name
+    worksheet.set_column("B:B", 30)  # Role
+    worksheet.set_column("C:C", 25)  # Staying period
 
     # Write headers
     headers = ["Name", "Role (R type)", "Staying period onsite"]
@@ -1373,10 +1759,10 @@ def generate_stay_period_report(plan_staff_file: str, start_date: date, end_date
 
     # Write data
     row = 1
-    for period in sorted(stay_periods, key=lambda x: (x['name'], x['start'])):
+    for period in sorted(stay_periods, key=lambda x: (x["name"], x["start"])):
         period_str = f"{period['start'].strftime(date_format_str)} - {period['end'].strftime(date_format_str)}"
-        worksheet.write(row, 0, period['name'], cell_format)
-        worksheet.write(row, 1, period['role'], cell_format)
+        worksheet.write(row, 0, period["name"], cell_format)
+        worksheet.write(row, 1, period["role"], cell_format)
         worksheet.write(row, 2, period_str, cell_format)
         row += 1
 
@@ -1390,13 +1776,14 @@ def generate_stay_period_report(plan_staff_file: str, start_date: date, end_date
 # VALIDACIÓN de estructura y salud del archivo (SSoT guardrails)
 # ============================================================
 
+
 def validate_excel_structure(plan_staff_file: str) -> Tuple[bool, List[str], Dict]:
     """
     Valida que el Excel sea una planilla soportada (RGM o Newmont) y que posea columnas de fecha.
     Devuelve: (ok, errors, meta) con meta['variant'] = 'RGM' | 'Newmont' | None y meta['date_columns'].
     """
     errors: List[str] = []
-    meta: Dict = {'variant': None, 'date_columns': 0, 'headers': []}
+    meta: Dict = {"variant": None, "date_columns": 0, "headers": []}
 
     if not os.path.exists(plan_staff_file):
         errors.append(f"File not found: {plan_staff_file}")
@@ -1418,25 +1805,29 @@ def validate_excel_structure(plan_staff_file: str) -> Tuple[bool, List[str], Dic
         elif isinstance(v, datetime):
             date_count += 1
 
-    meta['headers'] = list(header_map.keys())
-    meta['date_columns'] = int(date_count)
+    meta["headers"] = list(header_map.keys())
+    meta["date_columns"] = int(date_count)
 
     # Detectar variante
     variant: Optional[str] = None
     if all(h in header_map for h in ("NAME", "ROLE", "BADGE")):
         variant = "RGM"
-    elif all(h in header_map for h in ("Last Name", "First Name", "Discipline", "Company ID")):
+    elif all(
+        h in header_map for h in ("Last Name", "First Name", "Discipline", "Company ID")
+    ):
         variant = "Newmont"
     else:
-        errors.append("Unsupported format. Expected headers for RGM (NAME/ROLE/BADGE) or Newmont (Last Name/First Name/Discipline/Company ID).")
+        errors.append(
+            "Unsupported format. Expected headers for RGM (NAME/ROLE/BADGE) or Newmont (Last Name/First Name/Discipline/Company ID)."
+        )
 
-    meta['variant'] = variant  # <- SIEMPRE definido en meta (corrige Pylance)
+    meta["variant"] = variant  # <- SIEMPRE definido en meta (corrige Pylance)
 
     if variant is None:
         # Sin variante, no seguimos validando otras reglas
         return False, errors, meta
 
-    if meta['date_columns'] == 0:
+    if meta["date_columns"] == 0:
         errors.append("No date columns detected in first row (datetime cells).")
 
     # Confirmar headers mínimos por variante
@@ -1456,6 +1847,7 @@ def validate_excel_structure(plan_staff_file: str) -> Tuple[bool, List[str], Dic
 # Comparación Excel ↔ BD (coherencia con SSoT)
 # ============================================================
 
+
 def check_db_sync_with_excel(plan_staff_file: str, source: str) -> Dict:
     """
     Compara usuarios y schedules entre Excel y BD.
@@ -1471,11 +1863,11 @@ def check_db_sync_with_excel(plan_staff_file: str, source: str) -> Dict:
       }
     """
     report = {
-        'users_in_excel': 0,
-        'users_in_db': 0,
-        'missing_badges_in_db': [],
-        'extra_badges_in_db': [],
-        'schedule_mismatches': []
+        "users_in_excel": 0,
+        "users_in_db": 0,
+        "missing_badges_in_db": [],
+        "extra_badges_in_db": [],
+        "schedule_mismatches": [],
     }
 
     ok, _errors, _meta = validate_excel_structure(plan_staff_file)
@@ -1485,20 +1877,21 @@ def check_db_sync_with_excel(plan_staff_file: str, source: str) -> Dict:
     # --- BD
     try:
         from database_logic import get_all_users, get_schedules_for_source
+
         users_db = get_all_users(source)
         sched_db = get_schedules_for_source(source)
     except Exception:
         users_db = []
         sched_db = []
 
-    db_badges = {str(u.get('badge', '')).strip() for u in users_db if u.get('badge')}
-    report['users_in_db'] = len(db_badges)
+    db_badges = {str(u.get("badge", "")).strip() for u in users_db if u.get("badge")}
+    report["users_in_db"] = len(db_badges)
 
     sched_db_map: Dict[str, Dict[str, str]] = {}
     for s in sched_db:
-        b = str(s.get('badge', '')).strip()
-        d = str(s.get('date', '')).strip()
-        st = (s.get('status') or '').strip().upper() if s.get('status') else None
+        b = str(s.get("badge", "")).strip()
+        d = str(s.get("date", "")).strip()
+        st = (s.get("status") or "").strip().upper() if s.get("status") else None
         if not b or not d:
             continue
         sched_db_map.setdefault(b, {})[d] = st
@@ -1522,7 +1915,9 @@ def check_db_sync_with_excel(plan_staff_file: str, source: str) -> Dict:
     # Determine variant & badge column
     if all(h in header_map for h in ("NAME", "ROLE", "BADGE")):
         badge_col = header_map["BADGE"]
-    elif all(h in header_map for h in ("Last Name", "First Name", "Discipline", "Company ID")):
+    elif all(
+        h in header_map for h in ("Last Name", "First Name", "Discipline", "Company ID")
+    ):
         badge_col = header_map["Company ID"]
     else:
         # No soportado
@@ -1562,11 +1957,11 @@ def check_db_sync_with_excel(plan_staff_file: str, source: str) -> Dict:
             if st is not None:
                 sched_excel_map.setdefault(b, {})[d.isoformat()] = st
 
-    report['users_in_excel'] = len(excel_badges)
+    report["users_in_excel"] = len(excel_badges)
 
     # Diferencias en usuarios
-    report['missing_badges_in_db'] = sorted(list(excel_badges - db_badges))
-    report['extra_badges_in_db'] = sorted(list(db_badges - excel_badges))
+    report["missing_badges_in_db"] = sorted(list(excel_badges - db_badges))
+    report["extra_badges_in_db"] = sorted(list(db_badges - excel_badges))
 
     # Mismatches de schedule (solo comparar cuando ambos tienen valor)
     mismatches: List[Dict] = []
@@ -1575,14 +1970,11 @@ def check_db_sync_with_excel(plan_staff_file: str, source: str) -> Dict:
             st_db = sched_db_map.get(b, {}).get(d_str)
             if st_db is None:
                 continue
-            if (st_excel or '').upper() != (st_db or '').upper():
-                mismatches.append({
-                    'badge': b,
-                    'date': d_str,
-                    'excel': st_excel,
-                    'db': st_db
-                })
-    report['schedule_mismatches'] = mismatches
+            if (st_excel or "").upper() != (st_db or "").upper():
+                mismatches.append(
+                    {"badge": b, "date": d_str, "excel": st_excel, "db": st_db}
+                )
+    report["schedule_mismatches"] = mismatches
 
     return report
 
@@ -1590,6 +1982,7 @@ def check_db_sync_with_excel(plan_staff_file: str, source: str) -> Dict:
 # ============================================================
 # REGENERACIÓN desde BD (SSoT) — independiente del archivo
 # ============================================================
+
 
 def regenerate_plan_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]:
     """
@@ -1599,6 +1992,7 @@ def regenerate_plan_from_db(plan_staff_file: str, source: str) -> Tuple[bool, st
     """
     try:
         from database_logic import get_all_users, get_schedules_for_source
+
         users = get_all_users(source)
         schedules = get_schedules_for_source(source)
     except Exception as e:
@@ -1610,7 +2004,11 @@ def regenerate_plan_from_db(plan_staff_file: str, source: str) -> Tuple[bool, st
     if not ok:
         # Crear plantilla mínima (RGM-like compatible con export_plan_from_db)
         try:
-            os.makedirs(os.path.dirname(plan_staff_file), exist_ok=True) if os.path.dirname(plan_staff_file) else None
+            (
+                os.makedirs(os.path.dirname(plan_staff_file), exist_ok=True)
+                if os.path.dirname(plan_staff_file)
+                else None
+            )
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Operations_best_opt"
@@ -1622,9 +2020,14 @@ def regenerate_plan_from_db(plan_staff_file: str, source: str) -> Tuple[bool, st
             return False, f"Cannot create template: {e}"
 
     # Exportar desde BD usando la plantilla (soporta RGM y Newmont si ya existe)
-    ok2, msg = export_plan_from_db(plan_staff_file, users, schedules, plan_staff_file, source)
+    ok2, msg = export_plan_from_db(
+        plan_staff_file, users, schedules, plan_staff_file, source
+    )
     if ok2:
-        return True, f"PlanStaff file regenerated from DB (SSoT): {os.path.basename(plan_staff_file)}"
+        return (
+            True,
+            f"PlanStaff file regenerated from DB (SSoT): {os.path.basename(plan_staff_file)}",
+        )
     else:
         return False, msg
 
@@ -1646,7 +2049,12 @@ def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]
         return regenerate_plan_from_db(plan_staff_file, source)
 
     try:
-        from database_logic import get_all_users, get_schedules_for_source, get_shift_type_map
+        from database_logic import (
+            get_all_users,
+            get_schedules_for_source,
+            get_shift_type_map,
+        )
+
         users_db = get_all_users(source)
         schedules_db = get_schedules_for_source(source)
         custom_map = get_shift_type_map(source)
@@ -1654,12 +2062,20 @@ def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]
         wb = openpyxl.load_workbook(plan_staff_file)
         ws = wb.active
 
-        header_map = {cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)}
-        variant = _meta.get('variant')
+        header_map = {
+            cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)
+        }
+        variant = _meta.get("variant")
 
-        date_map: Dict[date, int] = {c.value.date(): c.column for c in ws[1] if isinstance(c.value, datetime)}
+        date_map: Dict[date, int] = {
+            c.value.date(): c.column for c in ws[1] if isinstance(c.value, datetime)
+        }
 
-        badge_col = header_map.get("BADGE") if variant == "RGM" else header_map.get("Company ID")
+        badge_col = (
+            header_map.get("BADGE")
+            if variant == "RGM"
+            else header_map.get("Company ID")
+        )
         if not badge_col:
             return False, "Badge column not found in Excel."
 
@@ -1669,48 +2085,68 @@ def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]
         yel = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
 
         def _fill_for(status: Optional[str]) -> Optional[PatternFill]:
-            if status is None: return None
+            if status is None:
+                return None
             s = str(status).strip().upper()
-            if s == "OFF": return red
-            if s == "ON NS": return yel
-            if s == "ON": return green
+            if s == "OFF":
+                return red
+            if s == "ON NS":
+                return yel
+            if s == "ON":
+                return green
             info = custom_map.get(s)
-            if info and info.get('color_hex'):
-                hex_ = info['color_hex'].lstrip('#').upper()
+            if info and info.get("color_hex"):
+                hex_ = info["color_hex"].lstrip("#").upper()
                 return PatternFill(start_color=hex_, end_color=hex_, fill_type="solid")
             return None
 
         # Build maps for quick lookup
         sched_by_badge: Dict[str, Dict[str, Dict]] = {}
         for s in schedules_db:
-            b, d = str(s.get('badge','')).strip(), str(s.get('date','')).strip()
+            b, d = str(s.get("badge", "")).strip(), str(s.get("date", "")).strip()
             if b and d:
                 sched_by_badge.setdefault(b, {})[d] = s
 
-        rows_by_badge: Dict[str, int] = {str(ws.cell(r,badge_col).value).strip(): r for r in range(2, ws.max_row+1) if ws.cell(r,badge_col).value}
+        rows_by_badge: Dict[str, int] = {
+            str(ws.cell(r, badge_col).value).strip(): r
+            for r in range(2, ws.max_row + 1)
+            if ws.cell(r, badge_col).value
+        }
 
         # --- 1. Add missing users ---
         added_users = 0
         for user in users_db:
-            badge = str(user.get('badge','')).strip()
+            badge = str(user.get("badge", "")).strip()
             if badge and badge not in rows_by_badge:
                 added_users += 1
                 new_row_idx = ws.max_row + 1
                 if variant == "RGM":
-                    ws.cell(new_row_idx, header_map["NAME"], value=user.get('name',''))
-                    ws.cell(new_row_idx, header_map["ROLE"], value=user.get('role',''))
+                    ws.cell(new_row_idx, header_map["NAME"], value=user.get("name", ""))
+                    ws.cell(new_row_idx, header_map["ROLE"], value=user.get("role", ""))
                     ws.cell(new_row_idx, header_map["BADGE"], value=badge)
-                else: # Newmont
-                    name = user.get('name','')
-                    last, first = (name.split(',',1) + [''])[:2] if ',' in name else (name.rsplit(' ',1) + [''])[:2]
+                else:  # Newmont
+                    name = user.get("name", "")
+                    last, first = (
+                        (name.split(",", 1) + [""])[:2]
+                        if "," in name
+                        else (name.rsplit(" ", 1) + [""])[:2]
+                    )
                     ws.cell(new_row_idx, header_map["Last Name"], value=last.strip())
                     ws.cell(new_row_idx, header_map["First Name"], value=first.strip())
-                    ws.cell(new_row_idx, header_map["Discipline"], value=user.get('role',''))
+                    ws.cell(
+                        new_row_idx,
+                        header_map["Discipline"],
+                        value=user.get("role", ""),
+                    )
                     ws.cell(new_row_idx, header_map["Company ID"], value=badge)
                 rows_by_badge[badge] = new_row_idx
 
         # --- 2. Add missing date columns ---
-        all_db_dates = {datetime.fromisoformat(d).date() for b in sched_by_badge for d in sched_by_badge[b]}
+        all_db_dates = {
+            datetime.fromisoformat(d).date()
+            for b in sched_by_badge
+            for d in sched_by_badge[b]
+        }
         missing_dates = sorted(list(all_db_dates - set(date_map.keys())))
         for d in missing_dates:
             new_col = ws.max_column + 1
@@ -1723,24 +2159,35 @@ def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]
             user_scheds = sched_by_badge.get(badge, {})
             for d, col_idx in date_map.items():
                 cell = ws.cell(row_idx, col_idx)
-                if cell.value is None or str(cell.value).strip() == '':
+                if cell.value is None or str(cell.value).strip() == "":
                     db_info = user_scheds.get(d.isoformat())
                     if db_info:
-                        status = (db_info.get('status') or '').strip().upper()
+                        status = (db_info.get("status") or "").strip().upper()
                         if status:
                             filled_cells += 1
                             cell.value = status
                             cell.fill = _fill_for(status) or PatternFill(fill_type=None)
-                            if status not in ("ON","ON NS","OFF") and db_info.get('in_time') and db_info.get('out_time'):
-                                cell.comment = Comment(f"{db_info['in_time']}-{db_info['out_time']}", "ShiftType")
+                            if (
+                                status not in ("ON", "ON NS", "OFF")
+                                and db_info.get("in_time")
+                                and db_info.get("out_time")
+                            ):
+                                cell.comment = Comment(
+                                    f"{db_info['in_time']}-{db_info['out_time']}",
+                                    "ShiftType",
+                                )
 
         wb.save(plan_staff_file)
-        return True, f"Refresh complete: added {added_users} users and filled {filled_cells} cells from DB."
+        return (
+            True,
+            f"Refresh complete: added {added_users} users and filled {filled_cells} cells from DB.",
+        )
 
     except Exception as e:
         return False, f"Refresh error: {e}"
-    
+
     # En excel_logic.py
+
 
 def remove_user_from_excel(plan_staff_file: str, badge: str) -> Tuple[bool, str]:
     """
@@ -1753,30 +2200,32 @@ def remove_user_from_excel(plan_staff_file: str, badge: str) -> Tuple[bool, str]
     try:
         wb = openpyxl.load_workbook(plan_staff_file)
         ws = wb.active
-        
+
         # Detectar columna de BADGE
-        header_map = {cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)}
-        
+        header_map = {
+            cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)
+        }
+
         # Determinar la columna del badge según la variante (RGM vs Newmont)
         badge_col_idx = None
         if "BADGE" in header_map:
             badge_col_idx = header_map["BADGE"]
         elif "Company ID" in header_map:
             badge_col_idx = header_map["Company ID"]
-            
+
         if not badge_col_idx:
             return False, "Badge column not found in Excel."
 
         # Buscar la fila
         row_to_delete = None
         badge_str = str(badge).strip()
-        
+
         for r in range(2, ws.max_row + 1):
             cell_val = ws.cell(row=r, column=badge_col_idx).value
             if cell_val and str(cell_val).strip() == badge_str:
                 row_to_delete = r
                 break
-        
+
         if row_to_delete:
             ws.delete_rows(row_to_delete, 1)
             wb.save(plan_staff_file)
@@ -1787,24 +2236,26 @@ def remove_user_from_excel(plan_staff_file: str, badge: str) -> Tuple[bool, str]
     except Exception as e:
         return False, f"Error modifying Excel: {e}"
 
+
 # ============================================================
 # HORIZONTE MÓVIL (Rolling Horizon)
 # ============================================================
+
 
 def ensure_rolling_horizon_columns(plan_staff_file: str) -> Tuple[bool, str]:
     """
     Garantiza que el Excel tenga columnas de fecha hasta N meses en el futuro
     según la fecha actual del sistema.
-    
+
     Regla:
       - Si hoy es día 1-7: Horizonte = Mes actual + 3 meses.
       - Si hoy es día >7:  Horizonte = Mes actual + 2 meses.
       - Extiende hasta el ÚLTIMO día de ese mes objetivo.
-      
+
     Ejemplo:
       - Hoy 10-Ene-2026 -> Meta: 31-Mar-2026.
       - Hoy 05-Mar-2026 -> Meta: 30-Jun-2026.
-      
+
     No altera celdas existentes, solo agrega encabezados vacíos datetime al final.
     """
     if not os.path.exists(plan_staff_file):
@@ -1813,18 +2264,18 @@ def ensure_rolling_horizon_columns(plan_staff_file: str) -> Tuple[bool, str]:
     try:
         # 1. Calcular Fecha Objetivo (Target Date)
         today = date.today()
-        
+
         # Regla de la primera semana
         months_ahead = 3 if today.day <= 7 else 2
-        
+
         target_year = today.year
         target_month = today.month + months_ahead
-        
+
         # Ajuste de año (si nos pasamos de diciembre)
         while target_month > 12:
             target_month -= 12
             target_year += 1
-            
+
         # Obtener el último día del mes objetivo
         _, last_day = calendar.monthrange(target_year, target_month)
         target_date = date(target_year, target_month, last_day)
@@ -1832,11 +2283,11 @@ def ensure_rolling_horizon_columns(plan_staff_file: str) -> Tuple[bool, str]:
         # 2. Cargar Excel para inspección y edición
         wb = openpyxl.load_workbook(plan_staff_file)
         ws = wb.active
-        
+
         # 3. Detectar última fecha existente
         max_existing_date = None
         existing_dates = set()
-        
+
         # Escanear fila 1 buscando datetimes
         for cell in ws[1]:
             if isinstance(cell.value, datetime):
@@ -1845,10 +2296,10 @@ def ensure_rolling_horizon_columns(plan_staff_file: str) -> Tuple[bool, str]:
                 if max_existing_date is None or d > max_existing_date:
                     max_existing_date = d
             # Soporte por si openpyxl leyó como Timestamp de pandas (raro en header pero posible)
-            elif hasattr(cell.value, 'date'): 
-                 d = cell.value.date()
-                 existing_dates.add(d)
-                 if max_existing_date is None or d > max_existing_date:
+            elif hasattr(cell.value, "date"):
+                d = cell.value.date()
+                existing_dates.add(d)
+                if max_existing_date is None or d > max_existing_date:
                     max_existing_date = d
 
         # Si no hay fechas (archivo nuevo o corrupto), asumimos ayer para empezar desde hoy
@@ -1862,22 +2313,31 @@ def ensure_rolling_horizon_columns(plan_staff_file: str) -> Tuple[bool, str]:
         # 5. Agregar columnas faltantes
         current_date = max_existing_date + timedelta(days=1)
         columns_added = 0
-        
+
         while current_date <= target_date:
             if current_date not in existing_dates:
                 new_col_idx = ws.max_column + 1
                 # Escribimos el objeto datetime. OpenPyXL aplicará formato fecha por defecto.
                 # Al agregar columna, las filas de abajo (usuarios) quedan vacías (None) automáticamente.
-                ws.cell(row=1, column=new_col_idx, value=datetime(current_date.year, current_date.month, current_date.day))
+                ws.cell(
+                    row=1,
+                    column=new_col_idx,
+                    value=datetime(
+                        current_date.year, current_date.month, current_date.day
+                    ),
+                )
                 columns_added += 1
-            
+
             current_date += timedelta(days=1)
 
         # 6. Guardar cambios si hubo adiciones
         if columns_added > 0:
             wb.save(plan_staff_file)
-            return True, f"Horizon extended: added {columns_added} days until {target_date}."
-            
+            return (
+                True,
+                f"Horizon extended: added {columns_added} days until {target_date}.",
+            )
+
         return False, "No new columns needed (dates might be sparse but cover range)."
 
     except Exception as e:

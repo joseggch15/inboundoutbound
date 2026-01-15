@@ -108,7 +108,6 @@ RGM_REPORT_HEADERS = [
 DEBOUNCE_MS = 200
 
 
-
 class ShiftCellDelegate(QStyledItemDelegate):
     def __init__(self, parent, get_options_callback):
         super().__init__(parent)
@@ -165,7 +164,6 @@ class ShiftInfoCard(QLabel):
             }
         """
         )
-
 
         # Add a subtle box-shadow for depth, as requested.
         shadow = QGraphicsDropShadowEffect(self)
@@ -246,7 +244,9 @@ def _create_color_icon(hex_code: str, size: QSize = QSize(24, 12)) -> QIcon:
     # Draw border if color is very light or for fallback gray
     pen = QPen()
     if color.lightness() > 230 or not color.isValid():
-        pen.setColor(QColor("#A9A9A9"))  # Darker gray for visibility on light backgrounds
+        pen.setColor(
+            QColor("#A9A9A9")
+        )  # Darker gray for visibility on light backgrounds
         pen.setWidth(1)
     else:
         # For darker colors, use a transparent pen (no border)
@@ -283,10 +283,20 @@ def _clean(value) -> str:
 
 def _weekday_full_en(d: pydate) -> str:
     """English full weekday names."""
-    names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    names = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ]
     return names[d.weekday()]
 
+
 from datetime import time as dtime
+
 
 def _parse_hhmm_to_time(value, default: dtime) -> dtime:
     """
@@ -640,17 +650,16 @@ class DayScheduleEditor(QDialog):
         # MODIFICACIÓN: Instanciamos los checkboxes pero NO los mostramos
         # Mantenemos los objetos en memoria para no romper la lógica interna.
         # ---------------------------------------------------------------------
-        self.apply_to_range_chk = QCheckBox(
-            "Apply to all selected cells to the right"
-        )
-        self.apply_to_range_chk.setVisible(False) # Aseguramos que sea invisible
+        self.apply_to_range_chk = QCheckBox("Apply to all selected cells to the right")
+        self.apply_to_range_chk.setVisible(False)  # Aseguramos que sea invisible
 
         # --- Travel dates opcionales ---
         self.travel_diff_chk = QCheckBox("Travel dates are different from work day")
-        self.travel_diff_chk.setVisible(False)    # Aseguramos que sea invisible
+        self.travel_diff_chk.setVisible(False)  # Aseguramos que sea invisible
 
         # Valores por defecto (puedes ajustarlos luego si quieres)
         from PyQt6.QtCore import QDate, QTime
+
         today = QDate.currentDate()
         self.entry_date_edit = QDateEdit(today)
         self.entry_date_edit.setCalendarPopup(True)
@@ -663,7 +672,7 @@ class DayScheduleEditor(QDialog):
         self.exit_date_edit.setCalendarPopup(True)
         self.exit_date_edit.setDisplayFormat("dd/MM/yyyy")
 
-        self.exit_time_edit = QTimeEdit(QTime(18, 0))
+        self.exit_time_edit = QTimeEdit(QTime(7, 0))
         self.exit_time_edit.setDisplayFormat("HH:mm")
 
         # Contenedor horizontal para Entry/Exit
@@ -691,24 +700,23 @@ class DayScheduleEditor(QDialog):
         form.addRow("Pick Up:", self.pickup_combo)
         form.addRow("Drop Off:", self.dropoff_combo)
         form.addRow("Remarks:", self.remark_edit)
-        
+
         # NOTA: NO agregamos travel_diff_chk ni _travel_container al layout visual
-        # form.addRow("", self.travel_diff_chk) 
+        # form.addRow("", self.travel_diff_chk)
         # form.addRow("", self._travel_container)
 
         # Botones
         btn_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         btn_box.accepted.connect(self.accept)
         btn_box.rejected.connect(self.reject)
 
         layout.addLayout(form)
-        
+
         # NOTA: NO agregamos apply_to_range_chk al layout visual
         # layout.addWidget(self.apply_to_range_chk)
-        
+
         layout.addWidget(btn_box)
 
     def result_payload(self):
@@ -718,7 +726,7 @@ class DayScheduleEditor(QDialog):
 
         entry_dt = None
         exit_dt = None
-        
+
         # Esta condición siempre será False porque el checkbox está oculto y desmarcado,
         # lo cual es correcto para ocultar la funcionalidad.
         if self.travel_diff_chk.isChecked():
@@ -735,12 +743,10 @@ class DayScheduleEditor(QDialog):
             "pickup": self.pickup_combo.currentData(),
             "dropoff": self.dropoff_combo.currentData(),
             "remark": self.remark_edit.text().strip(),
-            "apply_to_range": self.apply_to_range_chk.isChecked(), # Será False
-            "entry_datetime": entry_dt,   # Será None (se calculará por defecto fuera)
-            "exit_datetime": exit_dt,     # Será None (se calculará por defecto fuera)
+            "apply_to_range": self.apply_to_range_chk.isChecked(),  # Será False
+            "entry_datetime": entry_dt,  # Será None (se calculará por defecto fuera)
+            "exit_datetime": exit_dt,  # Será None (se calculará por defecto fuera)
         }
-
-
 
 
 # -------------------------------------------------------------
@@ -759,9 +765,6 @@ class PlanStaffWidget(QWidget):
         self._last_excel_mtime = None
         self._missing_prompt_shown = False
         self._custom_shift_map = db.get_shift_type_map(self.source)
-    
-
-
 
         # For REQ-001 tracking
         self._loading_preview = False
@@ -770,10 +773,9 @@ class PlanStaffWidget(QWidget):
         self._date_col_dates = []  # schedule_table column index -> pydate
         self._warn_highlight_keys = set()  # {"<badge>|YYYY-MM-DD", ...}
         self._bulk_editing = False  # para detectar relleno masivo por arrastre
-        
+
         # --- NUEVO: Bandera para evitar doble apertura de diálogo ---
         self._is_handling_change = False
-
 
         # ---------- root layout ----------
         root = QVBoxLayout(self)
@@ -821,14 +823,13 @@ class PlanStaffWidget(QWidget):
 
         self.frozen_table = QTableWidget()
         self.schedule_table = QTableWidget()
-        
+
         # Delegate para que las celdas de schedule usen el combo de Status/Shift
         self.shift_delegate = ShiftCellDelegate(
-        self.schedule_table,
-        self._status_options_for_dialog,
+            self.schedule_table,
+            self._status_options_for_dialog,
         )
         self.schedule_table.setItemDelegate(self.shift_delegate)
-
 
         # Set object names for styling headers
         self.frozen_table.horizontalHeader().setObjectName("fixedHeaders")
@@ -867,7 +868,7 @@ class PlanStaffWidget(QWidget):
             QHeaderView.ResizeMode.ResizeToContents
         )
         self.frozen_table.setHorizontalScrollBarPolicy(
-             Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
         )
         self.frozen_table.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding
@@ -966,7 +967,6 @@ class PlanStaffWidget(QWidget):
                 self._apply_fill_from_anchor()
         return super().eventFilter(source, event)
 
-
     # ---------- registration form (compact) ----------
     def _build_registration_form(self) -> QWidget:
         container = QWidget()
@@ -996,10 +996,9 @@ class PlanStaffWidget(QWidget):
         self.pickup_combo = QComboBox()
         self.dropoff_combo = QComboBox()
         self.remark_edit = QLineEdit()
-        
+
         self.apply_to_range_chk = QCheckBox("Apply to all selected cells to the right")
 
-        
         # NEW: remarks input
         self.remarks_input = QLineEdit()
         self.remarks_input.setPlaceholderText("Optional: add a note for this period...")
@@ -1008,15 +1007,17 @@ class PlanStaffWidget(QWidget):
         self.save_button = QPushButton("💾 Save Changes to DB Excel")
         self.save_button.clicked.connect(self.save_plan_changes)
         self.save_button.setProperty("variant", "primary")
-        
+
         # NEW: Separate travel dates controls
-        self.travel_dates_check = QCheckBox("Travel dates are different from work period")
+        self.travel_dates_check = QCheckBox(
+            "Travel dates are different from work period"
+        )
         self.travel_dates_check.toggled.connect(self._toggle_travel_dates_visibility)
 
         self.entry_date_edit = QDateEdit(QDate.currentDate())
         self.entry_date_edit.setCalendarPopup(True)
         self.entry_date_edit.setDisplayFormat("dd/MM/yyyy")
-        
+
         # MODIFIED: Add time input for entry
         self.entry_time_edit = QTimeEdit(QTime(6, 0))
         self.entry_time_edit.setDisplayFormat("HH:mm")
@@ -1024,7 +1025,7 @@ class PlanStaffWidget(QWidget):
         self.exit_date_edit = QDateEdit(QDate.currentDate().addDays(14))
         self.exit_date_edit.setCalendarPopup(True)
         self.exit_date_edit.setDisplayFormat("dd/MM/yyyy")
-        
+
         # MODIFIED: Add time input for exit
         self.exit_time_edit = QTimeEdit(QTime(18, 0))
         self.exit_time_edit.setDisplayFormat("HH:mm")
@@ -1043,7 +1044,6 @@ class PlanStaffWidget(QWidget):
         travel_layout.addWidget(self.exit_time_edit)
         travel_layout.addStretch()
         self._travel_dates_container.setVisible(False)
-
 
         # Field containers (label on top)
         def field(title: str, w: QWidget) -> QWidget:
@@ -1102,7 +1102,6 @@ class PlanStaffWidget(QWidget):
             self.entry_time_edit.setTime(QTime(6, 0))
             self.exit_time_edit.setTime(QTime(18, 0))
 
-
     def _rebuild_registration_grid(self, columns: int):
         if columns < 1:
             columns = 1
@@ -1139,7 +1138,7 @@ class PlanStaffWidget(QWidget):
             self._rebuild_registration_grid(cols)
 
     # ---------- data loaders ----------
-  
+
     def load_shift_type_options(self):
         """Load base statuses + custom shift types (from DB) into the combo."""
         self.status_selector.blockSignals(True)
@@ -1150,38 +1149,38 @@ class PlanStaffWidget(QWidget):
 
         # Base statuses with color chips
         self.status_selector.addItem(
-        _create_color_icon("#FFC7CE"),  # OFF color
-        "OFF",
-        {
-            "kind": "base",
-            "status": "OFF",
-            "shift_type": None,
-            "in_time": None,
-            "out_time": None,
-        },
+            _create_color_icon("#FFC7CE"),  # OFF color
+            "OFF",
+            {
+                "kind": "base",
+                "status": "OFF",
+                "shift_type": None,
+                "in_time": None,
+                "out_time": None,
+            },
         )
         self.status_selector.addItem(
-        _create_color_icon("#C6EFCE"),  # ON color
-        "ON (Day Shift)",
-        {
-            "kind": "base",
-            "status": "ON",
-            "shift_type": "Day Shift",
-            "in_time": None,
-            "out_time": None,
-        },
+            _create_color_icon("#C6EFCE"),  # ON color
+            "ON (Day Shift)",
+            {
+                "kind": "base",
+                "status": "ON",
+                "shift_type": "Day Shift",
+                "in_time": None,
+                "out_time": None,
+            },
         )
         self.status_selector.addItem(
-        _create_color_icon("#FFFF99"),  # ON NS color
-        "ON NS (Night Shift)",
-        {
-            "kind": "base",
-            "status": "ON NS",
-            "shift_type": "Night Shift",
-            "in_time": None,
-            "out_time": None,
-        },
-         )
+            _create_color_icon("#FFFF99"),  # ON NS color
+            "ON NS (Night Shift)",
+            {
+                "kind": "base",
+                "status": "ON NS",
+                "shift_type": "Night Shift",
+                "in_time": None,
+                "out_time": None,
+            },
+        )
 
         # Custom types
         types = db.get_shift_types(self.source)
@@ -1205,15 +1204,13 @@ class PlanStaffWidget(QWidget):
                 )
         self.status_selector.setCurrentIndex(0)
         self.status_selector.blockSignals(False)
-        
+
     def _status_options_for_dialog(self):
         """Devuelve la lista de opciones (icono, texto, payload) para los diálogos/combos."""
         options = []
 
         # Opción neutra (no marcar)
-        options.append(
-            (QIcon(), "— Do Not Mark Days —", {"kind": "none"})
-        )
+        options.append((QIcon(), "— Do Not Mark Days —", {"kind": "none"}))
 
         # Base: OFF / ON / ON NS
         options.append(
@@ -1243,7 +1240,6 @@ class PlanStaffWidget(QWidget):
 
         return options
 
-
     def _status_options_for_dialog(self):
         """
         Devuelve la misma lista de opciones que el combo Status/Shift
@@ -1259,9 +1255,6 @@ class PlanStaffWidget(QWidget):
             text = self.status_selector.itemText(i)
             options.append((icon, text, data))
         return options
-
-        
-        
 
     # NEW: load available locations into dropdowns
     def load_location_options(self):
@@ -1301,9 +1294,11 @@ class PlanStaffWidget(QWidget):
         # Antes de cargar nada, aseguramos que el Excel tenga las columnas futuras
         # según la fecha de hoy.
         try:
-            ok_horizon, msg_horizon = excel.ensure_rolling_horizon_columns(self.excel_file)
+            ok_horizon, msg_horizon = excel.ensure_rolling_horizon_columns(
+                self.excel_file
+            )
             if ok_horizon:
-                print(f"[AUTO-HORIZON] {msg_horizon}") # Log de consola
+                print(f"[AUTO-HORIZON] {msg_horizon}")  # Log de consola
                 # Opcional: Mostrar mensaje no intrusivo en barra de estado si existiera
             elif "Error" in msg_horizon:
                 print(f"[AUTO-HORIZON ERROR] {msg_horizon}")
@@ -1317,11 +1312,11 @@ class PlanStaffWidget(QWidget):
         # -----------------------------------------------------------
         # MODIFICACIÓN: Ordenar columnas cronológicamente antes de procesar
         # -----------------------------------------------------------
-        
+
         # 1. Identificar columnas fijas y columnas de fecha
         all_cols = list(df.columns)
         actual_frozen_count = min(len(all_cols), FROZEN_COLUMN_COUNT)
-        
+
         frozen_part = all_cols[:actual_frozen_count]
         date_part = all_cols[actual_frozen_count:]
 
@@ -1336,7 +1331,7 @@ class PlanStaffWidget(QWidget):
                 d_obj = c.date()
             elif isinstance(c, pydate):
                 d_obj = c
-            
+
             # Si logramos obtener una fecha, la guardamos para ordenar
             if d_obj:
                 date_mapping.append((d_obj, c))
@@ -1351,12 +1346,8 @@ class PlanStaffWidget(QWidget):
         # Esto asegura que los DATOS de las celdas coincidan con los encabezados
         sorted_date_cols = [x[1] for x in date_mapping]
         new_column_order = frozen_part + sorted_date_cols
-        
+
         df = df[new_column_order]
-
-
-
-
 
         # Prepare headers
         cols = list(df.columns)
@@ -1371,17 +1362,16 @@ class PlanStaffWidget(QWidget):
             else:
                 # not a date header
                 pass
-       
+
         # Frozen
         actual_frozen_count = min(df.shape[1], FROZEN_COLUMN_COUNT)
         frozen_headers = [str(c) for c in cols[:actual_frozen_count]]
-        
+
         # Schedule (date) headers -> one line with date + weekday (abbrev)
         schedule_headers = []
         for d in date_cols:
             schedule_headers.append(f"{d.isoformat()}")
         self._date_col_dates = list(date_cols)  # keep exact order
-        
 
         # Build tables
         self.frozen_table.setRowCount(df.shape[0])
@@ -1397,7 +1387,7 @@ class PlanStaffWidget(QWidget):
 
         # Load rows
         for i, row in df.iterrows():
-           # identity
+            # identity
             badge_val = (
                 row.get("BADGE")
                 if hasattr(row, "get")
@@ -1408,7 +1398,7 @@ class PlanStaffWidget(QWidget):
                 if hasattr(row, "get")
                 else (row["NAME"] if "NAME" in df.columns else "")
             )
-            
+
             # --- AGREGAR ESTO (INICIO) ---
             role_val = (
                 row.get("ROLE")
@@ -1421,7 +1411,9 @@ class PlanStaffWidget(QWidget):
                 {
                     "badge": str(badge_val) if badge_val is not None else "",
                     "name": str(name_val) if name_val is not None else "",
-                    "role": str(role_val) if role_val is not None else "", # <--- AGREGAR ESTA LÍNEA
+                    "role": (
+                        str(role_val) if role_val is not None else ""
+                    ),  # <--- AGREGAR ESTA LÍNEA
                 }
             )
 
@@ -1606,7 +1598,7 @@ class PlanStaffWidget(QWidget):
             self._bulk_editing = False
 
         # --- Parte 2: Lógica de Persistencia (DB + Excel) ---
-        
+
         # Validar identidad
         if not (0 <= anchor_row < len(self._row_identities)):
             return
@@ -1621,16 +1613,23 @@ class PlanStaffWidget(QWidget):
         # Definir el Rango de Fechas Afectado (Start -> End)
         all_cols = sorted(set(target_columns + [anchor_col]))
         first_col, last_col = all_cols[0], all_cols[-1]
-        
-        if not (0 <= first_col < len(self._date_col_dates) and 0 <= last_col < len(self._date_col_dates)):
+
+        if not (
+            0 <= first_col < len(self._date_col_dates)
+            and 0 <= last_col < len(self._date_col_dates)
+        ):
             return
 
         start_date = self._date_col_dates[first_col]  # Nueva fecha inicio del bloque
-        end_date = self._date_col_dates[last_col]     # Nueva fecha fin del bloque (donde soltaste el click)
+        end_date = self._date_col_dates[
+            last_col
+        ]  # Nueva fecha fin del bloque (donde soltaste el click)
         anchor_date = self._date_col_dates[anchor_col]
 
         # --- Obtener info BASE del día ancla ---
-        schedule_map = db.get_schedule_map_for_range(badge, anchor_date, anchor_date, self.source)
+        schedule_map = db.get_schedule_map_for_range(
+            badge, anchor_date, anchor_date, self.source
+        )
         day_info = schedule_map.get(anchor_date.isoformat()) or {}
 
         schedule_status = (day_info.get("status") or base_text).strip().upper()
@@ -1638,7 +1637,7 @@ class PlanStaffWidget(QWidget):
         in_time = day_info.get("in_time")
         out_time = day_info.get("out_time")
         remark = day_info.get("remark")
-        
+
         # Recuperar ubicación del ancla
         pickup, dropoff = db.get_user_location_for_date(badge, anchor_date)
 
@@ -1652,35 +1651,37 @@ class PlanStaffWidget(QWidget):
 
         # --- CRÍTICO: Calcular Entry/Exit Date CORRECTOS con Hora ---
         # 1. Buscar si el ancla ya tenía una operación con horas definidas
-        operations = db.get_operations_filtered(text=badge, d_from=anchor_date, d_to=anchor_date)
+        operations = db.get_operations_filtered(
+            text=badge, d_from=anchor_date, d_to=anchor_date
+        )
         operations = [op for op in operations if op.get("badge") == badge]
         op_info = operations[0] if operations else None
 
-       # 2. Definir horas por defecto según Proyecto (Source)
+        # 2. Definir horas por defecto según Proyecto (Source)
         # Regla Newmont: 06:00 - 12:00 (Día) | 12:00 - 06:00 (Noche)
-        # Regla RGM:     06:00 - 18:00 (Día) | 18:00 - 06:00 (Noche)
-        
+        # Regla RGM:     07:00 - 07:00 (Día) | 07:00 - 07:00 (Noche)
+
         # Valores base (RGM Dia)
-        def_in_str = "06:00"
-        def_out_str = "18:00"
+        def_in_str = "07:00"
+        def_out_str = "07:00"
 
         # Ajuste dinámico según Source y Status
         if self.source == "Newmont":
-            if schedule_status == "ON NS": # Noche Newmont
+            if schedule_status == "ON NS":  # Noche Newmont
                 def_in_str = "12:00"
                 def_out_str = "06:00"
-            elif schedule_status == "ON": # Día Newmont
+            elif schedule_status == "ON":  # Día Newmont
                 def_in_str = "06:00"
                 def_out_str = "12:00"
-        else: # RGM
-            if schedule_status == "ON NS": # Noche RGM
-                def_in_str = "18:00"
-                def_out_str = "06:00"
-            # else: Dia RGM se queda con el base 06:00-18:00
+        else:  # RGM
+            if schedule_status == "ON NS":  # Noche RGM
+                def_in_str = "07:00"
+                def_out_str = "07:00"
+            # else: Dia RGM se queda con el base 07:00-07:00
 
         default_entry_time = datetime.strptime(def_in_str, "%H:%M").time()
         default_exit_time = datetime.strptime(def_out_str, "%H:%M").time()
-        
+
         final_entry_time = default_entry_time
         final_exit_time = default_exit_time
 
@@ -1690,22 +1691,26 @@ class PlanStaffWidget(QWidget):
             exit_dt_str = op_info.get("exit_date")
             if entry_dt_str and " " in entry_dt_str:
                 try:
-                    final_entry_time = datetime.strptime(entry_dt_str, "%Y-%m-%d %H:%M").time()
+                    final_entry_time = datetime.strptime(
+                        entry_dt_str, "%Y-%m-%d %H:%M"
+                    ).time()
                 except ValueError:
                     pass
             if exit_dt_str and " " in exit_dt_str:
                 try:
-                    final_exit_time = datetime.strptime(exit_dt_str, "%Y-%m-%d %H:%M").time()
+                    final_exit_time = datetime.strptime(
+                        exit_dt_str, "%Y-%m-%d %H:%M"
+                    ).time()
                 except ValueError:
                     pass
-        
+
         # 4. Construir los nuevos timestamps usando las FECHAS del nuevo rango + las HORAS detectadas
         # Esto asegura que el último día (donde soltaste el scroll) tenga la fecha correcta y la hora de salida.
         new_entry_datetime = datetime.combine(start_date, final_entry_time)
         new_exit_datetime = datetime.combine(end_date, final_exit_time)
 
         # --- Guardar en BD (SSoT) ---
-        
+
         # 1. Registrar operación con timestamps completos (SOLUCIÓN DEL PROBLEMA)
         db.add_operation(
             username=username,
@@ -1714,14 +1719,21 @@ class PlanStaffWidget(QWidget):
             start_date=start_date,
             end_date=end_date,
             created_by=self.logged_username,
-            entry_date=new_entry_datetime, # Ahora tiene la fecha correcta de inicio + hora
-            exit_date=new_exit_datetime    # Ahora tiene la fecha correcta de fin + hora
+            entry_date=new_entry_datetime,  # Ahora tiene la fecha correcta de inicio + hora
+            exit_date=new_exit_datetime,  # Ahora tiene la fecha correcta de fin + hora
         )
 
         # 2. Actualizar schedules individuales
         db.upsert_schedule_range(
-            badge, start_date, end_date, schedule_status, 
-            shift_type, self.source, in_time, out_time, remark
+            badge,
+            start_date,
+            end_date,
+            schedule_status,
+            shift_type,
+            self.source,
+            in_time,
+            out_time,
+            remark,
         )
 
         # 3. Ubicaciones
@@ -1730,47 +1742,70 @@ class PlanStaffWidget(QWidget):
 
         # --- Guardar en Excel ---
         success, message = excel.update_plan_staff_excel(
-            self.excel_file, username, role, badge,
-            schedule_status, shift_type, start_date, end_date,
-            self.source, in_time, out_time
+            self.excel_file,
+            username,
+            role,
+            badge,
+            schedule_status,
+            shift_type,
+            start_date,
+            end_date,
+            self.source,
+            in_time,
+            out_time,
         )
 
         # --- Auditoría ---
-        prev_map = db.get_schedule_map_for_range(badge, start_date, end_date, self.source) # solo referencia
-        new_map = db.get_schedule_map_for_range(badge, start_date, end_date, self.source)
-        
+        prev_map = db.get_schedule_map_for_range(
+            badge, start_date, end_date, self.source
+        )  # solo referencia
+        new_map = db.get_schedule_map_for_range(
+            badge, start_date, end_date, self.source
+        )
+
         db.log_event(
-            self.logged_username, self.source, "SHIFT_MODIFICATION",
-            f"[DragFill] {username} ({badge}) {start_date}..{end_date} entry={new_entry_datetime} exit={new_exit_datetime}"
+            self.logged_username,
+            self.source,
+            "SHIFT_MODIFICATION",
+            f"[DragFill] {username} ({badge}) {start_date}..{end_date} entry={new_entry_datetime} exit={new_exit_datetime}",
         )
 
         if not success:
-            QMessageBox.warning(self, "Excel Update", "Saved to DB, but Excel issue:\n" + message)
+            QMessageBox.warning(
+                self, "Excel Update", "Saved to DB, but Excel issue:\n" + message
+            )
 
         self.rotation_changed.emit()
 
-
-# ---------- REQ-001: inline OFF→ON/ON NS guard ----------
+    # ---------- REQ-001: inline OFF→ON/ON NS guard ----------
     def _on_schedule_cell_changed(self, item: QTableWidgetItem):
         # 1. AGREGAR: Chequeo de la bandera _is_handling_change
-        if self._loading_preview or self._bulk_editing or getattr(self, '_is_handling_change', False):
+        if (
+            self._loading_preview
+            or self._bulk_editing
+            or getattr(self, "_is_handling_change", False)
+        ):
             return
 
         # 2. ACTIVAR BANDERA
         self._is_handling_change = True
-        
+
         try:
             r = item.row()
             c = item.column()
             new_text = (item.text() or "").strip().upper()
-            old_text = (self._cell_original_values.get((r, c), "") or "").strip().upper()
+            old_text = (
+                (self._cell_original_values.get((r, c), "") or "").strip().upper()
+            )
 
             # ---------------- REQ-001: OFF/blank -> ON / ON NS ----------------
             if old_text in ("OFF", "") and new_text in ("ON", "ON NS"):
                 box = QMessageBox(self)
                 box.setIcon(QMessageBox.Icon.Warning)
                 box.setWindowTitle("Confirm Change")
-                box.setText("The employee is on a day off. Do you want to set it to ON?")
+                box.setText(
+                    "The employee is on a day off. Do you want to set it to ON?"
+                )
                 accept_btn = box.addButton("Accept", QMessageBox.ButtonRole.AcceptRole)
                 box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
                 box.exec()
@@ -1829,39 +1864,46 @@ class PlanStaffWidget(QWidget):
 
             # --- Lógica de resolución de código (MANTENER TU ARREGLO PREVIO) ---
             raw_cell_text = new_text if new_text else ""
-            resolved_status_code = raw_cell_text 
+            resolved_status_code = raw_cell_text
 
             possible_options = self._status_options_for_dialog()
 
             for icon, label, data in possible_options:
-                if not isinstance(data, dict): continue
-                
-                # 1. ¿Coincide con la etiqueta visual? 
+                if not isinstance(data, dict):
+                    continue
+
+                # 1. ¿Coincide con la etiqueta visual?
                 if label.strip().upper() == raw_cell_text:
-                    if data.get('kind') == 'base':
-                        resolved_status_code = data.get('status')
-                    elif data.get('kind') == 'custom':
-                        resolved_status_code = data.get('code')
+                    if data.get("kind") == "base":
+                        resolved_status_code = data.get("status")
+                    elif data.get("kind") == "custom":
+                        resolved_status_code = data.get("code")
                     break
-                
-                # 2. ¿Coincide con el código interno? 
-                internal_code = data.get('status') if data.get('kind') == 'base' else data.get('code')
+
+                # 2. ¿Coincide con el código interno?
+                internal_code = (
+                    data.get("status")
+                    if data.get("kind") == "base"
+                    else data.get("code")
+                )
                 if internal_code and str(internal_code).upper() == raw_cell_text:
                     resolved_status_code = internal_code
                     break
-            
+
             current_status_text = resolved_status_code
             # -----------------------------------------------------------------
 
             pickup_init, dropoff_init = db.get_user_location_for_date(badge, base_date)
             initial = {
-                "status_text": current_status_text, 
+                "status_text": current_status_text,
                 "pickup": pickup_init,
                 "dropoff": dropoff_init,
                 "remark": day_info.get("remark") or "",
             }
 
-            locations = [loc["pickup_location"] for loc in db.get_locations(self.source)]
+            locations = [
+                loc["pickup_location"] for loc in db.get_locations(self.source)
+            ]
 
             editor = DayScheduleEditor(
                 self,
@@ -1869,7 +1911,7 @@ class PlanStaffWidget(QWidget):
                 locations=locations,
                 initial=initial,
             )
-            
+
             # --- AQUÍ OCURRÍA EL DOBLE TRIGGER ---
             # Al ejecutarse editor.exec(), se pierde foco, se dispara itemChanged de nuevo.
             # Pero como _is_handling_change es True, la segunda llamada entra al 'if' inicial y retorna.
@@ -1886,7 +1928,7 @@ class PlanStaffWidget(QWidget):
             dropoff = payload["dropoff"]
             remark = payload["remark"]
             apply_to_range = payload["apply_to_range"]
-            
+
             entry_datetime = payload.get("entry_datetime")
             exit_datetime = payload.get("exit_datetime")
 
@@ -1917,7 +1959,7 @@ class PlanStaffWidget(QWidget):
             # Si "Do Not Mark Days"
             if schedule_status is None:
                 with QSignalBlocker(self.schedule_table):
-                    for cc in ([c] if not apply_to_range else col_range):
+                    for cc in [c] if not apply_to_range else col_range:
                         it = self.schedule_table.item(r, cc)
                         if it is None:
                             it = QTableWidgetItem("")
@@ -1941,27 +1983,28 @@ class PlanStaffWidget(QWidget):
                 exit_dt_for_save = exit_datetime
             else:
                 from datetime import time as dtime
-                def_in = dtime(6, 0)
-                def_out = dtime(18, 0) 
+
+                def_in = dtime(7, 0)
+                def_out = dtime(7, 0)
 
                 if self.source == "Newmont":
-                    if schedule_status == "ON NS": 
+                    if schedule_status == "ON NS":
                         def_in = dtime(12, 0)
                         def_out = dtime(6, 0)
-                    elif schedule_status == "ON": 
+                    elif schedule_status == "ON":
                         def_in = dtime(6, 0)
                         def_out = dtime(12, 0)
-                else: # RGM
-                    if schedule_status == "ON NS": 
-                        def_in = dtime(18, 0)
-                        def_out = dtime(6, 0)
+                else:  # RGM
+                    if schedule_status == "ON NS":
+                        def_in = dtime(7, 0)
+                        def_out = dtime(7, 0)
 
-                entry_time_obj = _parse_hhmm_to_time(in_time, def_in) 
-                exit_time_obj = _parse_hhmm_to_time(out_time, def_out) 
+                entry_time_obj = _parse_hhmm_to_time(in_time, def_in)
+                exit_time_obj = _parse_hhmm_to_time(out_time, def_out)
 
                 entry_dt_for_save = datetime.combine(start_date_block, entry_time_obj)
                 exit_dt_for_save = datetime.combine(end_date_block, exit_time_obj)
-            
+
             # Actualizar UI visualmente
             with QSignalBlocker(self.schedule_table):
                 for col_idx in cols_sorted:
@@ -1969,7 +2012,7 @@ class PlanStaffWidget(QWidget):
                     if not item_ui:
                         item_ui = QTableWidgetItem()
                         self.schedule_table.setItem(r, col_idx, item_ui)
-                    
+
                     text_to_show = schedule_status if schedule_status else ""
                     item_ui.setText(text_to_show)
                     self._apply_base_background(item_ui, text_to_show)
@@ -1985,7 +2028,7 @@ class PlanStaffWidget(QWidget):
                     end_date=end_date_block,
                     created_by=self.logged_username,
                     entry_date=entry_dt_for_save,
-                    exit_date=exit_dt_for_save
+                    exit_date=exit_dt_for_save,
                 )
 
                 db.upsert_schedule_range(
@@ -1995,9 +2038,9 @@ class PlanStaffWidget(QWidget):
                     schedule_status,
                     shift_type,
                     self.source,
-                    in_time,        
-                    out_time,       
-                    remark          
+                    in_time,
+                    out_time,
+                    remark,
                 )
 
                 if pickup or dropoff:
@@ -2005,35 +2048,50 @@ class PlanStaffWidget(QWidget):
                         badge, start_date_block, end_date_block, pickup, dropoff
                     )
                     db.log_event(
-                        self.logged_username, self.source, "LOCATION_ASSIGN_INLINE",
-                        f"{badge} {start_date_block}..{end_date_block} PU={pickup} DO={dropoff}"
+                        self.logged_username,
+                        self.source,
+                        "LOCATION_ASSIGN_INLINE",
+                        f"{badge} {start_date_block}..{end_date_block} PU={pickup} DO={dropoff}",
                     )
 
                 # Actualizar Excel
-                self._is_internal_update = True  
+                self._is_internal_update = True
                 success, message = excel.update_plan_staff_excel(
-                    self.excel_file, username, role, badge, schedule_status, shift_type,
-                    start_date_block, end_date_block, self.source, in_time, out_time,
+                    self.excel_file,
+                    username,
+                    role,
+                    badge,
+                    schedule_status,
+                    shift_type,
+                    start_date_block,
+                    end_date_block,
+                    self.source,
+                    in_time,
+                    out_time,
                 )
-                QTimer.singleShot(2000, lambda: setattr(self, '_is_internal_update', False))
+                QTimer.singleShot(
+                    2000, lambda: setattr(self, "_is_internal_update", False)
+                )
 
                 if not success:
-                    self._is_internal_update = False 
+                    self._is_internal_update = False
                     raise Exception(message)
 
                 db.log_event(
-                    self.logged_username, self.source, "SHIFT_MODIFICATION_INLINE",
-                    f"Updated range {start_date_block} to {end_date_block} for {badge}. Remark: {remark}"
+                    self.logged_username,
+                    self.source,
+                    "SHIFT_MODIFICATION_INLINE",
+                    f"Updated range {start_date_block} to {end_date_block} for {badge}. Remark: {remark}",
                 )
 
             except Exception as e:
-                self._is_internal_update = False 
+                self._is_internal_update = False
                 QMessageBox.critical(self, "Save Error", f"Error saving data: {str(e)}")
                 self.refresh_ui_data()
                 return
 
             # Finalización
-            self.check_excel_health() 
+            self.check_excel_health()
             self.rotation_changed.emit()
 
         finally:
@@ -2077,19 +2135,18 @@ class PlanStaffWidget(QWidget):
         )
         day_info = schedule_data.get(hover_date.isoformat())
         pickup, dropoff = db.get_user_location_for_date(badge, hover_date)
-        
+
         operations = db.get_operations_filtered(
             text=badge, d_from=hover_date, d_to=hover_date
         )
 
-       # Filter for exact badge match...
+        # Filter for exact badge match...
         valid_ops = [op for op in operations if op.get("badge") == badge]
-        
+
         # --- FIX: ORDENAR POR ID DESCENDENTE (El más nuevo primero) ---
         valid_ops.sort(key=lambda x: x.get("id", 0), reverse=True)
-        
-        operation_info = valid_ops[0] if valid_ops else None
 
+        operation_info = valid_ops[0] if valid_ops else None
 
         if not day_info:
             final_html = "<p style='margin:0;'>Information not available</p>"
@@ -2099,7 +2156,6 @@ class PlanStaffWidget(QWidget):
         # --- Format data for the card (New compact format) ---
         status_code = (day_info.get("status") or "N/A").upper()
         remark = day_info.get("remark")
-
 
         # --- BLOQUE A MODIFICAR en _show_shift_tooltip ---
 
@@ -2112,26 +2168,30 @@ class PlanStaffWidget(QWidget):
         if status_code == "ON":
             shift_title = "ON (Day Shift)"
             if not in_time: 
-                in_time = "06:00"
+                # Newmont 06:00, RGM 07:00
+                in_time = "06:00" if self.source == "Newmont" else "07:00"
             if not out_time:
-                # Regla de negocio: Newmont sale a las 12:00, RGM a las 18:00
-                out_time = "12:00" if self.source == "Newmont" else "18:00"
+                # Newmont 12:00, RGM 07:00
+                out_time = "12:00" if self.source == "Newmont" else "07:00"
 
         elif status_code == "ON NS":
             shift_title = "ON NS (Night Shift)"
             if not in_time:
-                # Regla de negocio: Newmont entra a las 12:00, RGM a las 18:00
-                in_time = "12:00" if self.source == "Newmont" else "18:00"
+                # Newmont 12:00, RGM 07:00
+                in_time = "12:00" if self.source == "Newmont" else "07:00"
             if not out_time:
-                out_time = "06:00"
+                # Newmont 06:00, RGM 07:00
+                out_time = "06:00" if self.source == "Newmont" else "07:00"
 
         elif status_code in self._custom_shift_map:
             custom_info = self._custom_shift_map[status_code]
             shift_title = custom_info.get("name", status_code)
             # Si faltan horas en el día específico, usar las del tipo de turno general
-            if not in_time: in_time = custom_info.get("in_time")
-            if not out_time: out_time = custom_info.get("out_time")
-            
+            if not in_time:
+                in_time = custom_info.get("in_time")
+            if not out_time:
+                out_time = custom_info.get("out_time")
+
         elif status_code == "OFF":
             shift_title = "OFF"
 
@@ -2147,22 +2207,22 @@ class PlanStaffWidget(QWidget):
         # MODIFIED: Add travel dates and exact times from the operation record
         # MODIFIED: Add travel dates and exact times from the operation record
         # FIX: Solo mostrar info de viaje si NO es un día OFF
-        if operation_info and status_code != "OFF": 
-            entry_dt_str = operation_info.get('entry_date', '')
-            exit_dt_str = operation_info.get('exit_date', '')
-            
+        if operation_info and status_code != "OFF":
+            entry_dt_str = operation_info.get("entry_date", "")
+            exit_dt_str = operation_info.get("exit_date", "")
+
             # Check for the presence of time in the string
-            if entry_dt_str and exit_dt_str and ' ' in entry_dt_str:
+            if entry_dt_str and exit_dt_str and " " in entry_dt_str:
                 try:
                     # Parse 'YYYY-MM-DD HH:MM'
-                    entry_dt = datetime.strptime(entry_dt_str, '%Y-%m-%d %H:%M')
-                    exit_dt = datetime.strptime(exit_dt_str, '%Y-%m-%d %H:%M')
+                    entry_dt = datetime.strptime(entry_dt_str, "%Y-%m-%d %H:%M")
+                    exit_dt = datetime.strptime(exit_dt_str, "%Y-%m-%d %H:%M")
 
-                    entry_date_display = entry_dt.strftime('%Y-%m-%d')
-                    entry_time_display = entry_dt.strftime('%H:%M')
+                    entry_date_display = entry_dt.strftime("%Y-%m-%d")
+                    entry_time_display = entry_dt.strftime("%H:%M")
 
-                    exit_date_display = exit_dt.strftime('%Y-%m-%d')
-                    exit_time_display = exit_dt.strftime('%H:%M')
+                    exit_date_display = exit_dt.strftime("%Y-%m-%d")
+                    exit_time_display = exit_dt.strftime("%H:%M")
 
                     travel_html = "<div style='border-top: 1px solid #4B5563; padding-top: 6px; margin-top: 8px;'>"
                     travel_html += f"<p {schedule_style}>✈️ <b>Entry:</b> {entry_date_display} at {entry_time_display}</p>"
@@ -2172,7 +2232,6 @@ class PlanStaffWidget(QWidget):
                 except ValueError:
                     # Fallback if parsing fails, should not happen with new save logic
                     pass
-
 
         # Logistic Notes (only if they exist)
         pickup_clean = _clean(pickup)
@@ -2194,7 +2253,6 @@ class PlanStaffWidget(QWidget):
             remark_html += f"<p {remark_style}><b>Remark:</b> {remark}</p>"
             remark_html += "</div>"
             content_lines.append(remark_html)
-
 
         html_body = "".join(content_lines)
         final_html = f"<div style='line-height: 1.3;'>{html_body}</div>"
@@ -2228,7 +2286,6 @@ class PlanStaffWidget(QWidget):
             self.role_display.clear()
             self.badge_display.clear()
 
-
     def _apply_schedule_period(
         self,
         username: str,
@@ -2242,14 +2299,14 @@ class PlanStaffWidget(QWidget):
         dropoff: str | None,
         remark: str | None,
         in_time=None,
-        out_time=None,      
+        out_time=None,
     ):
         """
         Aplica un período [start_date, end_date] a DB y Excel.
         Se basa en la misma lógica que save_plan_changes, pero
         sin mostrar diálogos.
         """
-                # -------------------------------------------------------
+        # -------------------------------------------------------
         # 1) Decidir qué horas vamos a usar
         #    - Si vienen in_time/out_time como parámetros (copiados
         #      del día ancla), usamos esas tal cual.
@@ -2286,8 +2343,6 @@ class PlanStaffWidget(QWidget):
             entry_datetime = datetime.combine(start_date, in_time_obj)
             exit_datetime = datetime.combine(end_date, out_time_obj)
 
-      
-
         # DB: operación
         db.add_operation(
             username=username,
@@ -2318,9 +2373,7 @@ class PlanStaffWidget(QWidget):
 
         # DB: locations
         if pickup or dropoff:
-            db.assign_user_location_range(
-                badge, start_date, end_date, pickup, dropoff
-            )
+            db.assign_user_location_range(badge, start_date, end_date, pickup, dropoff)
             db.log_event(
                 self.logged_username,
                 self.source,
@@ -2347,9 +2400,6 @@ class PlanStaffWidget(QWidget):
             # pero podrías loguearlo si quieres.
             print("Excel update failed from cell edit:", message)
 
-
-
-
     # ---------- actions ----------
     def save_plan_changes(self):
         # 1. Limpiar estados de error visuales
@@ -2366,7 +2416,7 @@ class PlanStaffWidget(QWidget):
         role = self.role_display.text()
         start_date = self.start_date_edit.date().toPyDate()
         end_date = self.end_date_edit.date().toPyDate()
-        
+
         pickup = self.pickup_combo.currentData() or None
         dropoff = self.dropoff_combo.currentData() or None
         remark = self.remarks_input.text().strip() or None
@@ -2379,13 +2429,17 @@ class PlanStaffWidget(QWidget):
 
         if not role:
             mark_error(self.role_display, True)
-            QMessageBox.warning(self, "Incomplete Data", "Please select a role/department.")
+            QMessageBox.warning(
+                self, "Incomplete Data", "Please select a role/department."
+            )
             return
 
         if start_date > end_date:
             mark_error(self.start_date_edit, True)
             mark_error(self.end_date_edit, True)
-            QMessageBox.warning(self, "Date Error", "Start date cannot be after end date.")
+            QMessageBox.warning(
+                self, "Date Error", "Start date cannot be after end date."
+            )
             return
 
         # 4. Interpretar selección del turno (Status/Shift)
@@ -2412,22 +2466,30 @@ class PlanStaffWidget(QWidget):
             entry_date = self.entry_date_edit.date().toPyDate()
             entry_time = self.entry_time_edit.time().toPyTime()
             entry_datetime = datetime.combine(entry_date, entry_time)
-            
+
             exit_date = self.exit_date_edit.date().toPyDate()
             exit_time = self.exit_time_edit.time().toPyTime()
             exit_datetime = datetime.combine(exit_date, exit_time)
-            
+
             # Validación lógica de viaje
             if entry_datetime > exit_datetime:
                 mark_error(self.entry_date_edit, True)
                 mark_error(self.exit_date_edit, True)
-                QMessageBox.warning(self, "Date Error", "Entry date/time cannot be after Exit date/time.")
+                QMessageBox.warning(
+                    self,
+                    "Date Error",
+                    "Entry date/time cannot be after Exit date/time.",
+                )
                 return
 
             if entry_datetime.date() > start_date or exit_datetime.date() < end_date:
-                reply = QMessageBox.question(self, "Confirm Dates", 
+                reply = QMessageBox.question(
+                    self,
+                    "Confirm Dates",
                     "The travel period does not fully encompass the work period. Continue?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
                 if reply == QMessageBox.StandardButton.No:
                     return
 
@@ -2435,10 +2497,10 @@ class PlanStaffWidget(QWidget):
             # OPCIÓN B: Automático (Check desmarcado) -> Calcular Defaults
             # Se usa la fecha de inicio del periodo para Entry y fin para Exit.
             # Se inyectan las horas según el tipo de turno o reglas de negocio.
-            
-            # Hora por defecto base (06:00 / 18:00)
-            t_in = datetime.strptime("06:00", "%H:%M").time()
-            t_out = datetime.strptime("18:00", "%H:%M").time()
+
+            # Hora por defecto base (07:00 / 07:00) Para RGM
+            t_in = datetime.strptime("07:00", "%H:%M").time()
+            t_out = datetime.strptime("07:00", "%H:%M").time()
 
             # Lógica de Horas
             if in_time_raw and out_time_raw:
@@ -2450,17 +2512,24 @@ class PlanStaffWidget(QWidget):
             else:
                 # Reglas Hardcoded (SSoT fallbacks)
                 is_newmont = (self.source == "Newmont")
-                if schedule_status == "ON": # Día
-                    t_in = datetime.strptime("06:00", "%H:%M").time()
-                    t_out = datetime.strptime("12:00" if is_newmont else "18:00", "%H:%M").time()
-                elif schedule_status == "ON NS": # Noche
-                    t_in = datetime.strptime("12:00" if is_newmont else "18:00", "%H:%M").time()
-                    t_out = datetime.strptime("06:00", "%H:%M").time()
+                
+                if is_newmont:
+                    if schedule_status == "ON": # Día Newmont
+                        t_in = datetime.strptime("06:00", "%H:%M").time()
+                        t_out = datetime.strptime("12:00", "%H:%M").time()
+                    elif schedule_status == "ON NS": # Noche Newmont
+                        t_in = datetime.strptime("12:00", "%H:%M").time()
+                        t_out = datetime.strptime("06:00", "%H:%M").time()
+                else:
+                    # [MODIFICADO] Reglas RGM: Siempre 07:00 - 07:00
+                    if schedule_status in ("ON", "ON NS"):
+                        t_in = datetime.strptime("07:00", "%H:%M").time()
+                        t_out = datetime.strptime("07:00", "%H:%M").time()
 
             # Crear los datetimes finales para guardar en BD
             entry_datetime = datetime.combine(start_date, t_in)
             exit_datetime = datetime.combine(end_date, t_out)
-        
+
         # ---------------------------------------------------------------------
         # FIN DE LA CORRECCIÓN
         # ---------------------------------------------------------------------
@@ -2498,8 +2567,8 @@ class PlanStaffWidget(QWidget):
                 start_date=start_date,
                 end_date=end_date,
                 created_by=self.logged_username,
-                entry_date=entry_datetime, # Ahora siempre tendrá valor si hay turno
-                exit_date=exit_datetime,   # Ahora siempre tendrá valor si hay turno
+                entry_date=entry_datetime,  # Ahora siempre tendrá valor si hay turno
+                exit_date=exit_datetime,  # Ahora siempre tendrá valor si hay turno
             )
             db.upsert_schedule_range(
                 badge,
@@ -2540,10 +2609,12 @@ class PlanStaffWidget(QWidget):
             in_time_raw,
             out_time_raw,
         )
-        QTimer.singleShot(2000, lambda: setattr(self, '_is_internal_update', False))
+        QTimer.singleShot(2000, lambda: setattr(self, "_is_internal_update", False))
 
         # 9. Auditoría y Finalización
-        new_map = db.get_schedule_map_for_range(badge, start_date, end_date, self.source)
+        new_map = db.get_schedule_map_for_range(
+            badge, start_date, end_date, self.source
+        )
         db.log_event(
             self.logged_username,
             self.source,
@@ -2552,7 +2623,9 @@ class PlanStaffWidget(QWidget):
         )
 
         box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Information if success else QMessageBox.Icon.Warning)
+        box.setIcon(
+            QMessageBox.Icon.Information if success else QMessageBox.Icon.Warning
+        )
         box.setWindowTitle("Success" if success else "Warning")
         box.setText(message if success else ("Saved to DB. " + message))
         box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
@@ -2600,7 +2673,7 @@ class PlanStaffWidget(QWidget):
             QMessageBox.critical(
                 self, "Save Error", f"Could not save the file.\nError: {e}"
             )
-            
+
     # =======================================================
     # NUEVA FUNCIONALIDAD: Lógica para el reporte de estadías
     # =======================================================
@@ -2610,7 +2683,9 @@ class PlanStaffWidget(QWidget):
         end_date = self.report_end_date.date().toPyDate()
 
         if start_date > end_date:
-            QMessageBox.warning(self, "Date Range Error", "Start date cannot be after end date.")
+            QMessageBox.warning(
+                self, "Date Range Error", "Start date cannot be after end date."
+            )
             return
 
         try:
@@ -2622,7 +2697,7 @@ class PlanStaffWidget(QWidget):
                 self,
                 "Save Onsite Stay Report",
                 default_filename,
-                "Excel Files (*.xlsx);;All Files (*)"
+                "Excel Files (*.xlsx);;All Files (*)",
             )
 
             if not filePath:
@@ -2630,32 +2705,38 @@ class PlanStaffWidget(QWidget):
 
             # Generate the report bytes
             report_bytes, msg = excel.generate_stay_period_report(
-                self.excel_file,
-                start_date,
-                end_date
+                self.excel_file, start_date, end_date
             )
 
             if report_bytes:
                 with open(filePath, "wb") as f:
                     f.write(report_bytes)
-                
-                QMessageBox.information(self, "Report Generated", f"Successfully generated and saved report:\n{os.path.basename(filePath)}")
+
+                QMessageBox.information(
+                    self,
+                    "Report Generated",
+                    f"Successfully generated and saved report:\n{os.path.basename(filePath)}",
+                )
                 db.log_event(
                     self.logged_username,
                     self.source,
                     "REPORT_STAY_GENERATED",
-                    f"Generated for range {start_date} to {end_date}."
+                    f"Generated for range {start_date} to {end_date}.",
                 )
             else:
                 QMessageBox.critical(self, "Report Generation Failed", msg)
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"An unexpected error occurred while generating the report: {e}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"An unexpected error occurred while generating the report: {e}",
+            )
             db.log_event(
                 self.logged_username,
                 self.source,
                 "ERROR_REPORT_STAY",
-                f"Failed for range {start_date} to {end_date}: {e}"
+                f"Failed for range {start_date} to {end_date}: {e}",
             )
 
     def export_plan_from_db(self):
@@ -2704,7 +2785,7 @@ class PlanStaffWidget(QWidget):
         self.load_schedule_data()
         self.load_users_to_selector()
         self.load_location_options()  # keep combos in sync with Location admin
-        self.remarks_input.clear() # Clear remarks on refresh
+        self.remarks_input.clear()  # Clear remarks on refresh
 
     # ---------- Excel Health / Monitoring ----------
     def check_excel_health(self):
@@ -2896,11 +2977,11 @@ class RotationHistoryWidget(QWidget):
         # -- Filter Panel --
         filter_layout = QHBoxLayout()
         filter_layout.setContentsMargins(0, 0, 0, 8)
-        
+
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search Name/Badge/Role...")
         self.search_input.textChanged.connect(self._request_refresh)
-        
+
         self.role_combo = QComboBox()
         self.role_combo.currentIndexChanged.connect(self._request_refresh)
 
@@ -2908,7 +2989,7 @@ class RotationHistoryWidget(QWidget):
         self.date_from.setCalendarPopup(True)
         self.date_from.setDisplayFormat("yyyy-MM-dd")
         self.date_from.dateChanged.connect(self._request_refresh)
-        
+
         self.date_to = QDateEdit()
         self.date_to.setCalendarPopup(True)
         self.date_to.setDisplayFormat("yyyy-MM-dd")
@@ -2920,7 +3001,7 @@ class RotationHistoryWidget(QWidget):
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["Start Date (desc)", "Name (asc)"])
         self.sort_combo.currentIndexChanged.connect(self._request_refresh)
-        
+
         reset_button = QPushButton("Reset")
         reset_button.clicked.connect(self.reset_filters)
 
@@ -2936,7 +3017,7 @@ class RotationHistoryWidget(QWidget):
         filter_layout.addWidget(QLabel("Sort by:"))
         filter_layout.addWidget(self.sort_combo)
         filter_layout.addWidget(reset_button)
-        
+
         layout.addLayout(filter_layout)
 
         self.table = QTableWidget()
@@ -2944,7 +3025,7 @@ class RotationHistoryWidget(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         layout.addWidget(self.table)
 
-        self.reset_filters() # To initialize and load data
+        self.reset_filters()  # To initialize and load data
 
     def _request_refresh(self):
         self._debounce_timer.start(DEBOUNCE_MS)
@@ -2967,19 +3048,20 @@ class RotationHistoryWidget(QWidget):
         all_records = db.get_operations_filtered(created_by=self._created_by)
         roles = sorted(list(set(r["role"] for r in all_records if r.get("role"))))
         self.role_combo.addItems(roles)
-        
+
         idx = self.role_combo.findText(current_role)
         if idx != -1:
             self.role_combo.setCurrentIndex(idx)
         self.role_combo.blockSignals(False)
 
     def reset_filters(self):
-        with QSignalBlocker(self.search_input), \
-             QSignalBlocker(self.role_combo), \
-             QSignalBlocker(self.date_from), \
-             QSignalBlocker(self.date_to), \
-             QSignalBlocker(self.active_today_check), \
-             QSignalBlocker(self.sort_combo):
+        with QSignalBlocker(self.search_input), QSignalBlocker(
+            self.role_combo
+        ), QSignalBlocker(self.date_from), QSignalBlocker(self.date_to), QSignalBlocker(
+            self.active_today_check
+        ), QSignalBlocker(
+            self.sort_combo
+        ):
             self.search_input.clear()
             self._populate_role_filter()
             self.role_combo.setCurrentIndex(0)
@@ -2991,22 +3073,28 @@ class RotationHistoryWidget(QWidget):
 
     def refresh_data(self):
         # Persist filter state
-        self._filter_state['text'] = self.search_input.text()
-        self._filter_state['role'] = self.role_combo.currentText() if self.role_combo.currentIndex() > 0 else None
-        self._filter_state['sort'] = 'name_asc' if self.sort_combo.currentIndex() == 1 else 'start_date_desc'
+        self._filter_state["text"] = self.search_input.text()
+        self._filter_state["role"] = (
+            self.role_combo.currentText()
+            if self.role_combo.currentIndex() > 0
+            else None
+        )
+        self._filter_state["sort"] = (
+            "name_asc" if self.sort_combo.currentIndex() == 1 else "start_date_desc"
+        )
 
         d_from = self.date_from.date().toPyDate()
         d_to = self.date_to.date().toPyDate()
-        
+
         records = db.get_operations_filtered(
-            text=self._filter_state['text'],
-            role=self._filter_state['role'],
+            text=self._filter_state["text"],
+            role=self._filter_state["role"],
             d_from=d_from,
             d_to=d_to,
-            sort_by=self._filter_state['sort'],
+            sort_by=self._filter_state["sort"],
             created_by=self._created_by,  # NUEVO: solo mis rotaciones
         )
-        
+
         headers = ["Name", "Role", "Badge", "Start Date", "End Date", "Created By"]
         self.table.setRowCount(len(records))
         self.table.setColumnCount(len(headers))
@@ -3018,9 +3106,13 @@ class RotationHistoryWidget(QWidget):
             self.table.setItem(row_idx, 2, QTableWidgetItem(record["badge"]))
             self.table.setItem(row_idx, 3, QTableWidgetItem(record["start_date"]))
             self.table.setItem(row_idx, 4, QTableWidgetItem(record["end_date"]))
-            self.table.setItem(row_idx, 5, QTableWidgetItem(record.get("created_by", "")))
+            self.table.setItem(
+                row_idx, 5, QTableWidgetItem(record.get("created_by", ""))
+            )
 
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
 
 
 # -------------------------------------------------------------
@@ -3037,7 +3129,7 @@ class CrudWidget(QWidget):
         self.excel_file = excel_file
         self.logged_username = logged_username or "Unknown"
         self.current_user_id = None
-        
+
         self._filter_state = {}
         self._debounce_timer = QTimer(self)
         self._debounce_timer.setSingleShot(True)
@@ -3089,13 +3181,13 @@ class CrudWidget(QWidget):
         # Right panel: users table
         table_panel = QWidget()
         table_layout = QVBoxLayout(table_panel)
-        
+
         # --- Filter Panel for Users ---
         filter_bar = QHBoxLayout()
         self.user_search_input = QLineEdit()
         self.user_search_input.setPlaceholderText("Search Name/Badge...")
         self.user_search_input.textChanged.connect(self._request_refresh)
-        
+
         self.user_role_combo = QComboBox()
         self.user_role_combo.currentIndexChanged.connect(self._request_refresh)
 
@@ -3113,7 +3205,7 @@ class CrudWidget(QWidget):
         filter_bar.addWidget(self.user_badge_prefix_input, 1)
         filter_bar.addWidget(user_reset_btn)
         table_layout.addLayout(filter_bar)
-        
+
         self.users_table = QTableWidget()
         self.users_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.users_table.setAlternatingRowColors(True)
@@ -3135,7 +3227,7 @@ class CrudWidget(QWidget):
         self.user_role_combo.clear()
         self.user_role_combo.addItem("All Roles")
         all_users = db.get_all_users(self.source)
-        roles = sorted(list(set(u['role'] for u in all_users if u.get('role'))))
+        roles = sorted(list(set(u["role"] for u in all_users if u.get("role"))))
         self.user_role_combo.addItems(roles)
         idx = self.user_role_combo.findText(current_role)
         if idx > 0:
@@ -3143,28 +3235,32 @@ class CrudWidget(QWidget):
         self.user_role_combo.blockSignals(False)
 
     def reset_filters(self):
-        with QSignalBlocker(self.user_search_input), \
-             QSignalBlocker(self.user_role_combo), \
-             QSignalBlocker(self.user_badge_prefix_input):
+        with QSignalBlocker(self.user_search_input), QSignalBlocker(
+            self.user_role_combo
+        ), QSignalBlocker(self.user_badge_prefix_input):
             self.user_search_input.clear()
             self.user_role_combo.setCurrentIndex(0)
             self.user_badge_prefix_input.clear()
         self.load_users_table()
-        
+
     # Table & form CRUD
     def load_users_table(self):
-        self._filter_state['text'] = self.user_search_input.text()
-        self._filter_state['role'] = self.user_role_combo.currentText() if self.user_role_combo.currentIndex() > 0 else None
-        self._filter_state['badge_prefix'] = self.user_badge_prefix_input.text()
+        self._filter_state["text"] = self.user_search_input.text()
+        self._filter_state["role"] = (
+            self.user_role_combo.currentText()
+            if self.user_role_combo.currentIndex() > 0
+            else None
+        )
+        self._filter_state["badge_prefix"] = self.user_badge_prefix_input.text()
 
         users = db.get_users_filtered(
             source=self.source,
-            text=self._filter_state['text'],
-            role=self._filter_state['role'],
-            badge_prefix=self._filter_state['badge_prefix'],
-            active_since=None # Not implemented in UI yet
+            text=self._filter_state["text"],
+            role=self._filter_state["role"],
+            badge_prefix=self._filter_state["badge_prefix"],
+            active_since=None,  # Not implemented in UI yet
         )
-        
+
         headers = ["ID", "Name", "Role", "Badge"]
         self.users_table.setRowCount(len(users))
         self.users_table.setColumnCount(len(headers))
@@ -3227,7 +3323,7 @@ class CrudWidget(QWidget):
             # 2. Actualizar la UI local
             self._populate_role_filter()
             self.refresh_ui_data()
-            
+
             # 3. Avisar a otras pestañas que hubo cambios
             self.users_changed.emit(self.source)
         # --- FIN DEL CAMBIO ---
@@ -3241,7 +3337,7 @@ class CrudWidget(QWidget):
         box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
         box.exec()
 
-   # En main_window.py -> clase CrudWidget
+    # En main_window.py -> clase CrudWidget
 
     def delete_crud_user(self):
         if not self.current_user_id:
@@ -3260,35 +3356,41 @@ class CrudWidget(QWidget):
         confirm = QMessageBox(self)
         confirm.setIcon(QMessageBox.Icon.Question)
         confirm.setWindowTitle("Confirm User Deletion")
-        confirm.setText(f"Are you sure you want to delete user '{self.crud_name_input.text()}'?")
-        
+        confirm.setText(
+            f"Are you sure you want to delete user '{self.crud_name_input.text()}'?"
+        )
+
         # DEFINICIÓN CORRECTA DE LOS BOTONES
         yes_btn = confirm.addButton("Yes", QMessageBox.ButtonRole.YesRole)
         confirm.addButton("No", QMessageBox.ButtonRole.NoRole)
-        
+
         confirm.exec()
 
         if confirm.clickedButton() == yes_btn:
             # 2. Borrar de BD (SSoT)
             success_db, message_db = db.delete_user(self.current_user_id)
-            
+
             final_msg = message_db
-            
+
             if success_db:
                 # 3. Si se borró en BD, borrar también del Excel
-                success_excel, msg_excel = excel.remove_user_from_excel(self.excel_file, badge_to_remove)
-                
+                success_excel, msg_excel = excel.remove_user_from_excel(
+                    self.excel_file, badge_to_remove
+                )
+
                 if success_excel:
                     final_msg += f"\n\nAlso removed from Excel: {badge_to_remove}"
                     # Log de auditoría
                     db.log_event(
-                        self.logged_username, 
-                        self.source, 
-                        "USER_DELETE", 
-                        f"Deleted {badge_to_remove} from DB and Excel."
+                        self.logged_username,
+                        self.source,
+                        "USER_DELETE",
+                        f"Deleted {badge_to_remove} from DB and Excel.",
                     )
                 else:
-                    final_msg += f"\n\nWarning: Could not remove from Excel ({msg_excel})"
+                    final_msg += (
+                        f"\n\nWarning: Could not remove from Excel ({msg_excel})"
+                    )
 
                 # Emitimos señal para actualizar la UI
                 self._populate_role_filter()
@@ -3378,7 +3480,7 @@ class ShiftTypeAdminWidget(QWidget):
         self._debounce_timer = QTimer(self)
         self._debounce_timer.setSingleShot(True)
         self._debounce_timer.timeout.connect(self.refresh_table)
-        
+
         layout = QHBoxLayout(self)
 
         # Left: form
@@ -3434,25 +3536,25 @@ class ShiftTypeAdminWidget(QWidget):
         # Right: table
         table_panel = QWidget()
         table_layout = QVBoxLayout(table_panel)
-        
+
         # --- Filter Panel for Shift Types ---
         st_filter_bar = QHBoxLayout()
         self.st_search_input = QLineEdit()
         self.st_search_input.setPlaceholderText("Search Name/Code...")
         self.st_search_input.textChanged.connect(self._request_refresh)
-        
+
         self.st_time_from = QTimeEdit(QTime(0, 0))
         self.st_time_from.setDisplayFormat("HH:mm")
         self.st_time_from.timeChanged.connect(self._request_refresh)
-        
+
         self.st_time_to = QTimeEdit(QTime(23, 59))
         self.st_time_to.setDisplayFormat("HH:mm")
         self.st_time_to.timeChanged.connect(self._request_refresh)
-        
+
         self.st_usage_combo = QComboBox()
         self.st_usage_combo.addItems(["All", "In use", "Not in use"])
         self.st_usage_combo.currentIndexChanged.connect(self._request_refresh)
-        
+
         st_reset_btn = QPushButton("Reset")
         st_reset_btn.clicked.connect(self.reset_filters)
 
@@ -3465,7 +3567,7 @@ class ShiftTypeAdminWidget(QWidget):
         st_filter_bar.addWidget(self.st_usage_combo, 1)
         st_filter_bar.addWidget(st_reset_btn)
         table_layout.addLayout(st_filter_bar)
-        
+
         self.types_table = QTableWidget()
         self.types_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.types_table.setAlternatingRowColors(True)
@@ -3482,13 +3584,12 @@ class ShiftTypeAdminWidget(QWidget):
         self._debounce_timer.start(DEBOUNCE_MS)
 
     def reset_filters(self):
-        with QSignalBlocker(self.st_search_input), \
-             QSignalBlocker(self.st_time_from), \
-             QSignalBlocker(self.st_time_to), \
-             QSignalBlocker(self.st_usage_combo):
+        with QSignalBlocker(self.st_search_input), QSignalBlocker(
+            self.st_time_from
+        ), QSignalBlocker(self.st_time_to), QSignalBlocker(self.st_usage_combo):
             self.st_search_input.clear()
-            self.st_time_from.setTime(QTime(0,0))
-            self.st_time_to.setTime(QTime(23,59))
+            self.st_time_from.setTime(QTime(0, 0))
+            self.st_time_to.setTime(QTime(23, 59))
             self.st_usage_combo.setCurrentIndex(0)
         self.refresh_table()
 
@@ -3633,17 +3734,21 @@ class ShiftTypeAdminWidget(QWidget):
             self.clear_form()
 
     def refresh_table(self):
-        self._filter_state['text'] = self.st_search_input.text()
-        self._filter_state['in_from'] = self.st_time_from.time().toString("HH:mm")
-        self._filter_state['in_to'] = self.st_time_to.time().toString("HH:mm")
-        self._filter_state['usage'] = self.st_usage_combo.currentText() if self.st_usage_combo.currentIndex() > 0 else None
-        
+        self._filter_state["text"] = self.st_search_input.text()
+        self._filter_state["in_from"] = self.st_time_from.time().toString("HH:mm")
+        self._filter_state["in_to"] = self.st_time_to.time().toString("HH:mm")
+        self._filter_state["usage"] = (
+            self.st_usage_combo.currentText()
+            if self.st_usage_combo.currentIndex() > 0
+            else None
+        )
+
         types = db.get_shift_types_filtered(
             source=self.source,
-            text=self._filter_state['text'],
-            in_from=self._filter_state['in_from'],
-            in_to=self._filter_state['in_to'],
-            usage=self._filter_state['usage']
+            text=self._filter_state["text"],
+            in_from=self._filter_state["in_from"],
+            in_to=self._filter_state["in_to"],
+            usage=self._filter_state["usage"],
         )
         headers = ["ID", "Name", "Code", "Color", "Color Preview", "IN", "OUT"]
         self.types_table.setRowCount(len(types))
@@ -3654,7 +3759,7 @@ class ShiftTypeAdminWidget(QWidget):
             self.types_table.setItem(r, 1, QTableWidgetItem(t["name"]))
             self.types_table.setItem(r, 2, QTableWidgetItem(t["code"]))
             self.types_table.setItem(r, 3, QTableWidgetItem(t["color_hex"]))
-            
+
             # Add color preview item
             preview_item = QTableWidgetItem()
             preview_item.setIcon(_create_color_icon(t["color_hex"]))
@@ -3669,7 +3774,9 @@ class ShiftTypeAdminWidget(QWidget):
         )
         # Adjust preview column width
         preview_col_index = headers.index("Color Preview")
-        self.types_table.horizontalHeader().setSectionResizeMode(preview_col_index, QHeaderView.ResizeMode.ResizeToContents)
+        self.types_table.horizontalHeader().setSectionResizeMode(
+            preview_col_index, QHeaderView.ResizeMode.ResizeToContents
+        )
         self.types_table.setColumnWidth(preview_col_index, 40)
 
 
@@ -3730,7 +3837,7 @@ class LocationAdminWidget(QWidget):
         # --- Tabla ---
         table_panel = QWidget()
         table_box = QVBoxLayout(table_panel)
-        
+
         controls_row = QHBoxLayout()
 
         self.loc_search_input = QLineEdit()
@@ -3748,7 +3855,7 @@ class LocationAdminWidget(QWidget):
             self.filter_combo.currentIndexChanged.connect(self._request_refresh)
             controls_row.addWidget(QLabel("Source:"))
             controls_row.addWidget(self.filter_combo)
-        
+
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["Sort by Name", "Sort by Source"])
         self.sort_combo.currentIndexChanged.connect(self._request_refresh)
@@ -3790,7 +3897,6 @@ class LocationAdminWidget(QWidget):
                     self.filter_combo.setCurrentIndex(0)
         self._reload_table()
 
-
     def _effective_filter_source(self) -> str | None:
         if self.scope_source is not None:
             return self.scope_source  # perfil normal
@@ -3802,14 +3908,14 @@ class LocationAdminWidget(QWidget):
     def _reload_table(self):
         src = self._effective_filter_source()
         text = self.loc_search_input.text()
-        sort = 'source' if self.sort_combo.currentIndex() == 1 else 'name'
-        
-        self._filter_state['source'] = src
-        self._filter_state['text'] = text
-        self._filter_state['sort'] = sort
+        sort = "source" if self.sort_combo.currentIndex() == 1 else "name"
+
+        self._filter_state["source"] = src
+        self._filter_state["text"] = text
+        self._filter_state["sort"] = sort
 
         rows = db.get_locations_filtered(source=src, text=text, sort_by=sort)
-        
+
         if self.scope_source is None:
             headers = ["ID", "Source", "Location"]
         else:
@@ -3946,7 +4052,6 @@ class MainWindow(QMainWindow):
         self.excel_file = excel_file
         self.logged_username = logged_username or "Unknown"
         self.can_manage_shift_types = bool(can_manage_shift_types)
-        
 
         db.setup_database()
         db.log_event(
@@ -4001,7 +4106,9 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.plan_widget, "📅 Plan Staff & Reports")
 
         # 2) Rotation History (new tab, no ID column)
-        self.rotation_widget = RotationHistoryWidget(created_by=self.logged_username)  # ← NUEVO: solo mis registros
+        self.rotation_widget = RotationHistoryWidget(
+            created_by=self.logged_username
+        )  # ← NUEVO: solo mis registros
         tabs.addTab(self.rotation_widget, "🔁 Rotation History")
         # Refresh rotation history whenever plan saves a rotation
         self.plan_widget.rotation_changed.connect(self.rotation_widget.refresh_data)
@@ -4038,8 +4145,16 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.settings_widget, "⚙️ Settings")
 
         # Hot sync
-        self.crud_widget.users_changed.connect(lambda src: self.plan_widget.refresh_ui_data() if src == self.user_role else None)
-        self.crud_widget.import_done.connect(lambda src: self.plan_widget.refresh_ui_data() if src == self.user_role else None)
+        self.crud_widget.users_changed.connect(
+            lambda src: (
+                self.plan_widget.refresh_ui_data() if src == self.user_role else None
+            )
+        )
+        self.crud_widget.import_done.connect(
+            lambda src: (
+                self.plan_widget.refresh_ui_data() if src == self.user_role else None
+            )
+        )
 
     def _sync_after_users_changed(self, src: str):
         if src == self.user_role:
@@ -4122,7 +4237,9 @@ class AdminMainWindow(QMainWindow):
         self.tabs.addTab(self.nm_plan, "📅 Newmont Plan Staff")
 
         # 5) Rotation History (global; no ID column)
-        self.rotation_history = RotationHistoryWidget(created_by=None) # AHORA (modo admin = None → sin filtro)
+        self.rotation_history = RotationHistoryWidget(
+            created_by=None
+        )  # AHORA (modo admin = None → sin filtro)
         self.tabs.addTab(self.rotation_history, "🔁 Rotation History")
         # Refresh when either plan tab writes a rotation
         self.rgm_plan.rotation_changed.connect(self.rotation_history.refresh_data)
@@ -4169,20 +4286,12 @@ class AdminMainWindow(QMainWindow):
         # Hot sync
         # CAMBIO: Usamos refresh_ui_data() en lugar de refresh_users_only()
         # para forzar la recarga de la grilla (tabla) y que desaparezca la fila borrada.
-        
-        self.rgm_crud.users_changed.connect(
-            lambda src: self.rgm_plan.refresh_ui_data()
-        )
-        self.rgm_crud.import_done.connect(
-            lambda src: self.rgm_plan.refresh_ui_data()
-        )
 
-        self.nm_crud.users_changed.connect(
-            lambda src: self.nm_plan.refresh_ui_data()
-        )
-        self.nm_crud.import_done.connect(
-            lambda src: self.nm_plan.refresh_ui_data()
-        )
+        self.rgm_crud.users_changed.connect(lambda src: self.rgm_plan.refresh_ui_data())
+        self.rgm_crud.import_done.connect(lambda src: self.rgm_plan.refresh_ui_data())
+
+        self.nm_crud.users_changed.connect(lambda src: self.nm_plan.refresh_ui_data())
+        self.nm_crud.import_done.connect(lambda src: self.nm_plan.refresh_ui_data())
 
         # Estos de abajo ya estaban bien, los dejas igual:
         self.rgm_types.types_changed.connect(
