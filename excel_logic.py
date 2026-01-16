@@ -37,6 +37,7 @@ import xlsxwriter
 from openpyxl.styles import PatternFill
 from openpyxl.comments import Comment
 import calendar  # <--- Necesario para calcular el último día del mes
+from database_logic import get_shift_types, get_shift_type_map
 
 # ============================================================
 # Helpers / Normalización
@@ -1002,7 +1003,16 @@ def generate_transport_report(
         return su
 
     def _is_working(s):
-        return bool(s and s not in ("OFF", "BREAK", "KO", "LEAVE"))
+        # 1. Chequeo básico
+        if not s or s in ("OFF", "BREAK", "KO", "LEAVE"):
+            return False
+        
+        # 2. Chequeo avanzado: Consultar flag 'is_off' en DB
+        # shift_map_data ya fue definido unas líneas arriba en tu código
+        if s in shift_map_data and shift_map_data[s].get("is_off"):
+            return False
+            
+        return True
 
     # ---- 6) Data processing: Collect IN/OUT rows ----
     all_in_events, all_out_events = [], []
@@ -1049,6 +1059,16 @@ def generate_transport_report(
             ln = str(ws_src.cell(row=r, column=ln_col).value or "").strip()
             fn = str(ws_src.cell(row=r, column=fn_col).value or "").strip()
             return ln, fn
+
+    try:
+        # Cargamos el mapa INTELIGENTE que incluye 'is_off'
+        # Asumimos Newmont por defecto en esta función si no se especifica
+        shift_map_data = get_shift_type_map("Newmont") 
+    except Exception as e:
+        print(f"Error loading map: {e}")
+        shift_map_data = {}
+    
+    OFF_MARKERS = {"OFF", "VAC", "B", "O", "X", "DESCANS", "LIBRE"}
 
     for r_idx in range(2, ws_src.max_row + 1):
         badge = str(ws_src.cell(row=r_idx, column=badge_col).value or "").strip()
@@ -1419,7 +1439,16 @@ def generate_rgm_transport_report(
         return su
 
     def _is_working(s):
-        return bool(s and s != "OFF")
+        # 1. Chequeo básico
+        if not s or s == "OFF":
+            return False
+            
+        # 2. Chequeo avanzado: Consultar flag 'is_off' en DB
+        # En esta función usas 'custom_map' (definido en línea 1009)
+        if s in custom_map and custom_map[s].get("is_off"):
+            return False
+            
+        return True
 
     def _get_crew_from_name(name: str):
         if "day" in name.lower():

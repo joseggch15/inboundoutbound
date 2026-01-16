@@ -3155,6 +3155,9 @@ class CrudWidget(QWidget):
         self.import_button = QPushButton("📥 Import from Excel → DB (validated)")
         self.import_button.clicked.connect(self.import_users_from_excel)
 
+
+
+
         # Button variants
         self.crud_save_button.setProperty("variant", "primary")
         self.crud_new_button.setProperty("variant", "secondary")
@@ -3520,15 +3523,32 @@ class ShiftTypeAdminWidget(QWidget):
         h_color.addWidget(self.color_display)
         h_color.addWidget(self.pick_color_btn)
         form_layout.addLayout(h_color, 2, 1)
-        form_layout.addWidget(QLabel("IN time (HH:MM):"), 3, 0)
+       # --- MODIFICACIÓN: Guardamos referencias a los Labels ---
+        self.lbl_in = QLabel("IN time (HH:MM):")
+        self.lbl_out = QLabel("OUT time (HH:MM):")
+
+        form_layout.addWidget(self.lbl_in, 3, 0)
         form_layout.addWidget(self.in_time_edit, 3, 1)
-        form_layout.addWidget(QLabel("OUT time (HH:MM):"), 4, 0)
+        form_layout.addWidget(self.lbl_out, 4, 0)
         form_layout.addWidget(self.out_time_edit, 4, 1)
+
+        # --- NUEVO: Checkbox 'Treat as OFF' ---
+        self.is_off_check = QCheckBox("Treat as 'OFF' (Non-working day)")
+        self.is_off_check.setToolTip(
+            "Check this if the shift (e.g., Vacation, Sick Leave) should be treated\n"
+            "as a day OFF for transport and onsite-stay reports."
+        )
+        form_layout.addWidget(QLabel("Behavior:"), 5, 0)
+        form_layout.addWidget(self.is_off_check, 5, 1)
+        # --------------------------------------
+
         actions = QHBoxLayout()
         actions.addWidget(self.new_btn)
         actions.addWidget(self.save_btn)
         actions.addWidget(self.delete_btn)
-        form_layout.addLayout(actions, 5, 0, 1, 2)
+        
+        # NOTA: Cambiamos el row de 5 a 6 para hacer espacio
+        form_layout.addLayout(actions, 6, 0, 1, 2)
 
         form_group = create_group_box("Shift Type", form_layout)
         form_group.setFixedWidth(420)
@@ -3577,7 +3597,8 @@ class ShiftTypeAdminWidget(QWidget):
         table_group = create_group_box(f"{self.source} Shift Types", table_layout)
         layout.addWidget(form_group)
         layout.addWidget(table_group)
-
+        # --- MODIFICACIÓN: Conectar Checkbox a la visibilidad ---
+        self.is_off_check.toggled.connect(self.toggle_time_inputs)
         self.reset_filters()
 
     def _request_refresh(self):
@@ -3593,6 +3614,29 @@ class ShiftTypeAdminWidget(QWidget):
             self.st_usage_combo.setCurrentIndex(0)
         self.refresh_table()
 
+    def toggle_time_inputs(self, checked):
+        """
+        Oculta o muestra los inputs de tiempo según si es 'Treat as OFF'.
+        Si es OFF (checked=True), ocultamos los tiempos (Visible=False).
+        """
+        is_working = not checked
+        
+        # Mostrar u ocultar etiquetas y campos
+        self.lbl_in.setVisible(is_working)
+        self.in_time_edit.setVisible(is_working)
+        self.lbl_out.setVisible(is_working)
+        self.out_time_edit.setVisible(is_working)
+        
+        # Opcional: Si se marca como OFF, limpiamos visualmente a 00:00
+        if checked:
+            self.in_time_edit.setTime(QTime(0, 0))
+            self.out_time_edit.setTime(QTime(0, 0))
+        else:
+            # Si se desmarca (vuelve a ser laboral) y está en 00:00, restaurar defaults
+            if self.in_time_edit.time().toString("HH:mm") == "00:00":
+                self.in_time_edit.setTime(QTime(8, 0))
+                self.out_time_edit.setTime(QTime(17, 0))
+    
     def pick_color(self):
         color = QColorDialog.getColor(
             QColor(self.color_display.text() or "#FFC000"), self, "Pick a Color"
@@ -3604,16 +3648,34 @@ class ShiftTypeAdminWidget(QWidget):
         row = item.row()
         self.current_type_id = int(self.types_table.item(row, 0).text())
         self.name_input.setText(self.types_table.item(row, 1).text())
+        
         code = self.types_table.item(row, 2).text()
         self.code_input.setText(code)
+        
         color_hex = self.types_table.item(row, 3).text()
         self.color_display.setText(color_hex)
-        # Columns are now shifted due to "Color Preview"
+        
+        # Nota: La columna 4 es el previo de color, saltamos a la 5 y 6
         in_time = self.types_table.item(row, 5).text()
         out_time = self.types_table.item(row, 6).text()
         self.in_time_edit.setTime(QTime.fromString(in_time, "HH:mm"))
         self.out_time_edit.setTime(QTime.fromString(out_time, "HH:mm"))
         self.current_old_code = code
+
+        # --- NUEVO: Cargar estado 'is_off' desde la BD ---
+        # Obtenemos todos los tipos para buscar el atributo 'is_off' del actual
+        all_types = db.get_shift_types(self.source)
+        record = next((t for t in all_types if t['id'] == self.current_type_id), None)
+        
+        if record:
+            # Convertimos 1/0 a True/False
+            val = bool(record.get('is_off', 0))
+            self.is_off_check.setChecked(val)
+        else:
+            self.is_off_check.setChecked(False)
+            
+        # --- MODIFICACIÓN: Forzar actualización visual ---
+        self.toggle_time_inputs(self.is_off_check.isChecked())
 
     def clear_form(self):
         self.current_type_id = None
@@ -3623,6 +3685,13 @@ class ShiftTypeAdminWidget(QWidget):
         self.color_display.setText("#FFC000")
         self.in_time_edit.setTime(QTime(8, 0))
         self.out_time_edit.setTime(QTime(17, 0))
+        
+       # --- NUEVO ---
+        self.is_off_check.setChecked(False) 
+        
+        # --- MODIFICACIÓN: Asegurar que los tiempos sean visibles al limpiar ---
+        self.toggle_time_inputs(False) 
+        
         self.types_table.clearSelection()
 
     def save_type(self):
@@ -3631,6 +3700,9 @@ class ShiftTypeAdminWidget(QWidget):
         color_hex = self.color_display.text().strip() or "#FFC000"
         in_time = self.in_time_edit.time().toString("HH:mm")
         out_time = self.out_time_edit.time().toString("HH:mm")
+        
+        # --- NUEVO: Leer valor del checkbox ---
+        is_off_val = self.is_off_check.isChecked()
 
         if not name or not code:
             box = QMessageBox(self)
@@ -3642,6 +3714,7 @@ class ShiftTypeAdminWidget(QWidget):
             return
 
         if self.current_type_id:
+            # ACTUALIZAR
             ok, msg, old_code, new_code = db.update_shift_type(
                 self.current_type_id,
                 self.source,
@@ -3650,9 +3723,9 @@ class ShiftTypeAdminWidget(QWidget):
                 color_hex,
                 in_time,
                 out_time,
+                is_off=is_off_val  # <--- Pasamos el nuevo parámetro
             )
             if ok:
-                # If the code changed -> update Excel
                 if old_code and new_code and old_code != new_code:
                     excel.apply_shift_type_update_to_excel(
                         self.excel_file, self.source, old_code, new_code, color_hex
@@ -3661,33 +3734,33 @@ class ShiftTypeAdminWidget(QWidget):
                     self.logged_username,
                     self.source,
                     "SHIFT_TYPE_UPDATE",
-                    f"{old_code} -> {new_code} | {name} {in_time}-{out_time} {color_hex}",
+                    f"{old_code} -> {new_code} | Off={is_off_val}"
                 )
                 self.types_changed.emit(self.source)
+            
             box = QMessageBox(self)
-            box.setIcon(
-                QMessageBox.Icon.Information if ok else QMessageBox.Icon.Warning
-            )
+            box.setIcon(QMessageBox.Icon.Information if ok else QMessageBox.Icon.Warning)
             box.setWindowTitle("Save" if ok else "Error")
             box.setText(msg)
             box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
             box.exec()
         else:
+            # CREAR
             ok, msg = db.create_shift_type(
-                self.source, name, code, color_hex, in_time, out_time
+                self.source, name, code, color_hex, in_time, out_time, 
+                is_off=is_off_val # <--- Pasamos el nuevo parámetro
             )
             if ok:
                 db.log_event(
                     self.logged_username,
                     self.source,
                     "SHIFT_TYPE_CREATE",
-                    f"{code} | {name} {in_time}-{out_time} {color_hex}",
+                    f"{code} | Off={is_off_val}"
                 )
                 self.types_changed.emit(self.source)
+            
             box = QMessageBox(self)
-            box.setIcon(
-                QMessageBox.Icon.Information if ok else QMessageBox.Icon.Warning
-            )
+            box.setIcon(QMessageBox.Icon.Information if ok else QMessageBox.Icon.Warning)
             box.setWindowTitle("Create" if ok else "Error")
             box.setText(msg)
             box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)

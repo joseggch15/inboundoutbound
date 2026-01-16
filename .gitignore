@@ -1,5 +1,6 @@
 # Archivos y carpetas de compilación
 /build/
 /dist/
+build/
 *.exe
 *.pkg

@@ -195,11 +195,18 @@ def setup_database():
             code TEXT NOT NULL,                  -- único por source (p.ej. 'SOP')
             color_hex TEXT NOT NULL,             -- '#RRGGBB'
             in_time TEXT NOT NULL,               -- 'HH:MM' 24h
-            out_time TEXT NOT NULL,              -- 'HH:MM' 24h
+            out_time TEXT NOT NULL,
+            is_off INTEGER DEFAULT 0,-- 'HH:MM' 24h
             UNIQUE (source, name),
             UNIQUE (source, code)
         )"""
     )
+    
+    try:
+        cursor.execute("ALTER TABLE shift_types ADD COLUMN is_off INTEGER DEFAULT 0")
+        print("Migración: Columna 'is_off' agregada a 'shift_types'.")
+    except sqlite3.OperationalError:
+        pass # La columna ya existe
 
     # -------------------------
     # Report Settings
@@ -900,7 +907,7 @@ def get_shift_types(source: str) -> List[Dict]:
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, source, name, code, color_hex, in_time, out_time "
+        "SELECT id, source, name, code, color_hex, in_time, out_time, is_off "
         "FROM shift_types WHERE source = ? ORDER BY name",
         (source,),
     )
@@ -940,7 +947,8 @@ def get_shift_types_filtered(source: str, text: Optional[str], in_from: Optional
 
 def get_shift_type_map(source: str) -> Dict[str, Dict]:
     """
-    Devuelve {code_upper: {'name':..., 'color_hex':..., 'in_time':..., 'out_time':...}}
+    Retorna un diccionario mapeando CODE -> {name, color, times, is_off}.
+    Crucial para que los reportes de Excel sepan distinguir días libres customizados.
     """
     types = get_shift_types(source)
     return {
@@ -949,19 +957,22 @@ def get_shift_type_map(source: str) -> Dict[str, Dict]:
             "color_hex": t["color_hex"],
             "in_time": t["in_time"],
             "out_time": t["out_time"],
+            # Aseguramos que retorne un booleano (0 o 1 en SQLite -> False o True)
+            "is_off": bool(t.get("is_off", 0)) 
         }
         for t in types
     }
 
 
+# ACTUALIZAR create_shift_type
 def create_shift_type(
-    source: str, name: str, code: str, color_hex: str, in_time: str, out_time: str
+    source: str, name: str, code: str, color_hex: str, in_time: str, out_time: str, is_off: bool = False
 ) -> Tuple[bool, str]:
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     try:
         cur.execute(
-            "INSERT INTO shift_types (source, name, code, color_hex, in_time, out_time) VALUES (?,?,?,?,?,?)",
+            "INSERT INTO shift_types (source, name, code, color_hex, in_time, out_time, is_off) VALUES (?,?,?,?,?,?,?)",
             (
                 source,
                 name.strip(),
@@ -969,6 +980,7 @@ def create_shift_type(
                 color_hex.strip(),
                 in_time.strip(),
                 out_time.strip(),
+                1 if is_off else 0, # Guardar como entero
             ),
         )
         conn.commit()
@@ -989,6 +1001,7 @@ def update_shift_type(
     color_hex: str,
     in_time: str,
     out_time: str,
+    is_off: bool # Nuevo parámetro
 ) -> Tuple[bool, str, Optional[str], Optional[str]]:
     """
     Actualiza un tipo de turno. Si el código cambia, actualiza TODAS las asignaciones en schedules
@@ -1032,13 +1045,14 @@ def update_shift_type(
 
         # Update shift_types
         cur.execute(
-            "UPDATE shift_types SET name=?, code=?, color_hex=?, in_time=?, out_time=? WHERE id=? AND source=?",
+            "UPDATE shift_types SET name=?, code=?, color_hex=?, in_time=?, out_time=?, is_off=? WHERE id=? AND source=?",
             (
                 name.strip(),
                 new_code,
                 color_hex.strip(),
                 in_time.strip(),
                 out_time.strip(),
+                1 if is_off else 0,
                 type_id,
                 source,
             ),
