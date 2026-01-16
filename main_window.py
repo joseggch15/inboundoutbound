@@ -2099,8 +2099,14 @@ class PlanStaffWidget(QWidget):
             self._is_handling_change = False
 
     # ---------- MODIFIED: hover card logic ----------
+   # ---------- MODIFIED: hover card logic ----------
     def _show_shift_tooltip(self, row: int, col: int):
-        # Ensure row/col are valid
+        """
+        Displays the shift info card.
+        FIX: Hides logistics (Entry/Exit/Pickup/Dropoff) for custom types marked as 'is_off',
+        but keeps their specific Name and Color identity.
+        """
+        # 1. Validation and Setup
         if not (
             0 <= row < len(self._row_identities)
             and 0 <= col < len(self._date_col_dates)
@@ -2113,14 +2119,14 @@ class PlanStaffWidget(QWidget):
             self._shift_info_card.hide()
             return
 
-        # Get the global position of the cell for anchoring the card
+        # Geometry for anchoring
         cell_rect_viewport = self.schedule_table.visualItemRect(item)
         global_top_left = self.schedule_table.viewport().mapToGlobal(
             cell_rect_viewport.topLeft()
         )
         global_cell_rect = QRect(global_top_left, cell_rect_viewport.size())
 
-        # --- Get identifiers from internal state ---
+        # 2. Get Data Identity
         identity = self._row_identities[row]
         badge = identity.get("badge")
         hover_date = self._date_col_dates[col]
@@ -2129,7 +2135,7 @@ class PlanStaffWidget(QWidget):
             self._shift_info_card.hide()
             return
 
-        # --- Fetch live data from DB (SSoT) ---
+        # 3. Fetch SSoT Data
         schedule_data = db.get_schedule_map_for_range(
             badge, hover_date, hover_date, self.source
         )
@@ -2139,13 +2145,9 @@ class PlanStaffWidget(QWidget):
         operations = db.get_operations_filtered(
             text=badge, d_from=hover_date, d_to=hover_date
         )
-
-        # Filter for exact badge match...
+        # Filter and sort operations (newest first)
         valid_ops = [op for op in operations if op.get("badge") == badge]
-
-        # --- FIX: ORDENAR POR ID DESCENDENTE (El más nuevo primero) ---
         valid_ops.sort(key=lambda x: x.get("id", 0), reverse=True)
-
         operation_info = valid_ops[0] if valid_ops else None
 
         if not day_info:
@@ -2153,101 +2155,99 @@ class PlanStaffWidget(QWidget):
             self._shift_info_card.show_info(global_cell_rect, final_html)
             return
 
-        # --- Format data for the card (New compact format) ---
+        # 4. Prepare Logic
         status_code = (day_info.get("status") or "N/A").upper()
         remark = day_info.get("remark")
-
-        # --- BLOQUE A MODIFICAR en _show_shift_tooltip ---
-
-        # Determine Shift Title and Times
+        
         shift_title = status_code
         in_time = day_info.get("in_time")
         out_time = day_info.get("out_time")
+        
+        # --- DETECCIÓN DE "TREAT AS OFF" ---
+        is_custom_off = False
+        custom_color_hex = "#FFFFFF" # Default title color
 
-        # LOGICA NUEVA: Inyectar horarios por defecto para ON / ON NS si no vienen de BD
+        if status_code in self._custom_shift_map:
+            info = self._custom_shift_map[status_code]
+            is_custom_off = info.get("is_off", False)
+            # Opcional: Si quisieras usar el color en el título del tooltip
+            # custom_color_hex = info.get("color_hex", "#FFFFFF")
+
+        # --- LOGICA DE TÍTULOS Y HORARIOS ---
         if status_code == "ON":
             shift_title = "ON (Day Shift)"
-            if not in_time: 
-                # Newmont 06:00, RGM 07:00
-                in_time = "06:00" if self.source == "Newmont" else "07:00"
-            if not out_time:
-                # Newmont 12:00, RGM 07:00
-                out_time = "12:00" if self.source == "Newmont" else "07:00"
+            # Default times logic...
+            if not in_time: in_time = "06:00" if self.source == "Newmont" else "07:00"
+            if not out_time: out_time = "12:00" if self.source == "Newmont" else "07:00"
 
         elif status_code == "ON NS":
             shift_title = "ON NS (Night Shift)"
-            if not in_time:
-                # Newmont 12:00, RGM 07:00
-                in_time = "12:00" if self.source == "Newmont" else "07:00"
-            if not out_time:
-                # Newmont 06:00, RGM 07:00
-                out_time = "06:00" if self.source == "Newmont" else "07:00"
+            if not in_time: in_time = "12:00" if self.source == "Newmont" else "07:00"
+            if not out_time: out_time = "06:00" if self.source == "Newmont" else "07:00"
 
         elif status_code in self._custom_shift_map:
             custom_info = self._custom_shift_map[status_code]
             shift_title = custom_info.get("name", status_code)
-            # Si faltan horas en el día específico, usar las del tipo de turno general
-            if not in_time:
-                in_time = custom_info.get("in_time")
-            if not out_time:
-                out_time = custom_info.get("out_time")
+            
+            # CRÍTICO: Si es 'Treat as OFF', matamos los horarios para que no se muestren
+            if is_custom_off:
+                in_time = None
+                out_time = None
+            else:
+                # Si es un custom normal (Working), llenamos defaults si faltan
+                if not in_time: in_time = custom_info.get("in_time")
+                if not out_time: out_time = custom_info.get("out_time")
 
         elif status_code == "OFF":
             shift_title = "OFF"
+            in_time = None
+            out_time = None
 
-        # Build compact HTML content
-        title_style = "style='margin: 0 0 2px 0; font-size: 14px; color: #FFFFFF; font-weight: 600;'"
+        # 5. Build HTML Content
+        # Usamos un color blanco fuerte para el título para asegurar contraste en el tooltip oscuro
+        title_style = f"style='margin: 0 0 2px 0; font-size: 14px; color: #FFFFFF; font-weight: 600;'"
         schedule_style = "style='margin: 0; font-size: 13px; color: #FFFFFF;'"
 
         content_lines = [f"<p {title_style}>{shift_title}</p>"]
 
-        if in_time and out_time:
+        # Mostrar reloj solo si hay horas Y NO es un día OFF
+        if in_time and out_time and not is_custom_off:
             content_lines.append(f"<p {schedule_style}>⏰ {in_time} – {out_time}</p>")
 
-        # MODIFIED: Add travel dates and exact times from the operation record
-        # MODIFIED: Add travel dates and exact times from the operation record
-        # FIX: Solo mostrar info de viaje si NO es un día OFF
-        if operation_info and status_code != "OFF":
+        # --- LOGICA DE FILTRADO (ENTRY / EXIT) ---
+        # Solo mostrar vuelos si NO es OFF y NO es Custom OFF
+        if operation_info and status_code != "OFF" and not is_custom_off:
             entry_dt_str = operation_info.get("entry_date", "")
             exit_dt_str = operation_info.get("exit_date", "")
 
-            # Check for the presence of time in the string
             if entry_dt_str and exit_dt_str and " " in entry_dt_str:
                 try:
-                    # Parse 'YYYY-MM-DD HH:MM'
                     entry_dt = datetime.strptime(entry_dt_str, "%Y-%m-%d %H:%M")
                     exit_dt = datetime.strptime(exit_dt_str, "%Y-%m-%d %H:%M")
-
-                    entry_date_display = entry_dt.strftime("%Y-%m-%d")
-                    entry_time_display = entry_dt.strftime("%H:%M")
-
-                    exit_date_display = exit_dt.strftime("%Y-%m-%d")
-                    exit_time_display = exit_dt.strftime("%H:%M")
-
+                    
                     travel_html = "<div style='border-top: 1px solid #4B5563; padding-top: 6px; margin-top: 8px;'>"
-                    travel_html += f"<p {schedule_style}>✈️ <b>Entry:</b> {entry_date_display} at {entry_time_display}</p>"
-                    travel_html += f"<p {schedule_style}>✈️ <b>Exit:</b> {exit_date_display} at {exit_time_display}</p>"
+                    travel_html += f"<p {schedule_style}>✈️ <b>Entry:</b> {entry_dt.strftime('%Y-%m-%d %H:%M')}</p>"
+                    travel_html += f"<p {schedule_style}>✈️ <b>Exit:</b> {exit_dt.strftime('%Y-%m-%d %H:%M')}</p>"
                     travel_html += "</div>"
                     content_lines.append(travel_html)
                 except ValueError:
-                    # Fallback if parsing fails, should not happen with new save logic
                     pass
 
-        # Logistic Notes (only if they exist)
+        # --- LOGICA DE FILTRADO (PICKUP / DROP OFF) ---
+        # Solo mostrar logística si NO es OFF y NO es Custom OFF
         pickup_clean = _clean(pickup)
         dropoff_clean = _clean(dropoff)
 
-        if pickup_clean or dropoff_clean:
+        if (pickup_clean or dropoff_clean) and status_code != "OFF" and not is_custom_off:
             logistics_html = "<div style='border-top: 1px solid #4B5563; padding-top: 6px; margin-top: 8px;'>"
             logistics_html += f"<p {schedule_style}>📍 <b>Pick Up:</b> {pickup_clean or 'Not assigned'}</p>"
             logistics_html += f"<p {schedule_style}>📍 <b>Drop Off:</b> {dropoff_clean or 'Not assigned'}</p>"
             logistics_html += "</div>"
             content_lines.append(logistics_html)
 
-        # NEW: Add remarks section
+        # Remarks (Siempre mostrar si existen, incluso en OFF)
         if remark:
             remark_style = "style='margin: 0; font-size: 13px; color: #FFFFFF;'"
-            # Soft yellow background for the remarks block
             remark_block_style = "style='border-top: 1px solid #1565C0; padding-top: 8px; margin-top: 8px;'"
             remark_html = f"<div {remark_block_style}>"
             remark_html += f"<p {remark_style}><b>Remark:</b> {remark}</p>"
@@ -2257,7 +2257,6 @@ class PlanStaffWidget(QWidget):
         html_body = "".join(content_lines)
         final_html = f"<div style='line-height: 1.3;'>{html_body}</div>"
 
-        # Pass the global cell rect to the show_info method to handle positioning
         self._shift_info_card.show_info(global_cell_rect, final_html)
 
     def load_users_to_selector(self):
