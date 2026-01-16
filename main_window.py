@@ -756,7 +756,7 @@ class PlanStaffWidget(QWidget):
     # Emitted after saving a change so the Rotation History tab can refresh
     rotation_changed = pyqtSignal()
 
-    def __init__(self, source: str, excel_file: str, logged_username: str):
+    def __init__(self, source: str, excel_file: str, logged_username: str, preloaded_data=None):
         super().__init__()
         self.source = source  # "RGM" | "Newmont"
         self.excel_file = excel_file
@@ -765,6 +765,7 @@ class PlanStaffWidget(QWidget):
         self._last_excel_mtime = None
         self._missing_prompt_shown = False
         self._custom_shift_map = db.get_shift_type_map(self.source)
+        self._initial_preloaded_df = preloaded_data
 
         # For REQ-001 tracking
         self._loading_preview = False
@@ -939,7 +940,7 @@ class PlanStaffWidget(QWidget):
         self.schedule_table.viewport().installEventFilter(self)
 
         # Initial data load
-        self.refresh_ui_data()
+        self.refresh_ui_data(use_preloaded=True)
 
         # --- File monitor: detect moved/deleted/renamed file ---
         self.file_watch_timer = QTimer(self)
@@ -1272,39 +1273,54 @@ class PlanStaffWidget(QWidget):
         self.pickup_combo.blockSignals(False)
         self.dropoff_combo.blockSignals(False)
 
-    def load_schedule_data(self):
-        df = excel.get_schedule_preview(self.excel_file)
+    def refresh_ui_data(self, use_preloaded=False):
+        self.load_shift_type_options()
+        self.load_schedule_data(use_preloaded=use_preloaded) # Pasar la bandera
+        self.load_users_to_selector()
+        self.load_location_options()  # keep combos in sync with Location admin
+        self.remarks_input.clear()  # Clear remarks on refresh
+
+    # [CAMBIO 5] Lógica crítica para usar los datos en memoria
+    def load_schedule_data(self, use_preloaded=False):
+        # -------------------------------------------------------------
+        # LÓGICA DE PRE-CARGA (WORKER THREAD)
+        # -------------------------------------------------------------
+        df = None
+        if use_preloaded and hasattr(self, '_initial_preloaded_df') and self._initial_preloaded_df is not None:
+            # Si venimos del login y tenemos datos, los usamos y limpiamos la variable
+            print("DEBUG: Using preloaded dataframe (High Performance Mode).")
+            df = self._initial_preloaded_df
+            self._initial_preloaded_df = None 
+        else:
+            # Si es una recarga manual o la precarga ya se usó, leemos del disco
+            df = excel.get_schedule_preview(self.excel_file)
+        # -------------------------------------------------------------
+
         self._loading_preview = True
         self._cell_original_values.clear()
         self._row_identities.clear()
         self._date_col_dates.clear()
 
-        if df.empty:
+        # Si el DF es None o vacío (fichero nuevo o error), limpiamos tabla y salimos
+        if df is None or df.empty:
             self.frozen_table.clear()
             self.schedule_table.clear()
             self.frozen_table.setRowCount(0)
             self.schedule_table.setRowCount(0)
             self._loading_preview = False
             return
-        """
-        Loads data from Excel + DB into the table widget.
-        Uses a helper thread to avoid freezing UI (conceptually).
-        """
-        # --- NUEVO: HORIZONTE MÓVIL AUTOMÁTICO ---
-        # Antes de cargar nada, aseguramos que el Excel tenga las columnas futuras
-        # según la fecha de hoy.
-        try:
-            ok_horizon, msg_horizon = excel.ensure_rolling_horizon_columns(
-                self.excel_file
-            )
-            if ok_horizon:
-                print(f"[AUTO-HORIZON] {msg_horizon}")  # Log de consola
-                # Opcional: Mostrar mensaje no intrusivo en barra de estado si existiera
-            elif "Error" in msg_horizon:
-                print(f"[AUTO-HORIZON ERROR] {msg_horizon}")
-        except Exception as e:
-            print(f"[AUTO-HORIZON CRITICAL] Failed: {e}")
-        # -------------------------------------------
+
+        # NOTA: El bloque "AUTO-HORIZON" original lo saltamos si usamos precarga
+        # porque el Worker ya validó el archivo. Solo lo ejecutamos si leemos de disco.
+        if not use_preloaded:
+            try:
+                ok_horizon, msg_horizon = excel.ensure_rolling_horizon_columns(
+                    self.excel_file
+                )
+                if ok_horizon:
+                    print(f"[AUTO-HORIZON] {msg_horizon}")
+            except Exception as e:
+                print(f"[AUTO-HORIZON CRITICAL] Failed: {e}")
 
         # color mapping for custom codes
         custom_map = db.get_shift_type_map(self.source)
@@ -2779,9 +2795,9 @@ class PlanStaffWidget(QWidget):
                 f"PLAN_EXPORT -> {dest_path}",
             )
 
-    def refresh_ui_data(self):
+    def refresh_ui_data(self, use_preloaded=False):
         self.load_shift_type_options()
-        self.load_schedule_data()
+        self.load_schedule_data(use_preloaded=use_preloaded) # Pasar la bandera
         self.load_users_to_selector()
         self.load_location_options()  # keep combos in sync with Location admin
         self.remarks_input.clear()  # Clear remarks on refresh
@@ -4118,6 +4134,7 @@ class MainWindow(QMainWindow):
         excel_file,
         logged_username=None,
         can_manage_shift_types: bool = False,
+        preloaded_data=None # [CAMBIO 6] Nuevo argumento opcional
     ):
         super().__init__()
         self.user_role = user_role  # RGM or Newmont. Used as 'source'
@@ -4172,8 +4189,12 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(tabs)
 
         # 1) Plan Staff (preview/register/reports)
+        # [CAMBIO 7] Pasamos el preloaded_data al widget
         self.plan_widget = PlanStaffWidget(
-            self.user_role, self.excel_file, self.logged_username
+            self.user_role, 
+            self.excel_file, 
+            self.logged_username,
+            preloaded_data=preloaded_data 
         )
         tabs.addTab(self.plan_widget, "📅 Plan Staff & Reports")
 
