@@ -1,217 +1,204 @@
 # ui/theme.py
-# Full UI theme with palette, including warn_50 for soft warning highlights.
-# Based on the original theme module and extended to add the pale warning color. :contentReference[oaicite:0]{index=0}
 
-from __future__ import annotations
-import platform
-from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import QApplication, QWidget
+from PyQt6.QtGui import QPalette, QColor
+from PyQt6.QtWidgets import QWidget
+from PyQt6.QtCore import Qt
 
-# ---------- Palette ----------
-PALETTE = {
-    # Primary
-    "primary_700": "#1565C0",
-    "primary_600": "#1E88E5",
-    "primary_800": "#0D47A1",
-    "primary_50": "#E3F2FD",
-    "primary_txt_on": "#FFFFFF",
-    # Accent (CTA)
-    "accent_700": "#F57C00",
-    # Semantic
-    "success_600": "#2E7D32",
-    "error_600": "#C62828",
-    "error_50": "#FFEBEE",
-    "warn_600": "#ED6C02",
-    "warn_50": "#FFFBEA",  # NEW: pale warning used to highlight OFF→ON changes
-    "info_600": "#0288D1",
-    # Neutrals / Surfaces
-    "neutral_900": "#111827",
-    "neutral_700": "#374151",
-    "neutral_600": "#4B5563",
-    "neutral_500": "#6B7280",
-    "neutral_400": "#9CA3AF",
-    "neutral_300": "#D1D5DB",
-    "neutral_200": "#E5E7EB",
-    "neutral_100": "#F3F4F6",
-    "neutral_50": "#F9FAFB",
-    "panel_bg": "#F5F7FA",
-    "white": "#FFFFFF",
-}
+# ==========================================
+# PALETA DE COLORES MODERNA (Estilo SaaS)
+# ==========================================
+class ModernPalette:
+    # Colores Primarios (Marca/Acción)
+    PRIMARY_MAIN = "#2563EB"    # Azul intenso
+    PRIMARY_HOVER = "#1D4ED8"   # Azul más oscuro
+    PRIMARY_TEXT = "#FFFFFF"    # Texto sobre primario
 
-SPACING = 8  # 8px grid
+    # Colores de Superficie y Fondo
+    BACKGROUND_APP = "#F1F5F9"  # Gris muy claro fondo app
+    SURFACE_MAIN = "#FFFFFF"    # Blanco puro paneles
+    SURFACE_HOVER = "#F8FAFC"   # Blanco hueso
+    
+    # Texto y Bordes
+    TEXT_PRIMARY = "#1E293B"    # Gris oscuro
+    TEXT_SECONDARY = "#64748B"  # Gris medio
+    BORDER_LIGHT = "#E2E8F0"    # Gris claro bordes
+    BORDER_FOCUS = PRIMARY_MAIN 
+    BORDER_SECONDARY_HOVER = "#CBD5E1" 
 
+    # Estados
+    SUCCESS = "#22C55E"
+    DANGER = "#EF4444"
+    WARNING = "#F59E0B"
 
-def _base_font() -> QFont:
-    system = platform.system()
-    family = (
-        "Segoe UI"
-        if system == "Windows"
-        else ("SF Pro Text" if system == "Darwin" else "Sans Serif")
-    )
-    return QFont(family, 10)
+    # Componentes
+    TABLE_HEADER_BG = "#F8FAFC"
+    INPUT_BG_READONLY = "#F1F5F9"
 
+# ==========================================
+# HOJA DE ESTILOS GLOBAL (QSS)
+# ==========================================
+MODERN_STYLESHEET = f"""
+    /* --- APLICACIÓN GLOBAL --- */
+    QWidget {{
+        color: {ModernPalette.TEXT_PRIMARY};
+        font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+        font-size: 12px;
+    }}
 
-def apply_app_theme(app: QApplication) -> None:
-    """Apply base font and the global QSS sheet."""
-    app.setFont(_base_font())
-    app.setStyleSheet(build_qss())
+    QMainWindow, QDialog {{
+        background-color: {ModernPalette.BACKGROUND_APP};
+    }}
+    
+    QTabWidget::pane {{
+        border: 1px solid {ModernPalette.BORDER_LIGHT};
+        background: {ModernPalette.SURFACE_MAIN};
+        border-radius: 4px;
+    }}
 
+    /* --- INPUTS --- */
+    QLineEdit, QComboBox, QDateEdit, QTimeEdit {{
+        background-color: {ModernPalette.SURFACE_MAIN};
+        border: 1px solid {ModernPalette.BORDER_LIGHT};
+        border-radius: 4px;
+        padding: 4px 8px;
+        min-height: 22px;
+    }}
 
-def mark_error(widget: QWidget, on: bool) -> None:
-    """Add/remove an error visual state (red border + subtle background)."""
-    widget.setProperty("hasError", bool(on))
-    widget.style().unpolish(widget)
-    widget.style().polish(widget)
-    widget.update()
+    QLineEdit:focus, QComboBox:focus, QDateEdit:focus, QTimeEdit:focus {{
+        border: 1px solid {ModernPalette.BORDER_FOCUS};
+    }}
 
+    QLineEdit[readOnly="true"], QLineEdit:disabled, QComboBox:disabled {{
+        background-color: {ModernPalette.INPUT_BG_READONLY};
+        color: {ModernPalette.TEXT_SECONDARY};
+        border-color: {ModernPalette.BORDER_LIGHT};
+    }}
 
-def build_qss() -> str:
-    p = PALETTE
-    return f"""
-/* ---------- Base ---------- */
-* {{
-  font-family: "{_base_font().family()}", "Segoe UI", "SF Pro Text", sans-serif;
-  color: {p['neutral_900']};
-}}
-QWidget {{
-  background: {p['neutral_50']};
-}}
-QGroupBox {{
-  background: {p['panel_bg']};
-  border: 1px solid {p['neutral_200']};
-  border-radius: 6px;
-  margin-top: 16px;
-}}
-QGroupBox::title {{
-  subcontrol-origin: margin;
-  subcontrol-position: top left;
-  padding: 0 8px;
-  margin-left: 6px;
-  color: {p['neutral_700']};
-  font-weight: 600;
-}}
+    QComboBox::drop-down {{
+        subcontrol-origin: padding;
+        subcontrol-position: top right;
+        width: 20px;
+        border-left-width: 0px;
+    }}
 
-/* ---------- Tabs ---------- */
-QTabWidget::pane {{
-  border: 1px solid {p['neutral_200']};
-  border-radius: 6px;
-  top: -2px;
-  background: {p['white']};
-}}
-QTabBar::tab {{
-  background: {p['neutral_100']};
-  color: {p['neutral_700']};
-  padding: 8px 12px;
-  margin-right: 2px;
-  border-top-left-radius: 6px;
-  border-top-right-radius: 6px;
-}}
-QTabBar::tab:selected {{
-  background: {p['white']};
-  color: {p['neutral_900']};
-  border: 1px solid {p['neutral_200']};
-  border-bottom-color: {p['white']};
-}}
-QTabBar::tab:hover {{
-  background: {p['neutral_100']};
-}}
+    /* --- BOTONES --- */
+    QPushButton {{
+        background-color: {ModernPalette.SURFACE_MAIN};
+        border: 1px solid {ModernPalette.BORDER_LIGHT};
+        border-radius: 4px;
+        padding: 5px 12px;
+        font-weight: 600;
+        color: {ModernPalette.TEXT_PRIMARY};
+    }}
+    QPushButton:hover {{
+        background-color: {ModernPalette.SURFACE_HOVER};
+        border-color: {ModernPalette.BORDER_SECONDARY_HOVER};
+    }}
+    QPushButton:pressed {{
+        background-color: {ModernPalette.BORDER_LIGHT};
+    }}
 
-/* ---------- Inputs ---------- */
-QLineEdit, QComboBox, QDateEdit, QTimeEdit {{
-  background: {p['white']};
-  border: 1px solid {p['neutral_300']};
-  border-radius: 6px;
-  padding: 6px 8px;
-}}
-QLineEdit:focus, QComboBox:focus, QDateEdit:focus, QTimeEdit:focus {{
-  border: 1px solid {p['primary_700']};
-}}
-QLineEdit[hasError="true"], QComboBox[hasError="true"], QDateEdit[hasError="true"], QTimeEdit[hasError="true"] {{
-  border: 1px solid {p['error_600']};
-  background: {p['error_50']};
-}}
-QComboBox::drop-down {{
-  border: 0px;
-  width: 20px;
-  margin-right: 4px;
-}}
-QComboBox QAbstractItemView {{
-  background: {p['white']};
-  border: 1px solid {p['neutral_300']};
-  selection-background-color: {p['primary_50']};
-  selection-color: {p['neutral_900']};
-}}
+    QPushButton[variant="primary"] {{
+        background-color: {ModernPalette.PRIMARY_MAIN};
+        color: {ModernPalette.PRIMARY_TEXT};
+        border: 1px solid {ModernPalette.PRIMARY_MAIN};
+    }}
+    QPushButton[variant="primary"]:hover {{
+        background-color: {ModernPalette.PRIMARY_HOVER};
+        border-color: {ModernPalette.PRIMARY_HOVER};
+    }}
 
-/* ---------- Buttons ---------- */
-QPushButton {{
-  background: {p['neutral_100']};
-  border: 1px solid {p['neutral_300']};
-  border-radius: 6px;
-  padding: 6px 12px;
-}}
-QPushButton:disabled {{
-  color: {p['neutral_400']};
-  background: {p['neutral_100']};
-}}
-QPushButton[variant="primary"] {{
-  background: {p['primary_700']};
-  border: 1px solid {p['primary_700']};
-  color: {p['primary_txt_on']};
-}}
-QPushButton[variant="primary"]:hover {{ background: {p['primary_600']}; }}
-QPushButton[variant="primary"]:pressed {{ background: {p['primary_800']}; }}
+    QPushButton[variant="text"] {{
+        background-color: transparent;
+        border: none;
+        color: {ModernPalette.TEXT_SECONDARY};
+        padding: 4px 8px;
+    }}
+    QPushButton[variant="text"]:hover {{
+        background-color: {ModernPalette.BORDER_LIGHT};
+        color: {ModernPalette.TEXT_PRIMARY};
+    }}
 
-QPushButton[variant="secondary"] {{
-  background: {p['neutral_100']};
-  border: 1px solid {p['neutral_300']};
-  color: {p['neutral_900']};
-}}
-QPushButton[variant="secondary"]:hover {{ border-color: {p['neutral_400']}; }}
-QPushButton[variant="secondary"]:pressed {{ background: {p['neutral_200']}; }}
+    /* --- TABLAS --- */
+    QTableWidget {{
+        background-color: {ModernPalette.SURFACE_MAIN};
+        border: 1px solid {ModernPalette.BORDER_LIGHT};
+        gridline-color: {ModernPalette.BORDER_LIGHT};
+        selection-background-color: {ModernPalette.PRIMARY_MAIN}33; 
+        selection-color: {ModernPalette.TEXT_PRIMARY};
+        alternate-background-color: {ModernPalette.BACKGROUND_APP};
+    }}
 
-QPushButton[variant="accent"] {{
-  background: {p['accent_700']};
-  border: 1px solid {p['accent_700']};
-  color: {p['white']};
-}}
-QPushButton[variant="text"] {{
-  background: transparent;
-  border: none;
-  color: {p['primary_700']};
-  padding: 6px 8px;
-}}
-QPushButton[danger="true"] {{
-  background: {p['error_600']};
-  border-color: {p['error_600']};
-  color: {p['white']};
-}}
+    QHeaderView::section {{
+        background-color: {ModernPalette.TABLE_HEADER_BG};
+        color: {ModernPalette.TEXT_SECONDARY};
+        padding: 6px;
+        border: none;
+        border-bottom: 1px solid {ModernPalette.BORDER_LIGHT};
+        border-right: 1px solid {ModernPalette.BORDER_LIGHT};
+        font-weight: 700;
+        font-size: 11px;
+        text-transform: uppercase;
+    }}
+    
+    QTableCornerButton::section {{
+        background-color: {ModernPalette.TABLE_HEADER_BG};
+        border: none;
+    }}
 
-/* ---------- Tables ---------- */
-QHeaderView::section {{
-  background: {p['white']};
-  color: {p['neutral_700']};
-  padding: 6px 8px;
-  border: 1px solid {p['neutral_200']};
-  font-weight: 600;
-}}
-
-/* Custom Header Styles for Schedule Preview */
-QHeaderView#fixedHeaders::section, QHeaderView#dateHeaders::section {{
-  background-color: {p['primary_700']};
-  color: {p['primary_txt_on']};
-  border: none;
-  border-right: 1px solid {p['white']};
-  padding: 8px;
-  font-weight: 600;
-}}
-
-QTableWidget {{
-  gridline-color: {p['neutral_200']};
-  selection-background-color: {p['primary_50']};
-  selection-color: {p['neutral_900']};
-  alternate-background-color: {p['neutral_100']};
-}}
-QTableWidget::item {{
-  padding: 2px;
-}}
+    /* --- OTROS --- */
+    QGroupBox {{
+        border: 1px solid {ModernPalette.BORDER_LIGHT};
+        border-radius: 6px;
+        margin-top: 20px;
+        background-color: {ModernPalette.SURFACE_MAIN};
+    }}
+    QGroupBox::title {{
+        subcontrol-origin: margin;
+        subcontrol-position: top left;
+        padding: 0 5px;
+        color: {ModernPalette.TEXT_PRIMARY};
+        font-weight: 700;
+    }}
+    
+    QLabel[role="sectionTitle"] {{
+         font-size: 11px;
+         font-weight: 800;
+         color: {ModernPalette.TEXT_SECONDARY};
+         text-transform: uppercase;
+         letter-spacing: 0.5px;
+    }}
 """
+
+# AQUÍ ESTABA EL ERROR DE NOMBRE:
+def apply_app_theme(app):  # <-- Renombrado a apply_app_theme
+    """Aplica la paleta y la hoja de estilos moderna."""
+    app.setStyle("Fusion")
+
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(ModernPalette.BACKGROUND_APP))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(ModernPalette.TEXT_PRIMARY))
+    palette.setColor(QPalette.ColorRole.Base, QColor(ModernPalette.SURFACE_MAIN))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(ModernPalette.BACKGROUND_APP))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(ModernPalette.TEXT_PRIMARY))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(ModernPalette.SURFACE_MAIN))
+    palette.setColor(QPalette.ColorRole.Text, QColor(ModernPalette.TEXT_PRIMARY))
+    palette.setColor(QPalette.ColorRole.Button, QColor(ModernPalette.SURFACE_MAIN))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(ModernPalette.TEXT_PRIMARY))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(ModernPalette.DANGER))
+    palette.setColor(QPalette.ColorRole.Link, QColor(ModernPalette.PRIMARY_MAIN))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(ModernPalette.PRIMARY_MAIN))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(ModernPalette.PRIMARY_TEXT))
+
+    app.setPalette(palette)
+    app.setStyleSheet(MODERN_STYLESHEET)
+
+# FUNCIONES AUXILIARES NECESARIAS
+def mark_error(widget: QWidget):
+    widget.setStyleSheet(f"border: 1px solid {ModernPalette.DANGER}; background-color: #FEF2F2;")
+
+def mark_success(widget: QWidget):
+    widget.setStyleSheet(f"border: 1px solid {ModernPalette.SUCCESS}; background-color: #F0FDF4;")
+
+def mark_normal(widget: QWidget):
+    widget.setStyleSheet("")
