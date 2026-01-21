@@ -972,122 +972,143 @@ class PlanStaffWidget(QWidget):
     def _build_registration_form(self) -> QWidget:
         container = QWidget()
         self.main_form_layout = QVBoxLayout(container)
+        
+        # 1. MODIFICACIÓN: Márgenes mínimos y espaciado reducido
+        self.main_form_layout.setContentsMargins(2, 4, 2, 2)
+        self.main_form_layout.setSpacing(4) 
 
-        # Controls
+        # --- Inicialización de controles (Lógica original intacta) ---
         self.user_selector_combo = QComboBox()
         self.user_selector_combo.currentIndexChanged.connect(self.autofill_user_data)
+        self.user_selector_combo.setFixedHeight(26) # Altura forzada compacta
 
         self.role_display = QLineEdit()
         self.role_display.setReadOnly(True)
+        self.role_display.setStyleSheet("background-color: #F3F4F6; color: #6B7280;")
+        self.role_display.setFixedHeight(26)
 
         self.badge_display = QLineEdit()
         self.badge_display.setReadOnly(True)
+        self.badge_display.setStyleSheet("background-color: #F3F4F6; color: #6B7280;")
+        self.badge_display.setFixedHeight(26)
 
         self.status_selector = QComboBox()
+        self.status_selector.setFixedHeight(26)
 
         self.start_date_edit = QDateEdit(QDate.currentDate())
         self.start_date_edit.setCalendarPopup(True)
         self.start_date_edit.setDisplayFormat("dd/MM/yyyy")
+        self.start_date_edit.setFixedHeight(26)
 
         self.end_date_edit = QDateEdit(QDate.currentDate().addDays(7))
         self.end_date_edit.setCalendarPopup(True)
         self.end_date_edit.setDisplayFormat("dd/MM/yyyy")
+        self.end_date_edit.setFixedHeight(26)
 
-        # NEW: location dropdowns
         self.pickup_combo = QComboBox()
+        self.pickup_combo.setFixedHeight(26)
         self.dropoff_combo = QComboBox()
-        self.remark_edit = QLineEdit()
-
-        self.apply_to_range_chk = QCheckBox("Apply to all selected cells to the right")
-
-        # NEW: remarks input
+        self.dropoff_combo.setFixedHeight(26)
+        
         self.remarks_input = QLineEdit()
-        self.remarks_input.setPlaceholderText("Optional: add a note for this period...")
+        self.remarks_input.setPlaceholderText("Optional remarks...")
+        self.remarks_input.setFixedHeight(26)
 
-        # Restored blue Save button (center action bar)
-        self.save_button = QPushButton("💾 Save Changes to DB Excel")
+        # Checkbox auxiliar lógico (mantenido pero oculto)
+        self.apply_to_range_chk = QCheckBox("Apply to all selected cells")
+        self.apply_to_range_chk.setVisible(False)
+
+        # 2. MODIFICACIÓN: Botón más compacto
+        self.save_button = QPushButton("💾 Save Changes") 
         self.save_button.clicked.connect(self.save_plan_changes)
         self.save_button.setProperty("variant", "primary")
+        self.save_button.setFixedSize(120, 28) # Tamaño fijo y pequeño
 
-        # NEW: Separate travel dates controls
-        self.travel_dates_check = QCheckBox(
-            "Travel dates are different from work period"
-        )
+        # Toggle de fechas de viaje
+        self.travel_dates_check = QCheckBox("Travel dates ≠ Work period")
         self.travel_dates_check.toggled.connect(self._toggle_travel_dates_visibility)
+        self.travel_dates_check.setStyleSheet("font-size: 11px;")
 
+        # --- Contenedor de Viaje (Entry/Exit) ---
         self.entry_date_edit = QDateEdit(QDate.currentDate())
         self.entry_date_edit.setCalendarPopup(True)
-        self.entry_date_edit.setDisplayFormat("dd/MM/yyyy")
-
-        # MODIFIED: Add time input for entry
+        self.entry_date_edit.setDisplayFormat("dd/MM")
         self.entry_time_edit = QTimeEdit(QTime(6, 0))
         self.entry_time_edit.setDisplayFormat("HH:mm")
 
         self.exit_date_edit = QDateEdit(QDate.currentDate().addDays(14))
         self.exit_date_edit.setCalendarPopup(True)
-        self.exit_date_edit.setDisplayFormat("dd/MM/yyyy")
-
-        # MODIFIED: Add time input for exit
+        self.exit_date_edit.setDisplayFormat("dd/MM")
         self.exit_time_edit = QTimeEdit(QTime(18, 0))
         self.exit_time_edit.setDisplayFormat("HH:mm")
 
         self._travel_dates_container = QWidget()
+        self._travel_dates_container.setStyleSheet("background-color: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 4px;")
         travel_layout = QHBoxLayout(self._travel_dates_container)
-        travel_layout.setContentsMargins(0, 0, 0, 0)
-        travel_layout.addWidget(QLabel("Entry Date:"))
+        travel_layout.setContentsMargins(4, 2, 4, 2)
+        travel_layout.setSpacing(6)
+        
+        # Widgets de viaje en una sola línea compacta
+        travel_layout.addWidget(QLabel("IN:"))
         travel_layout.addWidget(self.entry_date_edit)
-        travel_layout.addWidget(QLabel("Time:"))
         travel_layout.addWidget(self.entry_time_edit)
-        travel_layout.addSpacing(20)
-        travel_layout.addWidget(QLabel("Exit Date:"))
+        travel_layout.addWidget(QLabel("|"))
+        travel_layout.addWidget(QLabel("OUT:"))
         travel_layout.addWidget(self.exit_date_edit)
-        travel_layout.addWidget(QLabel("Time:"))
         travel_layout.addWidget(self.exit_time_edit)
         travel_layout.addStretch()
+        
         self._travel_dates_container.setVisible(False)
 
-        # Field containers (label on top)
+        # 3. MODIFICACIÓN: Helper 'field' optimizado para altura mínima
         def field(title: str, w: QWidget) -> QWidget:
             cont = QWidget()
             v = QVBoxLayout(cont)
             v.setContentsMargins(0, 0, 0, 0)
-            v.setSpacing(4)
+            v.setSpacing(0) # Pegar etiqueta al input
+            
             lbl = QLabel(title)
+            # Fuente pequeña para ahorrar espacio vertical
+            lbl.setStyleSheet("font-size: 10px; color: #4B5563; font-weight: 700; margin-bottom: 1px;")
+            
             v.addWidget(lbl)
             v.addWidget(w)
             return cont
 
+        # Array de campos (CRÍTICO: Mantiene la lógica de redimensionado)
         self._fields = [
-            field("Select Employee", self.user_selector_combo),
-            field("Role / Department", self.role_display),
-            field("Badge (ID)", self.badge_display),
+            field("Employee", self.user_selector_combo),
+            field("Role / Dept", self.role_display),
+            field("Badge ID", self.badge_display),
             field("Status / Shift", self.status_selector),
-            field("Period Start Date", self.start_date_edit),
-            field("Period End Date", self.end_date_edit),
-            field("Pick Up Location", self.pickup_combo),
-            field("Drop Off Location", self.dropoff_combo),
+            field("Start Date", self.start_date_edit),
+            field("End Date", self.end_date_edit),
+            field("Pick Up", self.pickup_combo),
+            field("Drop Off", self.dropoff_combo),
             field("Remarks", self.remarks_input),
         ]
 
-        # Base grid (we will re-pack it responsively in _rebuild_registration_grid)
+        # Grid layout base
         self._register_grid = QGridLayout()
-        self._register_grid.setContentsMargins(8, 6, 8, 6)
-        self._register_grid.setHorizontalSpacing(12)
-        self._register_grid.setVerticalSpacing(10)
+        self._register_grid.setContentsMargins(0, 0, 0, 0)
+        self._register_grid.setHorizontalSpacing(8)
+        self._register_grid.setVerticalSpacing(2) # Espacio vertical mínimo entre filas
+        
         self.main_form_layout.addLayout(self._register_grid)
 
-        # Add new travel date controls after the grid
-        self.main_form_layout.addWidget(self.travel_dates_check)
+        # 4. MODIFICACIÓN: Fila inferior unificada (Checkbox + Botón en la misma línea)
+        bottom_row = QHBoxLayout()
+        bottom_row.setContentsMargins(0, 4, 0, 0)
+        bottom_row.setSpacing(10)
+        
+        bottom_row.addWidget(self.travel_dates_check)
+        bottom_row.addStretch()
+        bottom_row.addWidget(self.save_button) # Botón a la derecha, misma fila
+        
+        # El contenedor de viaje va ANTES de la fila inferior para no romper la alineación
         self.main_form_layout.addWidget(self._travel_dates_container)
+        self.main_form_layout.addLayout(bottom_row)
 
-        # Save bar (full width)
-        self._save_bar = QHBoxLayout()
-        self._save_bar.addStretch()
-        self._save_bar.addWidget(self.save_button)
-        self._save_bar.addStretch()
-        self.main_form_layout.addLayout(self._save_bar)
-
-        # Load options (base + custom)
         self.load_shift_type_options()
 
         return container
