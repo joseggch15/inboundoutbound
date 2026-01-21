@@ -887,7 +887,7 @@ class PlanStaffWidget(QWidget):
 
         # --- Register Employee Schedule (compact, multi-column, collapsible) ---
         self.registration_section = CollapsibleGroupBox(
-            "1. Register Employee Schedule (DB is SSoT)", collapsed=False
+            "1. Register Employee Schedule (DB is SSoT)", collapsed=True
         )
         register_layout = self._build_registration_form()
         self.registration_section.setContentWidget(register_layout)
