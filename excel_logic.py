@@ -1361,7 +1361,6 @@ def generate_rgm_transport_report(
         from database_logic import get_shift_type_map, get_user_location_for_date, get_all_operations
         custom_map = {k.strip().upper(): v for k, v in get_shift_type_map("RGM").items()}
         ops_by_badge = {}
-        # Cargar operaciones ordenadas (últimas primero) para que la más reciente tenga prioridad
         for op in get_all_operations():
             b = op.get("badge")
             if b: ops_by_badge.setdefault(b, []).append(op)
@@ -1407,7 +1406,6 @@ def generate_rgm_transport_report(
             try:
                 s = datetime.fromisoformat(op["start_date"]).date()
                 e = datetime.fromisoformat(op["end_date"]).date()
-                # Encontrar operación que cubra la fecha 'd'
                 if s <= d <= e: return op
             except: continue
         return None
@@ -1447,8 +1445,6 @@ def generate_rgm_transport_report(
             if not _is_working(st_prev):
                 entry_date = d
                 entry_time = _get_transport_time_str(st_d, "IN", cmt_d, custom_map, "RGM")
-                
-                # Check DB override para entrada
                 if op and op.get("entry_date"):
                     try:
                         dt = datetime.strptime(op["entry_date"], "%Y-%m-%d %H:%M")
@@ -1465,19 +1461,48 @@ def generate_rgm_transport_report(
 
             # --- OUTBOUND ---
             if not _is_working(st_next):
-                # 1. Definir fecha por defecto (Regla RGM: d + 1)
-                # Esta es la base si no hay nada en DB.
-                final_outbound_date = d + timedelta(days=1)
-                final_outbound_time = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map, "RGM")
+                # 1. Definimos la fecha "Estándar" (+1 día) y hora estándar
+                standard_next_day = d + timedelta(days=1)
+                standard_out_time_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map, "RGM")
+                
+                final_outbound_date = standard_next_day
+                final_outbound_time = standard_out_time_str
 
-                # 2. Verificar Override en BD (PRIORIDAD ABSOLUTA)
-                # Si existe un registro en la tabla operations, LO USAMOS.
-                # Ya no comparamos si db_date != d. Simplemente confiamos en la BD.
+                # 2. Verificamos la BD (Heurística Inteligente)
                 if op and op.get("exit_date"):
                     try:
                         dt = datetime.strptime(op["exit_date"], "%Y-%m-%d %H:%M")
-                        final_outbound_date = dt.date() # Fecha exacta de la BD (ej. 28 de Enero)
-                        final_outbound_time = dt.strftime("%H:%M:%S") # Hora exacta de la BD (ej. 16:00:00)
+                        db_date = dt.date()
+                        db_time_str = dt.strftime("%H:%M:%S")
+                        
+                        # --- ANÁLISIS DE CASO ---
+                        # A) Caso Manual (Ej. 28 de Enero a las 16:00)
+                        #    - La hora (16:00) es DIFERENTE a la hora estándar (07:00).
+                        #    - O la fecha es DIFERENTE a la del turno 'd'.
+                        #    -> RESPETAMOS LA BD.
+                        
+                        # B) Caso Sucio/Automático (Ej. 19 de Enero a las 07:00)
+                        #    - La fecha es IGUAL a 'd' (19 == 19).
+                        #    - Y la hora es IGUAL a la estándar (07:00 == 07:00).
+                        #    -> LO IGNORAMOS (Usamos standard_next_day).
+
+                        is_manual_override = False
+                        
+                        # Si la fecha es distinta a 'd', seguro es manual.
+                        if db_date != d:
+                            is_manual_override = True
+                        else:
+                            # Si la fecha es igual a 'd', solo es manual si CAMBIÓ LA HORA.
+                            # Comparamos solo HH:MM para evitar problemas de segundos.
+                            std_hm = standard_out_time_str[:5] # "07:00"
+                            db_hm = db_time_str[:5]            # "16:00" o "07:00"
+                            if db_hm != std_hm:
+                                is_manual_override = True
+                        
+                        if is_manual_override:
+                            final_outbound_date = db_date
+                            final_outbound_time = db_time_str
+                            
                     except: pass
 
                 _, do = get_user_location_for_date(badge, d)
@@ -1514,7 +1539,6 @@ def generate_rgm_transport_report(
     workbook.close()
     output.seek(0)
     return output.read(), "RGM Transportation report generated."
-
 
 # ============================================================
 # Utilidad: Propagar cambios de código/color a Excel (inmediato)
