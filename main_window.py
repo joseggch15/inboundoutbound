@@ -1592,11 +1592,11 @@ class PlanStaffWidget(QWidget):
         """
         Excel-style Fill Right: Copia la celda izquierda (ancla) hacia la derecha.
         
-        CORRECCIÓN CRÍTICA: 
+        CORRECCIÓN APLICADA: 
         1. Itera sobre rangos para arreglar el bug de selección.
         2. IMPONE las reglas de horario de Newmont/RGM (Business Logic Hardcoded).
-           Esto soluciona el problema donde 'ON' aparecía con horas incorrectas (13:00)
-           forzando 06:00-12:00 para Newmont Día.
+        3. FIX OFF-BY-ONE: La operación logística se registra desde el día ANCLA (inicio selección)
+           para que el "Entry Date" sea correcto (ej. del 21 al 25, no del 22 al 25).
         """
         # 1. Obtener rangos seleccionados
         selected_ranges = self.schedule_table.selectedRanges()
@@ -1652,12 +1652,16 @@ class PlanStaffWidget(QWidget):
                     raw_in_time = source_info.get("in_time")
                     raw_out_time = source_info.get("out_time")
 
-                    # Definir fechas del rango destino (donde vamos a pegar)
+                    # [CORRECCIÓN DE FECHAS]
+                    # Rango visual (donde pintamos): desde la siguiente columna (left_col + 1)
                     start_fill_date = self._date_col_dates[left_col + 1]
                     end_fill_date = self._date_col_dates[right_col]
+                    
+                    # Rango Lógico (Operación): INCLUYE el día ancla (left_col)
+                    # Esto arregla que el "Entry" salga el día 22 cuando arrastras desde el 21.
+                    operation_start_date = self._date_col_dates[left_col]
 
                     # --- C. REGLA DE NEGOCIO: Determinación de Horarios (FIX 13:00 -> 06:00) ---
-                    # Aquí es donde forzamos la corrección de horas según el Proyecto y el Status
                     from datetime import datetime, time as dtime
                     
                     final_in_obj = None
@@ -1678,8 +1682,7 @@ class PlanStaffWidget(QWidget):
                             final_in_obj = dtime(7, 0)
                             final_out_obj = dtime(7, 0)
 
-                    # 3. Si no es un status base hardcoded, usar lo que venga de la DB (Custom Shifts)
-                    # o mantener lo que tenía la celda de origen
+                    # 3. Si no es un status base hardcoded, usar lo que venga de la DB o default
                     if final_in_obj is None:
                         # Fallback default
                         def_in = dtime(0, 0)
@@ -1691,7 +1694,7 @@ class PlanStaffWidget(QWidget):
                     new_in_time_str = final_in_obj.strftime("%H:%M")
                     new_out_time_str = final_out_obj.strftime("%H:%M")
 
-                    # --- D. Actualizar UI Visualmente ---
+                    # --- D. Actualizar UI Visualmente (Solo las celdas nuevas) ---
                     for c in range(left_col + 1, right_col + 1):
                         item = self.schedule_table.item(r, c)
                         if not item:
@@ -1705,35 +1708,36 @@ class PlanStaffWidget(QWidget):
                     # --- E. Persistencia ---
                     
                     # Calcular timestamps completos para Operations (Logística)
-                    # Entry Date: Fecha INICIO del relleno + Hora calculada
-                    new_entry_datetime = datetime.combine(start_fill_date, final_in_obj)
-                    # Exit Date: Fecha FIN del relleno + Hora calculada
+                    # [CORRECCIÓN] Usamos operation_start_date (el día 21) en lugar de start_fill_date (el 22)
+                    new_entry_datetime = datetime.combine(operation_start_date, final_in_obj)
                     new_exit_datetime = datetime.combine(end_fill_date, final_out_obj)
 
                     try:
                         # 1. Guardar Operation (Entry/Exit correctos)
+                        # Aquí usamos operation_start_date para que la BD sepa que el bloque empieza el 21
                         db.add_operation(
                             username=username,
                             role=role,
                             badge=badge,
-                            start_date=start_fill_date,
+                            start_date=operation_start_date, # <--- FECHA CORREGIDA
                             end_date=end_fill_date,
                             created_by=self.logged_username,
                             entry_date=new_entry_datetime,
                             exit_date=new_exit_datetime,
                         )
 
-                        # 2. Guardar Schedule (SSoT) con las horas corregidas
-                        # upsert_schedule_range sobrescribe cualquier valor previo en esos días
+                        # 2. Guardar Schedule (SSoT)
+                        # Aquí seguimos usando start_fill_date porque el día ancla (21) ya tiene el valor correcto
+                        # y solo necesitamos actualizar del 22 en adelante en la tabla 'schedules'.
                         db.upsert_schedule_range(
                             badge,
-                            start_fill_date,
+                            start_fill_date, 
                             end_fill_date,
                             new_status,
                             new_shift_type,
                             self.source,
-                            new_in_time_str,  # Usamos la hora forzada corregida
-                            new_out_time_str, # Usamos la hora forzada corregida
+                            new_in_time_str, 
+                            new_out_time_str, 
                             new_remark,
                         )
 
@@ -1764,7 +1768,6 @@ class PlanStaffWidget(QWidget):
             self._bulk_editing = False
             self.rotation_changed.emit()
             self.schedule_table.viewport().update()
-
     # ---------- REQ-001: inline OFF→ON/ON NS guard ----------
     def _on_schedule_cell_changed(self, item: QTableWidgetItem):
         # 1. AGREGAR: Chequeo de la bandera _is_handling_change
