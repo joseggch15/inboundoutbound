@@ -1287,321 +1287,233 @@ def generate_transport_report(
 def generate_rgm_transport_report(
     plan_staff_file: str, start_date: date, end_date: date, settings: Dict
 ) -> Tuple[bytes, str]:
+    # Importaciones locales
+    from datetime import timedelta, datetime
+    import openpyxl
+    import xlsxwriter
+    import io
+    
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {"in_memory": True})
     worksheet = workbook.add_worksheet("Sheet1")
 
-    # Formats
-    title_format = workbook.add_format(
-        {
-            "bold": True,
-            "font_color": "red",
-            "align": "center",
-            "valign": "vcenter",
-            "font_size": 18,
-        }
-    )
-    header_format = workbook.add_format(
-        {
-            "bold": True,
-            "bg_color": "#00B0F0",
-            "font_color": "white",
-            "align": "center",
-            "valign": "vcenter",
-            "border": 1,
-        }
-    )
-    yellow_header_format = workbook.add_format(
-        {
-            "bold": True,
-            "bg_color": "yellow",
-            "align": "center",
-            "valign": "vcenter",
-            "border": 1,
-        }
-    )
-    data_format = workbook.add_format(
-        {"align": "left", "valign": "vcenter", "border": 1}
-    )
-    time_format = workbook.add_format(
-        {"align": "left", "valign": "vcenter", "border": 1, "num_format": "h:mm AM/PM"}
-    )
-    date_format = workbook.add_format(
-        {
-            "align": "left",
-            "valign": "vcenter",
-            "border": 1,
-            "num_format": settings.get("date_format", "dd/mm/yyyy"),
-        }
-    )
+    # --- Formatos ---
+    title_format = workbook.add_format({
+        "bold": True, "font_color": "red", "align": "center", 
+        "valign": "vcenter", "font_size": 18
+    })
+    header_format = workbook.add_format({
+        "bold": True, "bg_color": "#00B0F0", "font_color": "white", 
+        "align": "center", "valign": "vcenter", "border": 1
+    })
+    yellow_header_format = workbook.add_format({
+        "bold": True, "bg_color": "yellow", "align": "center", 
+        "valign": "vcenter", "border": 1
+    })
+    data_format = workbook.add_format({
+        "align": "left", "valign": "vcenter", "border": 1
+    })
+    time_format = workbook.add_format({
+        "align": "left", "valign": "vcenter", "border": 1, 
+        "num_format": "h:mm AM/PM"
+    })
+    date_format = workbook.add_format({
+        "align": "left", "valign": "vcenter", "border": 1, 
+        "num_format": settings.get("date_format", "dd/mm/yyyy")
+    })
 
-    # Set column widths
+    # --- Columnas ---
     worksheet.set_column("A:A", 5)
-    worksheet.set_column("B:B", 25)  # NAME
-    worksheet.set_column("C:D", 15)  # DEPARTMENT, BADGE
-    worksheet.set_column("E:F", 20)  # POSITION, CREW
-    worksheet.set_column("G:H", 25)  # PICKUP, INBOUND DATE
-    worksheet.set_column("I:K", 15)  # METHOD, LOCATION, DEPT TIME
-    worksheet.set_column("L:L", 2)  # Spacer
-    worksheet.set_column("M:M", 25)  # NAME
-    worksheet.set_column("N:P", 15)  # DEPARTMENT, BADGE, POSITION
-    worksheet.set_column("Q:R", 20)  # CREW, OUTBOUND DATE
-    worksheet.set_column("S:T", 25)  # METHOD, LOCATION
-    worksheet.set_column("U:U", 15)  # DEPT TIME
+    worksheet.set_column("B:B", 25)
+    worksheet.set_column("C:D", 15)
+    worksheet.set_column("E:F", 20)
+    worksheet.set_column("G:H", 25)
+    worksheet.set_column("I:K", 15)
+    worksheet.set_column("L:L", 2)
+    worksheet.set_column("M:M", 25)
+    worksheet.set_column("N:P", 15)
+    worksheet.set_column("Q:R", 20)
+    worksheet.set_column("S:T", 25)
+    worksheet.set_column("U:U", 15)
 
-    # Inbound Section
+    # --- Encabezados ---
     worksheet.merge_range("A1:K2", "INBOUND", title_format)
     inbound_headers = [
-        "NR",
-        "NAME (Last, First Name)",
-        "DEPARTMENT",
-        "BADGE #",
-        "POSITION / TITLE",
-        "CREW A/B/C",
-        "PICK UP LOCATION",
-        "IN BOUND DATE",
-        "Method Of Transport",
-        "Location",
-        "DEPT TIME",
+        "NR", "NAME (Last, First Name)", "DEPARTMENT", "BADGE #", 
+        "POSITION / TITLE", "CREW A/B/C", "PICK UP LOCATION", "IN BOUND DATE", 
+        "Method Of Transport", "Location", "DEPT TIME"
     ]
     for col, header in enumerate(inbound_headers):
         fmt = yellow_header_format if header == "PICK UP LOCATION" else header_format
         worksheet.write(2, col, header, fmt)
 
-    # Outbound Section
     worksheet.merge_range("M1:U2", "OUTBOUND", title_format)
     outbound_headers = [
-        "NAME (Last, First Name)",
-        "DEPARTMENT",
-        "BADGE #",
-        "POSITION / TITLE",
-        "CREW A/B/C",
-        "ROSEBEL SITE OUT BOUND DATE",
-        "Method Of Transport",
-        "Location",
-        "DEPT TIME",
+        "NAME (Last, First Name)", "DEPARTMENT", "BADGE #", 
+        "POSITION / TITLE", "CREW A/B/C", "ROSEBEL SITE OUT BOUND DATE", 
+        "Method Of Transport", "Location", "DEPT TIME"
     ]
     for col, header in enumerate(outbound_headers):
         worksheet.write(2, col + 12, header, header_format)
 
-    # --- Data Extraction Logic (MODIFIED) ---
+    # --- Carga de Datos (BD + Excel) ---
     try:
-        from database_logic import (
-            get_shift_type_map,
-            get_user_location_for_date,
-            get_all_operations,
-        )
-
-        custom_map: Dict[str, Dict] = {
-            k.strip().upper(): v for k, v in get_shift_type_map("RGM").items()
-        }
+        from database_logic import get_shift_type_map, get_user_location_for_date, get_all_operations
+        custom_map = {k.strip().upper(): v for k, v in get_shift_type_map("RGM").items()}
         ops_by_badge = {}
+        # Cargar operaciones ordenadas (últimas primero) para que la más reciente tenga prioridad
         for op in get_all_operations():
             b = op.get("badge")
-            if b:
-                ops_by_badge.setdefault(b, []).append(op)
+            if b: ops_by_badge.setdefault(b, []).append(op)
     except Exception:
-        custom_map = {}
-        ops_by_badge = {}
-
-        def get_user_location_for_date(b, d):
-            return (None, None)
+        custom_map, ops_by_badge = {}, {}
+        def get_user_location_for_date(b, d): return (None, None)
 
     try:
         wb_src = openpyxl.load_workbook(plan_staff_file, data_only=True)
         ws_src = wb_src.active
     except Exception as e:
         workbook.close()
-        return b"", f"Could not read Plan Staff file: {e}"
+        return b"", f"Error leyendo Plan Staff: {e}"
 
-    header_map: Dict[str, int] = {
-        c.value: c.column for c in ws_src[1] if isinstance(c.value, str)
-    }
-    date_cols: Dict[int, date] = {
-        c.column: c.value.date() for c in ws_src[1] if isinstance(c.value, datetime)
-    }
-
+    header_map = {c.value: c.column for c in ws_src[1] if isinstance(c.value, str)}
+    date_cols = {c.column: c.value.date() for c in ws_src[1] if isinstance(c.value, datetime)}
+    
     OFF_LIKE = {"OFF", "BREAK", "KO", "LEAVE"}
-
     def _norm_status(v):
-        if v is None:
-            return None
+        if v is None: return None
         s = str(v).strip()
-        if not s:
-            return None
+        if not s: return None
         su = s.upper()
-        if su in OFF_LIKE:
-            return "OFF"
-        if su.isdigit() or su in ("OK", "ON") or "DAY" in su:
-            return "ON"
-        if "ON NS" in su or "NIGHT" in su:
-            return "ON NS"
+        if su in OFF_LIKE: return "OFF"
+        if su.isdigit() or su in ("OK", "ON") or "DAY" in su: return "ON"
+        if "ON NS" in su or "NIGHT" in su: return "ON NS"
         return su
 
     def _is_working(s):
-        # 1. Chequeo básico
-        if not s or s == "OFF":
-            return False
-            
-        # 2. Chequeo avanzado: Consultar flag 'is_off' en DB
-        # En esta función usas 'custom_map' (definido en línea 1009)
-        if s in custom_map and custom_map[s].get("is_off"):
-            return False
-            
+        if not s or s == "OFF": return False
+        if s in custom_map and custom_map[s].get("is_off"): return False
         return True
 
-    def _get_crew_from_name(name: str):
-        if "day" in name.lower():
-            return "A 14/7 DAY"
-        if "night" in name.lower():
-            return "B 7/7/7 DAY/NIGHT"
+    def _get_crew(name):
+        n = (name or "").lower()
+        if "day" in n: return "A 14/7 DAY"
+        if "night" in n: return "B 7/7/7 DAY/NIGHT"
         return "C 14/7 DAY"
 
-    def _find_operation_for_date(badge: str, target_date: date, user_ops: List[Dict]):
-        if not user_ops:
-            return None
-        for op in user_ops:
+    def _find_op(badge, d, ops):
+        if not ops: return None
+        for op in ops:
             try:
-                op_start = datetime.fromisoformat(op["start_date"]).date()
-                op_end = datetime.fromisoformat(op["end_date"]).date()
-                if op_start <= target_date <= op_end:
-                    return op
-            except (ValueError, TypeError):
-                continue
+                s = datetime.fromisoformat(op["start_date"]).date()
+                e = datetime.fromisoformat(op["end_date"]).date()
+                # Encontrar operación que cubra la fecha 'd'
+                if s <= d <= e: return op
+            except: continue
         return None
 
-    all_in_events, all_out_events = [], []
+    # --- Loop Principal ---
+    all_in, all_out = [], []
     dates_sorted = sorted(date_cols.values())
 
-    for r_idx in range(2, ws_src.max_row + 1):
-        badge = str(
-            ws_src.cell(row=r_idx, column=header_map["BADGE"]).value or ""
-        ).strip()
-        if not badge:
-            continue
+    for r in range(2, ws_src.max_row + 1):
+        badge = str(ws_src.cell(r, header_map["BADGE"]).value or "").strip()
+        if not badge: continue
+        
+        name = str(ws_src.cell(r, header_map["NAME"]).value or "")
+        dept = str(ws_src.cell(r, header_map["ROLE"]).value or "")
+        pos = "Technician"
+        u_ops = ops_by_badge.get(badge, [])
 
-        name = str(ws_src.cell(row=r_idx, column=header_map["NAME"]).value or "")
-        department = str(ws_src.cell(row=r_idx, column=header_map["ROLE"]).value or "")
-        position = "Technician"  # Placeholder
-        user_operations = ops_by_badge.get(badge, [])
-
-        per_day: Dict[date, Tuple[Optional[str], Optional[str]]] = {}
+        per_day = {}
         for c, d in date_cols.items():
-            cell = ws_src.cell(row=r_idx, column=c)
-            per_day[d] = (
-                _norm_status(cell.value),
-                (cell.comment.text if cell.comment else None),
-            )
+            cell = ws_src.cell(r, c)
+            per_day[d] = (_norm_status(cell.value), (cell.comment.text if cell.comment else None))
 
         for i, d in enumerate(dates_sorted):
             st_d, cmt_d = per_day.get(d, (None, None))
-            if not _is_working(st_d):
+            
+            if not _is_working(st_d): 
                 continue
 
-            prev_d = dates_sorted[i - 1] if i > 0 else (d - timedelta(days=1))
-            next_d = (
-                dates_sorted[i + 1]
-                if i < len(dates_sorted) - 1
-                else (d + timedelta(days=1))
-            )
+            prev_d = dates_sorted[i-1] if i > 0 else (d - timedelta(days=1))
+            next_d = dates_sorted[i+1] if i < len(dates_sorted)-1 else (d + timedelta(days=1))
             st_prev, _ = per_day.get(prev_d, (None, None))
             st_next, _ = per_day.get(next_d, (None, None))
-
-            operation = _find_operation_for_date(badge, d, user_operations)
-            entry_date_to_use, exit_date_to_use = d, d
-            time_in_str = _get_transport_time_str(
-                st_d, "IN", cmt_d, custom_map, source="RGM"
-            )
-            time_out_str = _get_transport_time_str(
-                st_d, "OUT", cmt_d, custom_map, source="RGM"
-            )
-
-            if operation and operation.get("entry_date") and operation.get("exit_date"):
-                try:
-                    entry_dt = datetime.strptime(
-                        operation["entry_date"], "%Y-%m-%d %H:%M"
-                    )
-                    exit_dt = datetime.strptime(
-                        operation["exit_date"], "%Y-%m-%d %H:%M"
-                    )
-                    entry_date_to_use = entry_dt.date()
-                    time_in_str = entry_dt.strftime("%H:%M:%S")
-                    exit_date_to_use = exit_dt.date()
-                    time_out_str = exit_dt.strftime("%H:%M:%S")
-                except (ValueError, TypeError):
-                    pass
-
-            # INBOUND event
+            
+            op = _find_op(badge, d, u_ops)
+            
+            # --- INBOUND ---
             if not _is_working(st_prev):
+                entry_date = d
+                entry_time = _get_transport_time_str(st_d, "IN", cmt_d, custom_map, "RGM")
+                
+                # Check DB override para entrada
+                if op and op.get("entry_date"):
+                    try:
+                        dt = datetime.strptime(op["entry_date"], "%Y-%m-%d %H:%M")
+                        entry_date = dt.date()
+                        entry_time = dt.strftime("%H:%M:%S")
+                    except: pass
+                
                 pu, _ = get_user_location_for_date(badge, d)
-                crew = _get_crew_from_name(st_d if st_d else "")
-                dept_time = datetime.strptime(time_in_str, "%H:%M:%S")
-                all_in_events.append(
-                    [
-                        name,
-                        department,
-                        badge,
-                        position,
-                        crew,
-                        pu or "N/A",
-                        entry_date_to_use,
-                        "RGM TRANSPORT",
-                        "PARAMARIBO",
-                        dept_time,
-                    ]
-                )
+                all_in.append([
+                    name, dept, badge, pos, _get_crew(name), pu or "N/A",
+                    entry_date, "RGM TRANSPORT", "PARAMARIBO", 
+                    datetime.strptime(entry_time, "%H:%M:%S")
+                ])
 
-            # OUTBOUND event
+            # --- OUTBOUND ---
             if not _is_working(st_next):
+                # 1. Definir fecha por defecto (Regla RGM: d + 1)
+                # Esta es la base si no hay nada en DB.
+                final_outbound_date = d + timedelta(days=1)
+                final_outbound_time = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map, "RGM")
+
+                # 2. Verificar Override en BD (PRIORIDAD ABSOLUTA)
+                # Si existe un registro en la tabla operations, LO USAMOS.
+                # Ya no comparamos si db_date != d. Simplemente confiamos en la BD.
+                if op and op.get("exit_date"):
+                    try:
+                        dt = datetime.strptime(op["exit_date"], "%Y-%m-%d %H:%M")
+                        final_outbound_date = dt.date() # Fecha exacta de la BD (ej. 28 de Enero)
+                        final_outbound_time = dt.strftime("%H:%M:%S") # Hora exacta de la BD (ej. 16:00:00)
+                    except: pass
+
                 _, do = get_user_location_for_date(badge, d)
-                crew = _get_crew_from_name(st_d if st_d else "")
-                dept_time = datetime.strptime(time_out_str, "%H:%M:%S")
-                all_out_events.append(
-                    [
-                        name,
-                        department,
-                        badge,
-                        position,
-                        crew,
-                        exit_date_to_use,
-                        "RGM TRANSPORT",
-                        do or "PARAMARIBO",
-                        dept_time,
-                    ]
-                )
+                
+                all_out.append([
+                    name, dept, badge, pos, _get_crew(name),
+                    final_outbound_date, 
+                    "RGM TRANSPORT", do or "PARAMARIBO",
+                    datetime.strptime(final_outbound_time, "%H:%M:%S")
+                ])
 
-    # Filter and sort events
-    in_rows_data = [row for row in all_in_events if start_date <= row[6] <= end_date]
-    out_rows_data = [row for row in all_out_events if start_date <= row[5] <= end_date]
-    in_rows_data.sort(key=lambda x: (x[6], x[9], x[0]))
-    out_rows_data.sort(key=lambda x: (x[5], x[8], x[0]))
+    # --- Filtrado y Escritura ---
+    in_rows = sorted([r for r in all_in if start_date <= r[6] <= end_date], key=lambda x: (x[6], x[9], x[0]))
+    out_rows = sorted([r for r in all_out if start_date <= r[5] <= end_date], key=lambda x: (x[5], x[8], x[0]))
 
-    # Write filtered data to worksheet
-    for i, row_data in enumerate(in_rows_data):
-        row_to_write = [i + 1] + row_data
-        for col, val in enumerate(row_to_write):
-            header_name = inbound_headers[col]
-            if header_name == "IN BOUND DATE":
-                worksheet.write_datetime(i + 3, col, val, date_format)
-            elif header_name == "DEPT TIME":
-                worksheet.write_datetime(i + 3, col, val, time_format)
-            else:
-                worksheet.write(i + 3, col, val, data_format)
+    for i, r in enumerate(in_rows):
+        row = i + 3
+        worksheet.write(row, 0, i + 1, data_format)
+        for c, val in enumerate(r):
+            header = inbound_headers[c + 1]
+            if header == "IN BOUND DATE": worksheet.write_datetime(row, c + 1, val, date_format)
+            elif header == "DEPT TIME": worksheet.write_datetime(row, c + 1, val, time_format)
+            else: worksheet.write(row, c + 1, val, data_format)
 
-    for i, row_data in enumerate(out_rows_data):
-        for col, val in enumerate(row_data):
-            header_name = outbound_headers[col]
-            if header_name == "ROSEBEL SITE OUT BOUND DATE":
-                worksheet.write_datetime(i + 3, col + 12, val, date_format)
-            elif header_name == "DEPT TIME":
-                worksheet.write_datetime(i + 3, col + 12, val, time_format)
-            else:
-                worksheet.write(i + 3, col + 12, val, data_format)
+    for i, r in enumerate(out_rows):
+        row = i + 3
+        for c, val in enumerate(r):
+            col_idx = c + 12
+            header = outbound_headers[c]
+            if header == "ROSEBEL SITE OUT BOUND DATE": worksheet.write_datetime(row, col_idx, val, date_format)
+            elif header == "DEPT TIME": worksheet.write_datetime(row, col_idx, val, time_format)
+            else: worksheet.write(row, col_idx, val, data_format)
 
     workbook.close()
     output.seek(0)
     return output.read(), "RGM Transportation report generated."
-
 
 # ============================================================
 # Utilidad: Propagar cambios de código/color a Excel (inmediato)
