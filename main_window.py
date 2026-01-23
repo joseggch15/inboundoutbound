@@ -1759,7 +1759,25 @@ class PlanStaffWidget(QWidget):
                         
                         if not success:
                             print(f"Excel Update Warning for {badge}: {message}")
+                        
+                       # --- [FIX FINAL] Consolidación de Vecinos tras Drag & Drop ---
+                        try:
+                            # 1. El rango arrastrado
+                            self._consolidate_contiguous_block(badge, role, username, start_fill_date)
+                            
+                            # 2. Vecino Izquierdo (start - 1)
+                            # Importante si arrastraste OFF sobre el final de un bloque existente
+                            prev_drag = start_fill_date - timedelta(days=1)
+                            self._consolidate_contiguous_block(badge, role, username, prev_drag)
 
+                            # 3. Vecino Derecho (end + 1)
+                            # Importante si arrastraste OFF sobre el inicio de un bloque existente
+                            next_drag = end_fill_date + timedelta(days=1)
+                            self._consolidate_contiguous_block(badge, role, username, next_drag)
+
+                        except Exception as e:
+                            print(f"Drag consolidation failed for {badge}: {e}")
+                        # --- [FIX END] -----------------------------------------------
                     except Exception as e:
                         print(f"Error saving drag-fill for {badge}: {e}")
 
@@ -2074,12 +2092,31 @@ class PlanStaffWidget(QWidget):
                     "SHIFT_MODIFICATION_INLINE",
                     f"Updated range {start_date_block} to {end_date_block} for {badge}. Remark: {remark}",
                 )
+                
+                # --- [FIX FINAL] Consolidación de Vecinos (Neighbor Repair) ---
+                # Al cambiar un rango (especialmente a OFF), debemos verificar:
+                # 1. El rango mismo.
+                # 2. El día ANTERIOR (start - 1) -> Repara "Exit Date" del bloque previo.
+                # 3. El día SIGUIENTE (end + 1) -> Repara "Entry Date" del bloque siguiente.
+                try:
+                    # Rango actual
+                    self._consolidate_contiguous_block(badge, role, username, start_date_block)
+                    
+                    # Vecino Izquierdo (Checkeo de seguridad para Exit Date)
+                    prev_day = start_date_block - timedelta(days=1)
+                    self._consolidate_contiguous_block(badge, role, username, prev_day)
+                    
+                    # Vecino Derecho (CRÍTICO para tu error de Entry Date)
+                    next_day = end_date_block + timedelta(days=1)
+                    self._consolidate_contiguous_block(badge, role, username, next_day)
+                    
+                except Exception as e:
+                    print(f"Auto-consolidate neighbors failed: {e}")
+                # --- [FIX END] -----------------------------------------------
 
             except Exception as e:
                 self._is_internal_update = False
                 QMessageBox.critical(self, "Save Error", f"Error saving data: {str(e)}")
-                self.refresh_ui_data()
-                return
 
             # Finalización
             self.check_excel_health()
@@ -2275,6 +2312,229 @@ class PlanStaffWidget(QWidget):
         else:
             self.role_display.clear()
             self.badge_display.clear()
+
+# -------------------------------------------------------------------------
+    # NUEVO HELPER: Reparar cadena de operaciones (Chain Repair)
+    # Soluciona el bug donde el "Entry Date" se queda con la fecha antigua
+    # -------------------------------------------------------------------------
+    def _repair_operation_chain_if_needed(self, badge: str, role: str, name: str, split_date: pydate):
+        """
+        Llamado después de modificar un rango. Verifica si el día siguiente (split_date)
+        es laborable pero está atado a una operación logística antigua.
+        Si es así, crea una NUEVA operación iniciando en split_date.
+        """
+        # 1. Verificar si el día de corte es laborable (ON/ON NS) en la BD
+        map_next = db.get_schedule_map_for_range(badge, split_date, split_date, self.source)
+        day_info = map_next.get(split_date.isoformat())
+        
+        if not day_info:
+            return 
+
+        status = (day_info.get("status") or "").upper()
+        
+        # Si el día siguiente es OFF, no hay continuidad que reparar
+        if status not in ("ON", "ON NS") and status not in (self._custom_shift_map or {}):
+            return 
+            
+        # Verificar si es un Custom Shift marcado como OFF
+        if self._custom_shift_map and status in self._custom_shift_map:
+            if self._custom_shift_map[status].get("is_off"):
+                return
+
+        # 2. Buscar la operación vigente para ese día en la BD
+        ops = db.get_operations_filtered(text=badge, d_from=split_date, d_to=split_date)
+        user_ops = [o for o in ops if str(o["badge"]) == str(badge)]
+        user_ops.sort(key=lambda x: x["id"], reverse=True) # La más reciente primero
+        
+        current_op = user_ops[0] if user_ops else None
+        
+        needs_repair = False
+        if current_op:
+            # Si la operación actual inicia ANTES de nuestra fecha de corte,
+            # es una operación vieja que hay que cortar.
+            op_start_str = current_op["start_date"]
+            try:
+                op_start = datetime.strptime(op_start_str, "%Y-%m-%d").date()
+                if op_start < split_date:
+                    needs_repair = True
+            except:
+                pass
+        else:
+            # Si no hay operación pero hay turno ON, falta crearla
+            needs_repair = True
+            
+        if not needs_repair:
+            return
+
+        # 3. Escanear hacia adelante para encontrar el fin de este nuevo bloque
+        scan_limit = split_date + timedelta(days=21)
+        cursor_date = split_date
+        block_end_date = split_date
+        
+        future_map = db.get_schedule_map_for_range(badge, split_date, scan_limit, self.source)
+        
+        while cursor_date <= scan_limit:
+            d_str = cursor_date.isoformat()
+            d_info = future_map.get(d_str)
+            if not d_info:
+                break
+            
+            d_status = (d_info.get("status") or "").upper()
+            is_working = True
+            
+            if d_status in ("OFF", "BREAK", "KO", "LEAVE", ""):
+                is_working = False
+            elif self._custom_shift_map and d_status in self._custom_shift_map:
+                if self._custom_shift_map[d_status].get("is_off"):
+                    is_working = False
+                
+            if not is_working:
+                break # Fin del bloque continuo
+                
+            block_end_date = cursor_date
+            cursor_date += timedelta(days=1)
+
+        # 4. Crear la operación de reparación con fecha de entrada CORRECTA
+        from datetime import time as dtime
+        
+        def_in = dtime(7, 0)
+        def_out = dtime(7, 0)
+        
+        raw_in = day_info.get("in_time")
+        raw_out = day_info.get("out_time")
+        
+        if self.source == "Newmont":
+            if status == "ON": def_in = dtime(6, 0); def_out = dtime(12, 0)
+            elif status == "ON NS": def_in = dtime(12, 0); def_out = dtime(6, 0)
+        
+        in_time_obj = _parse_hhmm_to_time(raw_in, def_in)
+        out_time_obj = _parse_hhmm_to_time(raw_out, def_out)
+        
+        new_entry_dt = datetime.combine(split_date, in_time_obj)
+        new_exit_dt = datetime.combine(block_end_date, out_time_obj)
+        
+        print(f"REPAIR: Creating new op block for {badge}: {split_date} to {block_end_date}")
+        
+        db.add_operation(
+            username=name,
+            role=role,
+            badge=badge,
+            start_date=split_date,
+            end_date=block_end_date,
+            created_by=self.logged_username,
+            entry_date=new_entry_dt,
+            exit_date=new_exit_dt
+        )
+    
+    # -------------------------------------------------------------------------
+    # FINAL FIX: Auto-Consolidación de Bloques (Entry & Exit Sync)
+    # Fusiona días contiguos en una sola operación logística coherente.
+    # -------------------------------------------------------------------------
+   # -------------------------------------------------------------------------
+    # FINAL FIX: Auto-Consolidación con Resolución Precisa de Horarios
+    # -------------------------------------------------------------------------
+    def _consolidate_contiguous_block(self, badge: str, role: str, name: str, pivot_date: pydate):
+        # 1. Escaneo seguro (+/- 45 días)
+        scan_start = pivot_date - timedelta(days=45)
+        scan_end = pivot_date + timedelta(days=45)
+        schedule_map = db.get_schedule_map_for_range(badge, scan_start, scan_end, self.source)
+        
+        # Helper para saber si un día cuenta como 'Working' (Laboral)
+        def is_working(d_iso):
+            info = schedule_map.get(d_iso)
+            if not info: return False
+            st = (info.get("status") or "").upper()
+            # Filtros de OFF base
+            if st in ("OFF", "BREAK", "KO", "LEAVE", ""): return False
+            # Filtros de Custom OFF
+            if st in self._custom_shift_map and self._custom_shift_map[st].get("is_off"):
+                return False
+            return True
+
+        # 2. Buscar VERDADERO INICIO (hacia atrás)
+        true_start = pivot_date
+        while True:
+            prev_day = true_start - timedelta(days=1)
+            if is_working(prev_day.isoformat()):
+                true_start = prev_day
+            else:
+                break 
+
+        # 3. Buscar VERDADERO FIN (hacia adelante)
+        true_end = pivot_date
+        while True:
+            next_day = true_end + timedelta(days=1)
+            if is_working(next_day.isoformat()):
+                true_end = next_day
+            else:
+                break 
+
+        # Si no hay bloque (ej. pivote es OFF), salir
+        if true_start == true_end and not is_working(true_start.isoformat()):
+            return
+
+        # 4. Obtener info de los extremos del bloque
+        start_info = schedule_map.get(true_start.isoformat()) or {}
+        end_info = schedule_map.get(true_end.isoformat()) or {}
+        
+        # --- [FIX CRÍTICO] Lógica de Resolución de Hora ---
+        from datetime import time as dtime
+
+        def resolve_time(info_dict, is_entry):
+            """
+            Determina la hora correcta basándose en:
+            1. Dato explícito en BD -> 2. Configuración del Turno -> 3. Reglas de Negocio
+            """
+            # A. Intentar leer hora explícita guardada en la celda
+            raw_val = info_dict.get("in_time" if is_entry else "out_time")
+            if raw_val:
+                return _parse_hhmm_to_time(raw_val, None) # Retorna objeto si existe
+
+            # B. Intentar leer configuración del Tipo de Turno (Shift Type)
+            st_code = (info_dict.get("status") or "").upper()
+            if st_code in self._custom_shift_map:
+                type_def = self._custom_shift_map[st_code]
+                t_str = type_def.get("in_time" if is_entry else "out_time")
+                if t_str:
+                    return _parse_hhmm_to_time(t_str, None)
+
+            # C. Fallbacks por Reglas de Negocio (Newmont / RGM)
+            if self.source == "Newmont":
+                if is_entry:
+                    if st_code == "ON": return dtime(6, 0)
+                    elif st_code == "ON NS": return dtime(12, 0)
+                else: # Exit
+                    if st_code == "ON": return dtime(12, 0)
+                    elif st_code == "ON NS": return dtime(6, 0)
+            else: # RGM defaults
+                if st_code in ("ON", "ON NS"): return dtime(7, 0)
+            
+            # Default absoluto si todo falla
+            return dtime(7, 0)
+
+        # Calcular Entry Time usando el día de INICIO
+        final_in_time = resolve_time(start_info, is_entry=True)
+        
+        # Calcular Exit Time usando el día de FIN (Aquí estaba el error antes)
+        final_out_time = resolve_time(end_info, is_entry=False)
+
+        # 5. Construir Timestamps Finales
+        new_entry = datetime.combine(true_start, final_in_time)
+        new_exit = datetime.combine(true_end, final_out_time)
+
+        print(f"CONSOLIDATE: {badge} -> {true_start} ({final_in_time}) to {true_end} ({final_out_time})")
+
+        # 6. Guardar Operación Maestra
+        db.add_operation(
+            username=name,
+            role=role,
+            badge=badge,
+            start_date=true_start,
+            end_date=true_end,
+            created_by=self.logged_username,
+            entry_date=new_entry,
+            exit_date=new_exit
+        )
 
     def _apply_schedule_period(
         self,
