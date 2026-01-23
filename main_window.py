@@ -1308,21 +1308,17 @@ class PlanStaffWidget(QWidget):
         # -------------------------------------------------------------
         df = None
         if use_preloaded and hasattr(self, '_initial_preloaded_df') and self._initial_preloaded_df is not None:
-            # Si venimos del login y tenemos datos, los usamos y limpiamos la variable
             print("DEBUG: Using preloaded dataframe (High Performance Mode).")
             df = self._initial_preloaded_df
             self._initial_preloaded_df = None 
         else:
-            # Si es una recarga manual o la precarga ya se usó, leemos del disco
             df = excel.get_schedule_preview(self.excel_file)
-        # -------------------------------------------------------------
-
+        
         self._loading_preview = True
         self._cell_original_values.clear()
         self._row_identities.clear()
         self._date_col_dates.clear()
 
-        # Si el DF es None o vacío (fichero nuevo o error), limpiamos tabla y salimos
         if df is None or df.empty:
             self.frozen_table.clear()
             self.schedule_table.clear()
@@ -1331,8 +1327,6 @@ class PlanStaffWidget(QWidget):
             self._loading_preview = False
             return
 
-        # NOTA: El bloque "AUTO-HORIZON" original lo saltamos si usamos precarga
-        # porque el Worker ya validó el archivo. Solo lo ejecutamos si leemos de disco.
         if not use_preloaded:
             try:
                 ok_horizon, msg_horizon = excel.ensure_rolling_horizon_columns(
@@ -1343,25 +1337,20 @@ class PlanStaffWidget(QWidget):
             except Exception as e:
                 print(f"[AUTO-HORIZON CRITICAL] Failed: {e}")
 
-        # color mapping for custom codes
         custom_map = db.get_shift_type_map(self.source)
 
         # -----------------------------------------------------------
-        # MODIFICACIÓN: Ordenar columnas cronológicamente antes de procesar
+        # ORDENAMIENTO Y ESTRUCTURA
         # -----------------------------------------------------------
-
-        # 1. Identificar columnas fijas y columnas de fecha
         all_cols = list(df.columns)
         actual_frozen_count = min(len(all_cols), FROZEN_COLUMN_COUNT)
 
         frozen_part = all_cols[:actual_frozen_count]
         date_part = all_cols[actual_frozen_count:]
 
-        # 2. Crear una lista de tuplas (ObjetoFecha, NombreColumnaOriginal)
         date_mapping = []
         for c in date_part:
             d_obj = None
-            # Intentar extraer objeto fecha real
             if hasattr(c, "to_pydatetime"):
                 d_obj = c.to_pydatetime().date()
             elif isinstance(c, datetime):
@@ -1369,48 +1358,38 @@ class PlanStaffWidget(QWidget):
             elif isinstance(c, pydate):
                 d_obj = c
 
-            # Si logramos obtener una fecha, la guardamos para ordenar
             if d_obj:
                 date_mapping.append((d_obj, c))
             else:
-                # Si no es fecha (raro), lo mandamos al final
                 date_mapping.append((pydate.max, c))
 
-        # 3. Ordenar la lista basándonos en la FECHA real (no texto)
         date_mapping.sort(key=lambda x: x[0])
-
-        # 4. Reconstruir el DataFrame con el nuevo orden
-        # Esto asegura que los DATOS de las celdas coincidan con los encabezados
         sorted_date_cols = [x[1] for x in date_mapping]
         new_column_order = frozen_part + sorted_date_cols
-
         df = df[new_column_order]
 
-        # Prepare headers
         cols = list(df.columns)
-        # Identify date columns (right side)
         date_cols = []
         for c in cols:
-            # pandas may give Timestamp-like objects; keep them as date
             if hasattr(c, "to_pydatetime"):
                 date_cols.append(c.to_pydatetime().date())
             elif isinstance(c, datetime):
                 date_cols.append(c.date())
             else:
-                # not a date header
                 pass
 
-        # Frozen
+        # Frozen Headers
         actual_frozen_count = min(df.shape[1], FROZEN_COLUMN_COUNT)
         frozen_headers = [str(c) for c in cols[:actual_frozen_count]]
 
-        # Schedule (date) headers -> one line with date + weekday (abbrev)
+        # Schedule Headers (Compacto: YYYY-MM-DD \n Dia)
         schedule_headers = []
         for d in date_cols:
-            schedule_headers.append(f"{d.isoformat()}")
-        self._date_col_dates = list(date_cols)  # keep exact order
+            # Usamos %a (Mon, Tue) para que sea corto
+            schedule_headers.append(f"{d.isoformat()}\n{d.strftime('%a')}")
+        self._date_col_dates = list(date_cols)
 
-        # Build tables
+        # Configurar Tablas
         self.frozen_table.setRowCount(df.shape[0])
         self.frozen_table.setColumnCount(actual_frozen_count)
         self.frozen_table.setHorizontalHeaderLabels(frozen_headers)
@@ -1422,35 +1401,17 @@ class PlanStaffWidget(QWidget):
                 idx, QTableWidgetItem(header_text)
             )
 
-        # Load rows
+        # Cargar Filas
         for i, row in df.iterrows():
-            # identity
-            badge_val = (
-                row.get("BADGE")
-                if hasattr(row, "get")
-                else (row["BADGE"] if "BADGE" in df.columns else "")
-            )
-            name_val = (
-                row.get("NAME")
-                if hasattr(row, "get")
-                else (row["NAME"] if "NAME" in df.columns else "")
-            )
-
-            # --- AGREGAR ESTO (INICIO) ---
-            role_val = (
-                row.get("ROLE")
-                if hasattr(row, "get")
-                else (row["ROLE"] if "ROLE" in df.columns else "")
-            )
-            # --- AGREGAR ESTO (FIN) ---
+            badge_val = row.get("BADGE") if hasattr(row, "get") else (row["BADGE"] if "BADGE" in df.columns else "")
+            name_val = row.get("NAME") if hasattr(row, "get") else (row["NAME"] if "NAME" in df.columns else "")
+            role_val = row.get("ROLE") if hasattr(row, "get") else (row["ROLE"] if "ROLE" in df.columns else "")
 
             self._row_identities.append(
                 {
                     "badge": str(badge_val) if badge_val is not None else "",
                     "name": str(name_val) if name_val is not None else "",
-                    "role": (
-                        str(role_val) if role_val is not None else ""
-                    ),  # <--- AGREGAR ESTA LÍNEA
+                    "role": str(role_val) if role_val is not None else "",
                 }
             )
 
@@ -1466,11 +1427,8 @@ class PlanStaffWidget(QWidget):
                     # Schedule table
                     col_index = j - actual_frozen_count
                     val_str = text.upper().strip()
-
-                    # center text in day cells
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
-                    # Base colors
                     if "ON NS" in val_str or "NIGHT" in val_str:
                         item.setBackground(QColor("#FFFF99"))
                     elif val_str == "ON" or "DAY" in val_str or val_str.isdigit():
@@ -1478,27 +1436,64 @@ class PlanStaffWidget(QWidget):
                     elif val_str in ("OFF", "BREAK", "KO", "LEAVE"):
                         item.setBackground(QColor("#FFC7CE"))
                     else:
-                        # custom code?
-                        if val_str in custom_map and custom_map[val_str].get(
-                            "color_hex"
-                        ):
+                        if val_str in custom_map and custom_map[val_str].get("color_hex"):
                             item.setBackground(QColor(custom_map[val_str]["color_hex"]))
 
                     self.schedule_table.setItem(i, col_index, item)
-                    # Track original value for REQ-001
                     self._cell_original_values[(i, col_index)] = val_str
 
-                    # Re-apply warning highlight if previously set
                     key = self._warn_key_for(i, col_index)
                     if key in self._warn_highlight_keys:
                         item.setBackground(QColor(WARN_BG_HEX))
 
+        # -------------------------------------------------------------
+        # CORRECCIÓN DE ESTILO Y VISIBILIDAD (ELIMINAR PADDING)
+        # -------------------------------------------------------------
+        
+        # 1. Ajustar columnas al contenido
         self.frozen_table.resizeColumnsToContents()
         self.schedule_table.resizeColumnsToContents()
+
+        # 2. Definir altura compacta (35px es suficiente si quitamos el padding)
+        compact_height = 35
+        
+        # 3. Fuente pequeña y negrita
+        compact_font = QFont()
+        compact_font.setPointSize(7)
+        compact_font.setBold(True)
+
+        # 4. TRUCO DE INGENIERÍA: Hoja de estilos para eliminar el padding interno
+        # Esto permite que el texto use todo el espacio vertical disponible.
+        # Ajustamos RGM/Newmont colors si quisieras, pero aquí usamos blanco/básico para legibilidad.
+        # NOTA: Ajusta 'background-color' si usas un tema oscuro o corporativo específico.
+        header_stylesheet = """
+            QHeaderView::section {
+                padding-top: 0px;
+                padding-bottom: 0px;
+                padding-left: 2px;
+                padding-right: 2px;
+                margin: 0px;
+                border-bottom: 1px solid #ccc;
+                border-right: 1px solid #ccc;
+            }
+        """
+
+        # Aplicar a Tabla DERECHA (Fechas)
+        h_sched = self.schedule_table.horizontalHeader()
+        h_sched.setFont(compact_font)
+        h_sched.setFixedHeight(compact_height)
+        h_sched.setStyleSheet(header_stylesheet)
+        h_sched.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Aplicar a Tabla IZQUIERDA (Nombres) - Exactamente igual para alineación perfecta
+        h_frozen = self.frozen_table.horizontalHeader()
+        h_frozen.setFont(compact_font)
+        h_frozen.setFixedHeight(compact_height)
+        h_frozen.setStyleSheet(header_stylesheet)
+        h_frozen.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+
         self._update_frozen_width()
         self._loading_preview = False
-
-        # REQ-002: focus today's date
         self._center_today_column()
 
     def _center_today_column(self):
