@@ -107,6 +107,7 @@ RGM_REPORT_HEADERS = [
 ]
 DEBOUNCE_MS = 200
 
+WEEKEND_HEADER_YELLOW = "#FFEB3B"  # Amarillo vibrante para cabeceras
 
 class ShiftCellDelegate(QStyledItemDelegate):
     def __init__(self, parent, get_options_callback):
@@ -752,6 +753,42 @@ class DayScheduleEditor(QDialog):
 # -------------------------------------------------------------
 # Widget: Plan Staff (Preview, Register, Reports)
 # -------------------------------------------------------------
+
+class WeekendHeader(QHeaderView):
+    """Cabecera personalizada que resalta los fines de semana en amarillo."""
+    def __init__(self, orientation, parent=None, date_list=None):
+        super().__init__(orientation, parent)
+        self._date_list = date_list or []
+
+    def set_dates(self, dates):
+        self._date_list = dates
+        self.viewport().update()
+
+    def paintSection(self, painter, rect, logicalIndex):
+        # Verificamos si el índice corresponde a un fin de semana
+        is_weekend = False
+        if 0 <= logicalIndex < len(self._date_list):
+            d = self._date_list[logicalIndex]
+            is_weekend = d.weekday() >= 5  # 5=Saturday, 6=Sunday
+
+        if is_weekend:
+            painter.save()
+            # Pintamos el fondo amarillo
+            painter.fillRect(rect, QColor(WEEKEND_HEADER_YELLOW))
+            
+            # Dibujamos el borde (para mantener la estética de la grilla)
+            painter.setPen(QPen(QColor("#CCCCCC")))
+            painter.drawRect(rect.adjusted(0, 0, -1, -1))
+            
+            # Pintamos el texto (Date + Day)
+            painter.setPen(QPen(QColor("#000000"))) # Texto negro sobre amarillo
+            text = self.model().headerData(logicalIndex, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+            painter.restore()
+        else:
+            # Comportamiento normal para días de semana
+            super().paintSection(painter, rect, logicalIndex)
+            
 class PlanStaffWidget(QWidget):
     # Emitted after saving a change so the Rotation History tab can refresh
     rotation_changed = pyqtSignal()
@@ -824,6 +861,9 @@ class PlanStaffWidget(QWidget):
 
         self.frozen_table = QTableWidget()
         self.schedule_table = QTableWidget()
+        # Inyectamos nuestra cabecera personalizada
+        self.weekend_header = WeekendHeader(Qt.Orientation.Horizontal, self.schedule_table)
+        self.schedule_table.setHorizontalHeader(self.weekend_header)
 
         # Delegate para que las celdas de schedule usen el combo de Status/Shift
         self.shift_delegate = ShiftCellDelegate(
@@ -1388,6 +1428,7 @@ class PlanStaffWidget(QWidget):
             # Usamos %a (Mon, Tue) para que sea corto
             schedule_headers.append(f"{d.isoformat()}\n{d.strftime('%a')}")
         self._date_col_dates = list(date_cols)
+        self.weekend_header.set_dates(self._date_col_dates)
 
         # Configurar Tablas
         self.frozen_table.setRowCount(df.shape[0])
