@@ -136,7 +136,147 @@ class ShiftCellDelegate(QStyledItemDelegate):
         selected_text = editor.currentText()
         model.setData(index, selected_text)
 
+class RoleAdminWidget(QWidget):
+    """
+    Manages the master list of Roles. 
+    Similar to LocationAdminWidget but for 'roles' table.
+    """
+    roles_changed = pyqtSignal()
 
+    def __init__(self, scope_source: str | None = None):
+        super().__init__()
+        self.scope_source = scope_source 
+        self.role_id = None
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self._reload_table)
+
+        layout = QHBoxLayout(self)
+
+        # --- Form ---
+        form = QGridLayout()
+        row = 0
+        self.role_input = QLineEdit()
+        form.addWidget(QLabel("Role / Dept Name:"), row, 0)
+        form.addWidget(self.role_input, row, 1)
+        row += 1
+
+        # Admin Logic (Optional owner selection)
+        self.owner_combo = None
+        if self.scope_source is None:
+            self.owner_combo = QComboBox()
+            self.owner_combo.addItems(["RGM", "Newmont"])
+            form.addWidget(QLabel("Owner:"), row, 0)
+            form.addWidget(self.owner_combo, row, 1)
+            row += 1
+
+        btn_new = QPushButton("✨ New")
+        btn_save = QPushButton("💾 Save")
+        btn_del = QPushButton("❌ Delete")
+        btn_save.setProperty("variant", "primary")
+        btn_del.setProperty("danger", True)
+        
+        h = QHBoxLayout()
+        h.addWidget(btn_new); h.addWidget(btn_save); h.addWidget(btn_del)
+        form.addLayout(h, row, 0, 1, 2)
+
+        form_group = create_group_box("Manage Roles", form)
+        form_group.setFixedWidth(400)
+
+        # --- Table ---
+        table_panel = QWidget()
+        t_layout = QVBoxLayout(table_panel)
+        
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search role...")
+        self.search_input.textChanged.connect(lambda: self._debounce_timer.start(DEBOUNCE_MS))
+        t_layout.addWidget(self.search_input)
+
+        self.role_table = QTableWidget()
+        self.role_table.setAlternatingRowColors(True)
+        self.role_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.role_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.role_table.itemClicked.connect(self._load_to_form)
+        t_layout.addWidget(self.role_table)
+
+        table_group = create_group_box("Existing Roles", t_layout)
+
+        layout.addWidget(form_group)
+        layout.addWidget(table_group)
+
+        # Connects
+        btn_new.clicked.connect(self._new_role)
+        btn_save.clicked.connect(self._save_role)
+        btn_del.clicked.connect(self._delete_role)
+
+        self._reload_table()
+
+    def _reload_table(self):
+        text = self.search_input.text()
+        rows = db.get_roles_filtered(self.scope_source, text)
+        
+        headers = ["ID", "Source", "Role Name"] if self.scope_source is None else ["ID", "Role Name"]
+        self.role_table.setRowCount(len(rows))
+        self.role_table.setColumnCount(len(headers))
+        self.role_table.setHorizontalHeaderLabels(headers)
+        
+        for r, row in enumerate(rows):
+            self.role_table.setItem(r, 0, QTableWidgetItem(str(row["id"])))
+            if self.scope_source is None:
+                self.role_table.setItem(r, 1, QTableWidgetItem(row["source"]))
+                self.role_table.setItem(r, 2, QTableWidgetItem(row["name"]))
+            else:
+                self.role_table.setItem(r, 1, QTableWidgetItem(row["name"]))
+        
+        self.role_table.setColumnHidden(0, True)
+        self.role_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+
+    def _new_role(self):
+        self.role_id = None
+        self.role_input.clear()
+        self.role_table.clearSelection()
+
+    def _save_role(self):
+        name = self.role_input.text().strip()
+        if not name: return
+        
+        src = self.scope_source
+        if src is None and self.owner_combo:
+            src = self.owner_combo.currentText()
+
+        if self.role_id:
+            ok, msg = db.update_role(self.role_id, name, src)
+        else:
+            ok, msg = db.create_role(name, src)
+        
+        QMessageBox.information(self, "Role", msg)
+        self._reload_table()
+        self.roles_changed.emit()
+        self._new_role()
+
+    def _delete_role(self):
+        if not self.role_id: return
+        src = self.scope_source
+        if src is None and self.owner_combo: # Admin case fallback
+             src = self.role_table.item(self.role_table.currentRow(), 1).text()
+
+        confirm = QMessageBox.question(self, "Confirm", "Delete this role?")
+        if confirm == QMessageBox.StandardButton.Yes:
+            ok, msg = db.delete_role(self.role_id, src)
+            QMessageBox.information(self, "Role", msg)
+            self._reload_table()
+            self.roles_changed.emit()
+            self._new_role()
+
+    def _load_to_form(self, item):
+        row = item.row()
+        self.role_id = int(self.role_table.item(row, 0).text())
+        if self.scope_source is None:
+            self.role_input.setText(self.role_table.item(row, 2).text())
+            src = self.role_table.item(row, 1).text()
+            if self.owner_combo: self.owner_combo.setCurrentText(src)
+        else:
+            self.role_input.setText(self.role_table.item(row, 1).text())
 # -------------------------------------------------------------
 # MODIFIED: Hover card widget
 # -------------------------------------------------------------
@@ -3214,7 +3354,8 @@ class CrudWidget(QWidget):
         form_layout.setContentsMargins(8, 8, 8, 8)
 
         self.crud_name_input = QLineEdit()
-        self.crud_role_input = QLineEdit()
+        self.crud_role_input = QComboBox()
+        self.crud_role_input.setEditable(False)
         self.crud_badge_input = QLineEdit()
 
         # --- NEW: Default Location Combos ---
@@ -3244,7 +3385,7 @@ class CrudWidget(QWidget):
         form_layout.addWidget(self.crud_name_input, row, 1)
         row += 1
         form_layout.addWidget(QLabel("Role/Department:"), row, 0)
-        form_layout.addWidget(self.crud_role_input, row, 1)
+        form_layout.addWidget(self.crud_role_input, row, 1) # Adding the combo
         row += 1
         form_layout.addWidget(QLabel("Badge (ID):"), row, 0)
         form_layout.addWidget(self.crud_badge_input, row, 1)
@@ -3326,7 +3467,27 @@ class CrudWidget(QWidget):
 
         # Initial Load
         self.refresh_ui_data()
-
+    def populate_role_combo(self):
+        """Refreshes the Role dropdown from the DB Master List."""
+        current_text = self.crud_role_input.currentText()
+        self.crud_role_input.blockSignals(True)
+        self.crud_role_input.clear()
+        
+        # Add a default blank
+        self.crud_role_input.addItem("", None)
+        
+        # Fetch from roles table
+        roles = db.get_roles(self.source)
+        for r in roles:
+            self.crud_role_input.addItem(r["name"], r["id"])
+            
+        # Try to restore selection if text matches
+        idx = self.crud_role_input.findText(current_text)
+        if idx >= 0:
+            self.crud_role_input.setCurrentIndex(idx)
+            
+        self.crud_role_input.blockSignals(False)
+        
     def _request_refresh(self):
         self._debounce_timer.start(DEBOUNCE_MS)
 
@@ -3440,7 +3601,18 @@ class CrudWidget(QWidget):
         row = item.row()
         self.current_user_id = int(self.users_table.item(row, 0).text())
         self.crud_name_input.setText(self.users_table.item(row, 1).text())
-        self.crud_role_input.setText(self.users_table.item(row, 2).text())
+        
+        # Load Role into Combo
+        role_text = self.users_table.item(row, 2).text()
+        idx = self.crud_role_input.findText(role_text)
+        if idx >= 0:
+            self.crud_role_input.setCurrentIndex(idx)
+        else:
+            # If the role isn't in the list (legacy data), we can't select it easily 
+            # if editable is False. 
+            # Ideally, migration handled this. Defaults to blank if not found.
+            self.crud_role_input.setCurrentIndex(0)
+
         self.crud_badge_input.setText(self.users_table.item(row, 3).text())
         
         # Load Defaults from table (columns 4 and 5)
@@ -3465,7 +3637,10 @@ class CrudWidget(QWidget):
 
     def save_crud_user(self):
         name = self.crud_name_input.text().strip()
-        role = self.crud_role_input.text().strip()
+        # Get Role from Combo Text (NOT ID)
+        # This ensures we save "Driver" to the user table, keeping PlanStaffWidget compatible.
+        role = self.crud_role_input.currentText().strip() 
+        
         badge = self.crud_badge_input.text().strip()
         
         # Get defaults
@@ -3499,6 +3674,7 @@ class CrudWidget(QWidget):
             # 4. Refresh UI
             self._populate_role_filter() # Refresh roles in case user added a new one
             self.refresh_ui_data()       # Refresh table to show new columns
+            self.populate_role_combo()
             self.users_changed.emit(self.source) # Notify Plan Staff tab
 
         box = QMessageBox(self)
@@ -4307,12 +4483,30 @@ class MainWindow(QMainWindow):
                 lambda src: self.plan_widget.refresh_ui_data()
             )
 
-        # 5) Locations admin
+       # 5) Locations admin
         self.location_widget = LocationAdminWidget(scope_source=self.user_role)
         tabs.addTab(self.location_widget, "📍 Location")
-        # Refresh Pick Up / Drop Off dropdowns when locations change
         self.location_widget.locations_changed.connect(
             self.plan_widget.load_location_options
+        )
+        self.location_widget.locations_changed.connect(
+            lambda: self.crud_widget._populate_location_combos(self.crud_widget.def_pickup_combo)
+        )
+        self.location_widget.locations_changed.connect(
+            lambda: self.crud_widget._populate_location_combos(self.crud_widget.def_dropoff_combo)
+        )
+
+        # --- CHANGE: ADD ROLES TAB ---
+        self.role_widget = RoleAdminWidget(scope_source=self.user_role)
+        tabs.addTab(self.role_widget, "👔 Roles / Dept")
+        
+        # Update CrudWidget when roles change
+        self.role_widget.roles_changed.connect(
+            self.crud_widget.populate_role_combo
+        )
+        # Update Filter combo in CrudWidget too
+        self.role_widget.roles_changed.connect(
+            self.crud_widget._populate_role_filter
         )
 
         # 6) Settings Tab

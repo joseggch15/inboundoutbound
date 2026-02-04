@@ -26,6 +26,115 @@ def setup_database():
         )
     """
     )
+    
+    # -------------------------
+    # Roles (Master List) - NEW
+    # -------------------------
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS roles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            name TEXT NOT NULL,
+            UNIQUE (source, name)
+        )"""
+    )
+
+    # --- MIGRATION: Auto-populate roles from existing users ---
+    # This ensures your dropdown isn't empty and contains all currently used roles.
+    try:
+        cursor.execute(
+            "INSERT OR IGNORE INTO roles (source, name) "
+            "SELECT source, role FROM users WHERE role IS NOT NULL AND role != ''"
+        )
+    except Exception:
+        pass
+
+    # ... (rest of setup_database) ...
+    conn.commit()
+    conn.close()
+
+# --- Add these new CRUD functions at the end of database_logic.py ---
+
+def get_roles(source: Optional[str] = None) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    if source:
+        cur.execute("SELECT id, source, name FROM roles WHERE source=? ORDER BY name", (source,))
+    else:
+        cur.execute("SELECT id, source, name FROM roles ORDER BY source, name")
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+def get_roles_filtered(source: Optional[str], text: Optional[str]) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    query = "SELECT id, source, name FROM roles"
+    conditions = []
+    params = []
+
+    if source:
+        conditions.append("source = ?")
+        params.append(source)
+    if text:
+        conditions.append("name LIKE ?")
+        params.append(f"%{text}%")
+    
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    
+    query += " ORDER BY name"
+    cursor.execute(query, tuple(params))
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+def create_role(name: str, source: str) -> Tuple[bool, str]:
+    name = (name or "").strip()
+    if not name:
+        return False, "Role name cannot be empty."
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    try:
+        cur.execute("INSERT INTO roles (source, name) VALUES (?,?)", (source, name))
+        conn.commit()
+        return True, f"Role '{name}' created."
+    except sqlite3.IntegrityError:
+        return False, f"Role '{name}' already exists for {source}."
+    finally:
+        conn.close()
+
+def update_role(role_id: int, name: str, source: str) -> Tuple[bool, str]:
+    name = (name or "").strip()
+    if not name:
+        return False, "Role name cannot be empty."
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE roles SET name=? WHERE id=? AND source=?", (name, role_id, source))
+        conn.commit()
+        if cur.rowcount:
+            return True, "Role updated."
+        return False, "Role not found."
+    except sqlite3.IntegrityError:
+        return False, "Role name already exists."
+    finally:
+        conn.close()
+
+def delete_role(role_id: int, source: str) -> Tuple[bool, str]:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM roles WHERE id=? AND source=?", (role_id, source))
+        conn.commit()
+        if cur.rowcount:
+            return True, "Role deleted."
+        return False, "Role not found."
+    finally:
+        conn.close()
 
     # -------------------------
     # Locations (maestro de puntos) — ahora multi-tenant por 'source'
@@ -39,6 +148,8 @@ def setup_database():
             UNIQUE (source, pickup_location)
         )"""
     )
+    
+    
 
     # --- Migración desde esquema antiguo (sin 'source') ---
     try:
