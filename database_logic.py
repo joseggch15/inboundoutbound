@@ -644,6 +644,35 @@ def assign_user_location_range(badge: str, start_date: date, end_date: date,
     conn.commit()
     conn.close()
 
+def get_users_with_defaults(source: str) -> list:
+    """
+    Get all users joined with their default locations (is_default=1).
+    Optimized for CRUD table rendering to avoid N+1 queries.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    # Realizamos un LEFT JOIN con user_locations filtrando por is_default=1
+    # Esto nos da el usuario Y su configuración por defecto en una sola fila.
+    query = """
+        SELECT 
+            u.id, u.name, u.role, u.badge,
+            ul.pickup_location, ul.dropoff_location
+        FROM users u
+        LEFT JOIN user_locations ul 
+            ON u.badge = ul.badge 
+            AND ul.is_default = 1
+        WHERE u.source = ?
+        ORDER BY u.name
+    """
+    
+    cursor.execute(query, (source,))
+    # Convertimos a lista de diccionarios para facilitar el manejo en UI
+    users = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return users
+
 def set_user_default_locations(badge: str, pickup: Optional[str], dropoff: Optional[str]) -> None:
     """
     Define un default permanente (sin rango finito) para el usuario.

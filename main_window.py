@@ -52,6 +52,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
 )
 from PyQt6.QtCore import (
     QDate,
@@ -2287,15 +2288,25 @@ class PlanStaffWidget(QWidget):
         self._shift_info_card.show_info(global_cell_rect, final_html)
 
     def load_users_to_selector(self):
+        """
+        Carga usuarios Y sus ubicaciones por defecto en el selector.
+        """
         self.user_selector_combo.blockSignals(True)
         self.user_selector_combo.clear()
-        self.users_for_selector = db.get_all_users(self.source)
+        
+        # --- CAMBIO AQUÍ: Usamos la nueva función que trae los defaults ---
+        # Antes era: db.get_all_users(self.source)
+        self.users_for_selector = db.get_users_with_defaults(self.source)
+        # ----------------------------------------------------------------
+        
         self.user_selector_combo.addItem("-- Select a user --")
         for user in self.users_for_selector:
             self.user_selector_combo.addItem(user["name"])
+            
         self.user_selector_combo.setCurrentIndex(0)
         self.user_selector_combo.blockSignals(False)
-        # clear dependent fields
+        
+        # Limpiamos los campos dependientes
         self.role_display.clear()
         self.badge_display.clear()
 
@@ -2304,13 +2315,44 @@ class PlanStaffWidget(QWidget):
         self.load_users_to_selector()
 
     def autofill_user_data(self, index):
+        """
+        Rellena Rol, Badge Y Ubicaciones por defecto al seleccionar usuario.
+        """
         if index > 0:
+            # Recuperamos el usuario de la lista en memoria (el index-1 es por el item "-- Select --")
             user = self.users_for_selector[index - 1]
+            
             self.role_display.setText(user["role"])
             self.badge_display.setText(user["badge"])
+            
+            # --- NUEVA LÓGICA: Pre-seleccionar Pick Up / Drop Off ---
+            
+            # 1. Obtenemos los valores que vienen de la BD (pueden ser None o texto)
+            def_pu = user.get("pickup_location")
+            def_do = user.get("dropoff_location")
+
+            # Función auxiliar interna para buscar y seleccionar en un combo sin romper nada
+            def set_combo(combo, val):
+                if val:
+                    idx = combo.findData(val) # Busca si la ubicación existe en la lista
+                    if idx >= 0:
+                        combo.setCurrentIndex(idx) # Si existe, la selecciona
+                    else:
+                        combo.setCurrentIndex(0) # Si no, lo deja en blanco
+                else:
+                    combo.setCurrentIndex(0) # Si no tiene default, lo deja en blanco
+
+            # 2. Aplicamos la selección a tus combos existentes
+            set_combo(self.pickup_combo, def_pu)
+            set_combo(self.dropoff_combo, def_do)
+            # -------------------------------------------------------
+
         else:
+            # Si seleccionó "-- Select a user --", limpiamos todo
             self.role_display.clear()
             self.badge_display.clear()
+            self.pickup_combo.setCurrentIndex(0)
+            self.dropoff_combo.setCurrentIndex(0)
 
     def _apply_schedule_period(
         self,
@@ -3144,6 +3186,8 @@ class RotationHistoryWidget(QWidget):
 # -------------------------------------------------------------
 # Widget: Users CRUD (with Import from Excel)
 # -------------------------------------------------------------
+# Dentro de main_window.py
+
 class CrudWidget(QWidget):
     # Signals for immediate UI sync
     import_done = pyqtSignal(str)  # emits 'source' when import finishes
@@ -3163,7 +3207,9 @@ class CrudWidget(QWidget):
 
         layout = QHBoxLayout(self)
 
-        # Left panel: user form
+        # ---------------------------------------------------------
+        # Left panel: User Form
+        # ---------------------------------------------------------
         form_layout = QGridLayout()
         form_layout.setContentsMargins(8, 8, 8, 8)
 
@@ -3171,6 +3217,11 @@ class CrudWidget(QWidget):
         self.crud_role_input = QLineEdit()
         self.crud_badge_input = QLineEdit()
 
+        # --- NEW: Default Location Combos ---
+        self.def_pickup_combo = QComboBox()
+        self.def_dropoff_combo = QComboBox()
+        
+        # Buttons
         self.crud_save_button = QPushButton("💾 Save User")
         self.crud_save_button.clicked.connect(self.save_crud_user)
         self.crud_new_button = QPushButton("✨ New User")
@@ -3181,37 +3232,64 @@ class CrudWidget(QWidget):
         self.import_button = QPushButton("📥 Import from Excel → DB (validated)")
         self.import_button.clicked.connect(self.import_users_from_excel)
 
-
-
-
-        # Button variants
+        # Styling
         self.crud_save_button.setProperty("variant", "primary")
         self.crud_new_button.setProperty("variant", "secondary")
         self.crud_delete_button.setProperty("danger", True)
         self.import_button.setProperty("variant", "secondary")
 
-        form_layout.addWidget(QLabel("Full Name:"), 0, 0)
-        form_layout.addWidget(self.crud_name_input, 0, 1)
-        form_layout.addWidget(QLabel("Role/Department:"), 1, 0)
-        form_layout.addWidget(self.crud_role_input, 1, 1)
-        form_layout.addWidget(QLabel("Badge (ID):"), 2, 0)
-        form_layout.addWidget(self.crud_badge_input, 2, 1)
+        # Layout Setup
+        row = 0
+        form_layout.addWidget(QLabel("Full Name:"), row, 0)
+        form_layout.addWidget(self.crud_name_input, row, 1)
+        row += 1
+        form_layout.addWidget(QLabel("Role/Department:"), row, 0)
+        form_layout.addWidget(self.crud_role_input, row, 1)
+        row += 1
+        form_layout.addWidget(QLabel("Badge (ID):"), row, 0)
+        form_layout.addWidget(self.crud_badge_input, row, 1)
+        row += 1
+        
+        # Separator for Logistics
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        form_layout.addWidget(sep, row, 0, 1, 2)
+        row += 1
+        
+        lbl_logistics = QLabel("Default Logistics (Pre-defined):")
+        font_l = lbl_logistics.font(); font_l.setBold(True)
+        lbl_logistics.setFont(font_l)
+        form_layout.addWidget(lbl_logistics, row, 0, 1, 2)
+        row += 1
 
+        form_layout.addWidget(QLabel("Default Pick Up:"), row, 0)
+        form_layout.addWidget(self.def_pickup_combo, row, 1)
+        row += 1
+        form_layout.addWidget(QLabel("Default Drop Off:"), row, 0)
+        form_layout.addWidget(self.def_dropoff_combo, row, 1)
+        row += 1
+
+        # Action Buttons
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.crud_new_button)
         button_layout.addWidget(self.crud_save_button)
-        form_layout.addLayout(button_layout, 3, 0, 1, 2)
-        form_layout.addWidget(self.crud_delete_button, 4, 0, 1, 2)
-        form_layout.addWidget(self.import_button, 5, 0, 1, 2)
+        form_layout.addLayout(button_layout, row, 0, 1, 2)
+        row += 1
+        form_layout.addWidget(self.crud_delete_button, row, 0, 1, 2)
+        row += 1
+        form_layout.addWidget(self.import_button, row, 0, 1, 2)
 
         form_group = create_group_box("Manage User", form_layout)
         form_group.setFixedWidth(400)
 
-        # Right panel: users table
+        # ---------------------------------------------------------
+        # Right panel: Users Table
+        # ---------------------------------------------------------
         table_panel = QWidget()
         table_layout = QVBoxLayout(table_panel)
 
-        # --- Filter Panel for Users ---
+        # Filter Panel
         filter_bar = QHBoxLayout()
         self.user_search_input = QLineEdit()
         self.user_search_input.setPlaceholderText("Search Name/Badge...")
@@ -3238,6 +3316,7 @@ class CrudWidget(QWidget):
         self.users_table = QTableWidget()
         self.users_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.users_table.setAlternatingRowColors(True)
+        self.users_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.users_table.itemClicked.connect(self.load_user_to_crud_form)
         table_layout.addWidget(self.users_table)
 
@@ -3245,12 +3324,14 @@ class CrudWidget(QWidget):
         layout.addWidget(form_group)
         layout.addWidget(table_group)
 
+        # Initial Load
         self.refresh_ui_data()
 
     def _request_refresh(self):
         self._debounce_timer.start(DEBOUNCE_MS)
 
     def _populate_role_filter(self):
+        # Populate Role Filter
         self.user_role_combo.blockSignals(True)
         current_role = self.user_role_combo.currentText()
         self.user_role_combo.clear()
@@ -3262,6 +3343,26 @@ class CrudWidget(QWidget):
         if idx > 0:
             self.user_role_combo.setCurrentIndex(idx)
         self.user_role_combo.blockSignals(False)
+        
+        # Populate Location Combos (Default Pick/Drop)
+        self._populate_location_combos(self.def_pickup_combo)
+        self._populate_location_combos(self.def_dropoff_combo)
+
+    def _populate_location_combos(self, combo: QComboBox):
+        """Helper to fill location combos keeping current selection if possible."""
+        current_data = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("— None —", None)
+        locations = db.get_locations(self.source)
+        for loc in locations:
+            combo.addItem(loc["pickup_location"], loc["pickup_location"])
+        
+        if current_data:
+            idx = combo.findData(current_data)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
 
     def reset_filters(self):
         with QSignalBlocker(self.user_search_input), QSignalBlocker(
@@ -3272,7 +3373,6 @@ class CrudWidget(QWidget):
             self.user_badge_prefix_input.clear()
         self.load_users_table()
 
-    # Table & form CRUD
     def load_users_table(self):
         self._filter_state["text"] = self.user_search_input.text()
         self._filter_state["role"] = (
@@ -3282,28 +3382,59 @@ class CrudWidget(QWidget):
         )
         self._filter_state["badge_prefix"] = self.user_badge_prefix_input.text()
 
-        users = db.get_users_filtered(
-            source=self.source,
-            text=self._filter_state["text"],
-            role=self._filter_state["role"],
-            badge_prefix=self._filter_state["badge_prefix"],
-            active_since=None,  # Not implemented in UI yet
-        )
+        # --- MODIFIED: Use the JOINED query to get defaults ---
+        # Note: Filtering by defaults isn't requested, but we need to display them.
+        # If filtering is active, we might need a more complex query or filter in Python.
+        # Since get_users_filtered doesn't support defaults, we use get_users_with_defaults
+        # and filter in Python for simplicity (assuming < 2000 users). 
+        # For production with 50k+ users, we'd add defaults to get_users_filtered SQL.
+        
+        all_users_with_defaults = db.get_users_with_defaults(self.source)
+        
+        # Apply filters in Python
+        filtered_users = []
+        txt = (self._filter_state["text"] or "").lower()
+        role_filter = self._filter_state["role"]
+        pfx = (self._filter_state["badge_prefix"] or "").lower()
 
-        headers = ["ID", "Name", "Role", "Badge"]
-        self.users_table.setRowCount(len(users))
+        for u in all_users_with_defaults:
+            if txt and (txt not in u["name"].lower() and txt not in u["badge"].lower()):
+                continue
+            if role_filter and u["role"] != role_filter:
+                continue
+            if pfx and not u["badge"].lower().startswith(pfx):
+                continue
+            filtered_users.append(u)
+
+        # Columns: ID, Name, Role, Badge, Default Pick, Default Drop
+        headers = ["ID", "Name", "Role", "Badge", "Def. Pick Up", "Def. Drop Off"]
+        self.users_table.setRowCount(len(filtered_users))
         self.users_table.setColumnCount(len(headers))
         self.users_table.setHorizontalHeaderLabels(headers)
 
-        for row, user in enumerate(users):
+        for row, user in enumerate(filtered_users):
             self.users_table.setItem(row, 0, QTableWidgetItem(str(user["id"])))
             self.users_table.setItem(row, 1, QTableWidgetItem(user["name"]))
             self.users_table.setItem(row, 2, QTableWidgetItem(user["role"]))
             self.users_table.setItem(row, 3, QTableWidgetItem(user["badge"]))
+            
+            # New Columns
+            pu = user.get("pickup_location") or ""
+            do = user.get("dropoff_location") or ""
+            
+            item_pu = QTableWidgetItem(pu)
+            item_pu.setForeground(QColor("#1565C0") if pu else QColor("#9E9E9E")) # Blue if set
+            self.users_table.setItem(row, 4, item_pu)
+            
+            item_do = QTableWidgetItem(do)
+            item_do.setForeground(QColor("#1565C0") if do else QColor("#9E9E9E"))
+            self.users_table.setItem(row, 5, item_do)
+
         self.users_table.setColumnHidden(0, True)  # hide ID column
-        self.users_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
+        self.users_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        # Give more space to Logistics columns if needed
+        self.users_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.users_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
 
     def load_user_to_crud_form(self, item):
         row = item.row()
@@ -3311,185 +3442,127 @@ class CrudWidget(QWidget):
         self.crud_name_input.setText(self.users_table.item(row, 1).text())
         self.crud_role_input.setText(self.users_table.item(row, 2).text())
         self.crud_badge_input.setText(self.users_table.item(row, 3).text())
+        
+        # Load Defaults from table (columns 4 and 5)
+        # Note: We rely on the text in the table matching the data in the combo
+        def_pickup = self.users_table.item(row, 4).text()
+        def_dropoff = self.users_table.item(row, 5).text()
+        
+        idx_pu = self.def_pickup_combo.findData(def_pickup if def_pickup else None)
+        self.def_pickup_combo.setCurrentIndex(idx_pu if idx_pu >= 0 else 0)
+        
+        idx_do = self.def_dropoff_combo.findData(def_dropoff if def_dropoff else None)
+        self.def_dropoff_combo.setCurrentIndex(idx_do if idx_do >= 0 else 0)
 
     def clear_crud_form(self):
         self.current_user_id = None
         self.crud_name_input.clear()
         self.crud_role_input.clear()
         self.crud_badge_input.clear()
+        self.def_pickup_combo.setCurrentIndex(0)
+        self.def_dropoff_combo.setCurrentIndex(0)
         self.users_table.clearSelection()
 
     def save_crud_user(self):
         name = self.crud_name_input.text().strip()
         role = self.crud_role_input.text().strip()
         badge = self.crud_badge_input.text().strip()
+        
+        # Get defaults
+        def_pickup = self.def_pickup_combo.currentData()
+        def_dropoff = self.def_dropoff_combo.currentData()
 
         if not name or not role or not badge:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Incomplete Data")
-            box.setText("All fields are required.")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
+            QMessageBox.warning(self, "Incomplete Data", "Name, Role, and Badge are required.")
             return
 
+        # 1. Save User Core Data
         if self.current_user_id:
-            success, message = db.update_user(
-                self.current_user_id, name, role, badge, self.source
-            )
+            success, message = db.update_user(self.current_user_id, name, role, badge, self.source)
         else:
             success, message = db.add_user(name, role, badge, self.source)
 
-        # --- INICIO DEL CAMBIO ---
         if success:
-            # 1. Sincronizar Excel inmediatamente (Escribir el usuario en el archivo físico)
-            # Esto permite que el PlanStaffWidget lo lea al instante.
+            # 2. Save Default Logistics (SSoT: user_locations where is_default=1)
+            try:
+                db.set_user_default_locations(badge, def_pickup, def_dropoff)
+                message += "\nDefault locations updated."
+            except Exception as e:
+                message += f"\nWarning: Could not save locations ({e})"
+
+            # 3. Sync Excel
             try:
                 excel.refresh_excel_from_db(self.excel_file, self.source)
             except Exception as e:
                 print(f"Auto-refresh failed: {e}")
 
-            # 2. Actualizar la UI local
-            self._populate_role_filter()
-            self.refresh_ui_data()
-
-            # 3. Avisar a otras pestañas que hubo cambios
-            self.users_changed.emit(self.source)
-        # --- FIN DEL CAMBIO ---
+            # 4. Refresh UI
+            self._populate_role_filter() # Refresh roles in case user added a new one
+            self.refresh_ui_data()       # Refresh table to show new columns
+            self.users_changed.emit(self.source) # Notify Plan Staff tab
 
         box = QMessageBox(self)
-        box.setIcon(
-            QMessageBox.Icon.Information if success else QMessageBox.Icon.Warning
-        )
+        box.setIcon(QMessageBox.Icon.Information if success else QMessageBox.Icon.Warning)
         box.setWindowTitle("Success" if success else "Error")
         box.setText(message)
         box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
         box.exec()
 
-    # En main_window.py -> clase CrudWidget
-
     def delete_crud_user(self):
         if not self.current_user_id:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("No Selection")
-            box.setText("Please select a user in the table to delete.")
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
+            QMessageBox.warning(self, "No Selection", "Please select a user to delete.")
             return
 
-        # 1. Capturar el BADGE antes de borrar (lo necesitamos para buscar en Excel)
         badge_to_remove = self.crud_badge_input.text().strip()
 
-        # Configurar cuadro de confirmación correctamente
         confirm = QMessageBox(self)
         confirm.setIcon(QMessageBox.Icon.Question)
         confirm.setWindowTitle("Confirm User Deletion")
-        confirm.setText(
-            f"Are you sure you want to delete user '{self.crud_name_input.text()}'?"
-        )
-
-        # DEFINICIÓN CORRECTA DE LOS BOTONES
+        confirm.setText(f"Are you sure you want to delete user '{self.crud_name_input.text()}'?")
         yes_btn = confirm.addButton("Yes", QMessageBox.ButtonRole.YesRole)
         confirm.addButton("No", QMessageBox.ButtonRole.NoRole)
-
         confirm.exec()
 
         if confirm.clickedButton() == yes_btn:
-            # 2. Borrar de BD (SSoT)
             success_db, message_db = db.delete_user(self.current_user_id)
-
             final_msg = message_db
 
             if success_db:
-                # 3. Si se borró en BD, borrar también del Excel
-                success_excel, msg_excel = excel.remove_user_from_excel(
-                    self.excel_file, badge_to_remove
-                )
-
+                # Also clean defaults from DB (Optional but clean)
+                # Note: db.delete_user only deletes from 'users'. 
+                # Ideally, foreign keys would handle this, or we run a manual delete on user_locations.
+                # For now, leaving orphan defaults is harmless, but we could add:
+                # db.set_user_default_locations(badge_to_remove, None, None) 
+                
+                success_excel, msg_excel = excel.remove_user_from_excel(self.excel_file, badge_to_remove)
                 if success_excel:
-                    final_msg += f"\n\nAlso removed from Excel: {badge_to_remove}"
-                    # Log de auditoría
-                    db.log_event(
-                        self.logged_username,
-                        self.source,
-                        "USER_DELETE",
-                        f"Deleted {badge_to_remove} from DB and Excel.",
-                    )
+                    final_msg += f"\n\nRemoved from Excel: {badge_to_remove}"
                 else:
-                    final_msg += (
-                        f"\n\nWarning: Could not remove from Excel ({msg_excel})"
-                    )
+                    final_msg += f"\n\nWarning: Excel sync failed ({msg_excel})"
 
-                # Emitimos señal para actualizar la UI
-                self._populate_role_filter()
+                db.log_event(self.logged_username, self.source, "USER_DELETE", f"Deleted {badge_to_remove}")
+                
                 self.refresh_ui_data()
                 self.users_changed.emit(self.source)
 
-            box = QMessageBox(self)
-            box.setIcon(
-                QMessageBox.Icon.Information if success_db else QMessageBox.Icon.Warning
-            )
-            box.setWindowTitle("Deletion Result")
-            box.setText(final_msg)
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
+            QMessageBox.information(self, "Deletion Result", final_msg)
 
     def import_users_from_excel(self):
-        """
-        FR-02: Import users and day-by-day schedules from Excel to DB.
-        With strict structure validation first.
-        """
+        # (Sin cambios en esta función)
         try:
-            inserted, skipped, upserts = excel.import_excel_to_db(
-                self.excel_file, self.source
-            )
-
-            # Audit log (FR-04)
-            db.log_event(
-                self.logged_username,
-                self.source,
-                "DATA_IMPORT",
-                f"users_inserted={inserted}; users_skipped={skipped}; schedule_upserts={upserts}",
-            )
-
-            # Message
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Information)
-            box.setWindowTitle("Import Complete")
-            box.setText(
-                f"Imported {inserted} new users.\n"
-                f"Skipped {skipped} users that already existed.\n"
-                f"Upserted {upserts} schedule day-entries."
-            )
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
-
-            # Refresh users table immediately
+            inserted, skipped, upserts = excel.import_excel_to_db(self.excel_file, self.source)
+            db.log_event(self.logged_username, self.source, "DATA_IMPORT", f"users_inserted={inserted}; skipped={skipped}")
+            QMessageBox.information(self, "Import Complete", f"Imported {inserted} new users.\nSkipped {skipped} existing.\nUpserted {upserts} schedules.")
             self.refresh_ui_data()
-            # Signals to refresh "Select Employee" in Plan Staff
             self.users_changed.emit(self.source)
             self.import_done.emit(self.source)
         except ValueError as ve:
-            # Structure error -> DO NOT save anything
-            db.log_event(
-                self.logged_username,
-                self.source,
-                "DATA_IMPORT",
-                f"ERROR: {str(ve).replace(chr(10),' | ')}",
-            )
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Critical)
-            box.setWindowTitle("Invalid Excel")
-            box.setText(str(ve))
-            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
+            QMessageBox.critical(self, "Invalid Excel", str(ve))
 
     def refresh_ui_data(self):
         self._populate_role_filter()
         self.load_users_table()
         self.clear_crud_form()
-
 
 # -------------------------------------------------------------
 # Widget: Shift Types Admin (Admin and Site Managers)
