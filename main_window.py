@@ -1772,32 +1772,48 @@ class PlanStaffWidget(QWidget):
 
     def _calculate_time_logic(self, status, kind, raw_time=None):
         """
-        Centraliza la Lógica de Negocio (Newmont/RGM) para calcular horas.
-        Se usa tanto en el arrastre visual como en el recálculo logístico final.
-        
-        Args:
-            status (str): El estado (ON, OFF, ON NS, etc.)
-            kind (str): "IN" para entrada, "OUT" para salida.
-            raw_time (str, optional): Hora cruda de la DB si es un turno custom.
+        CORREGIDO: Ahora busca primero en los Custom Shift Types cargados en memoria
+        (self._custom_shift_map), recuperando la funcionalidad original.
         """
         from datetime import time as dtime
         
-        # 1. Reglas de Negocio Hardcoded (Newmont / RGM)
+        # Validación de seguridad
+        if not status:
+            return dtime(0, 0)
+        
+        status_key = status.strip().upper()
+
+        # ---------------------------------------------------------
+        # 1. PRIORIDAD: Reglas de Negocio Hardcoded (Newmont / RGM)
+        # ---------------------------------------------------------
         if self.source == "Newmont":
-            if status == "ON": 
+            if status_key == "ON": 
                 return dtime(6, 0) if kind == "IN" else dtime(12, 0)
-            elif status == "ON NS": 
+            elif status_key == "ON NS": 
                 return dtime(12, 0) if kind == "IN" else dtime(6, 0)
         
         elif self.source == "RGM":
-            if status in ("ON", "ON NS"): 
-                return dtime(7, 0) # 07:00 AM para entrada y salida (turno 24h/cambio)
+            if status_key in ("ON", "ON NS"): 
+                return dtime(7, 0)
 
-        # 2. Manejo de Turnos Personalizados / Fallback
-        # Intenta parsear el raw_time si existe, sino devuelve 00:00
-        def_t = dtime(0, 0)
-        return _parse_hhmm_to_time(raw_time, def_t)
+        # ---------------------------------------------------------
+        # 2. PRIORIDAD: Turnos Personalizados (LA LÓGICA RESTAURADA)
+        # ---------------------------------------------------------
+        # Aquí consultamos el mapa que ya cargaste al inicio en load_shift_types
+        if status_key in self._custom_shift_map:
+            shift_info = self._custom_shift_map[status_key]
+            # Extraer hora según sea Entrada o Salida
+            time_str = shift_info.get("in_time") if kind == "IN" else shift_info.get("out_time")
+            
+            # Usar tu helper existente para convertir string a objeto time
+            return _parse_hhmm_to_time(time_str, dtime(0, 0))
 
+        # ---------------------------------------------------------
+        # 3. FALLBACK: Datos Crudos del Arrastre
+        # ---------------------------------------------------------
+        # Si no está en el mapa, intentamos usar lo que venía de la celda origen
+        return _parse_hhmm_to_time(raw_time, dtime(0, 0))
+    
     def _consolidate_and_record_logistics(self, badge, role, username, op_start, op_end, status):
         """
         EL MOTOR DE CONSOLIDACIÓN:
