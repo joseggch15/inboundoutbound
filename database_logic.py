@@ -1248,3 +1248,56 @@ def delete_shift_type(type_id: int) -> Tuple[bool, str, Optional[str], Optional[
         return False, f"Database error: {e}", None, None
     finally:
         conn.close()
+        
+def get_operation_overlapping(badge: str, check_date: date) -> Optional[Dict]:
+    """Busca si existe una operación activa que cubra una fecha específica."""
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    iso = check_date.isoformat()
+    # Buscamos una operación donde start <= date <= end
+    cursor.execute(
+        "SELECT * FROM operations WHERE badge = ? AND start_date <= ? AND end_date >= ?",
+        (badge, iso, iso)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def delete_operations_in_range(badge: str, start_d: date, end_d: date):
+    """
+    Elimina cualquier operación que esté TOTAL o PARCIALMENTE contenida en el rango,
+    o que se solape. Esto es vital para limpiar antes de re-insertar el bloque consolidado.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    # Borramos cualquier operación que se solape con el nuevo rango maestro
+    cursor.execute(
+        """
+        DELETE FROM operations 
+        WHERE badge = ? 
+          AND (
+            (start_date >= ? AND start_date <= ?) OR 
+            (end_date >= ? AND end_date <= ?) OR
+            (start_date <= ? AND end_date >= ?)
+          )
+        """,
+        (badge, start_d.isoformat(), end_d.isoformat(), 
+         start_d.isoformat(), end_d.isoformat(),
+         start_d.isoformat(), end_d.isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+def is_working_status(status: str, source: str) -> bool:
+    """Helper rápido para saber si un status cuenta como día de trabajo (para fusionar)."""
+    if not status or status.upper() in ("OFF", "BREAK", "KO", "LEAVE", ""):
+        return False
+    
+    # Chequear si es un custom type marcado como 'is_off'
+    types = get_shift_types(source)
+    for t in types:
+        if t["code"] == status and t.get("is_off"):
+            return False
+            
+    return True

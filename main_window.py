@@ -1764,16 +1764,122 @@ class PlanStaffWidget(QWidget):
         else:
             # leave as-is (could be a custom code already colored on load)
             pass
+        
+        
+    # --------------------------------------------------------------------------
+    # MÉTODOS AUXILIARES PARA SMART DRAG & CONSOLIDATION
+    # --------------------------------------------------------------------------
 
+    def _calculate_time_logic(self, status, kind, raw_time=None):
+        """
+        Centraliza la Lógica de Negocio (Newmont/RGM) para calcular horas.
+        Se usa tanto en el arrastre visual como en el recálculo logístico final.
+        
+        Args:
+            status (str): El estado (ON, OFF, ON NS, etc.)
+            kind (str): "IN" para entrada, "OUT" para salida.
+            raw_time (str, optional): Hora cruda de la DB si es un turno custom.
+        """
+        from datetime import time as dtime
+        
+        # 1. Reglas de Negocio Hardcoded (Newmont / RGM)
+        if self.source == "Newmont":
+            if status == "ON": 
+                return dtime(6, 0) if kind == "IN" else dtime(12, 0)
+            elif status == "ON NS": 
+                return dtime(12, 0) if kind == "IN" else dtime(6, 0)
+        
+        elif self.source == "RGM":
+            if status in ("ON", "ON NS"): 
+                return dtime(7, 0) # 07:00 AM para entrada y salida (turno 24h/cambio)
+
+        # 2. Manejo de Turnos Personalizados / Fallback
+        # Intenta parsear el raw_time si existe, sino devuelve 00:00
+        def_t = dtime(0, 0)
+        return _parse_hhmm_to_time(raw_time, def_t)
+
+    def _consolidate_and_record_logistics(self, badge, role, username, op_start, op_end, status):
+        """
+        EL MOTOR DE CONSOLIDACIÓN:
+        1. Verifica si la operación nueva se toca con operaciones existentes (ayer/mañana).
+        2. Si se tocan y son trabajo continuo, las fusiona en un solo bloque.
+        3. Recalcula las horas de Entrada (Entry) y Salida (Exit) basadas en el PRIMER y ÚLTIMO día.
+        4. Escribe la Operación Maestra en la BD.
+        """
+        # A. Si es un día libre (OFF), NO consolidamos operaciones, solo limpiamos.
+        if not db.is_working_status(status, self.source):
+            db.delete_operations_in_range(badge, op_start, op_end)
+            return
+
+        final_start = op_start
+        final_end = op_end
+
+        # B. Fusión Izquierda (Looking Back - Ayer)
+        prev_day = final_start - timedelta(days=1)
+        prev_op = db.get_operation_overlapping(badge, prev_day)
+        
+        if prev_op:
+            # Doble check: Asegurar que el día anterior en el calendario (schedule) es trabajo
+            prev_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source)
+            prev_st = prev_map.get(prev_day.isoformat(), {}).get("status")
+            
+            if db.is_working_status(prev_st, self.source):
+                # ¡Fusión! Extendemos el inicio al inicio de la operación anterior
+                prev_op_start = datetime.strptime(prev_op['start_date'], "%Y-%m-%d").date()
+                if prev_op_start < final_start:
+                    final_start = prev_op_start
+
+        # C. Fusión Derecha (Looking Forward - Mañana)
+        next_day = final_end + timedelta(days=1)
+        next_op = db.get_operation_overlapping(badge, next_day)
+        
+        if next_op:
+            # Doble check: Asegurar que el día siguiente en el calendario es trabajo
+            next_map = db.get_schedule_map_for_range(badge, next_day, next_day, self.source)
+            next_st = next_map.get(next_day.isoformat(), {}).get("status")
+            
+            if db.is_working_status(next_st, self.source):
+                # ¡Fusión! Extendemos el final al final de la operación siguiente
+                next_op_end = datetime.strptime(next_op['end_date'], "%Y-%m-%d").date()
+                if next_op_end > final_end:
+                    final_end = next_op_end
+
+        # D. Limpieza: Borrar cualquier operación fragmentada en el nuevo rango maestro
+        db.delete_operations_in_range(badge, final_start, final_end)
+
+        # E. Recálculo Inteligente de Horarios (Entry/Exit)
+        # Usamos el status del PRIMER día para la Entry Date
+        map_start = db.get_schedule_map_for_range(badge, final_start, final_start, self.source)
+        st_start = map_start.get(final_start.isoformat(), {}).get("status") or status
+        t_in = self._calculate_time_logic(st_start, "IN")
+
+        # Usamos el status del ÚLTIMO día para la Exit Date
+        map_end = db.get_schedule_map_for_range(badge, final_end, final_end, self.source)
+        st_end = map_end.get(final_end.isoformat(), {}).get("status") or status
+        t_out = self._calculate_time_logic(st_end, "OUT")
+
+        # F. Inserción de la Operación Unificada
+        db.add_operation(
+            username=username, 
+            role=role, 
+            badge=badge,
+            start_date=final_start, 
+            end_date=final_end,
+            created_by=self.logged_username,
+            entry_date=datetime.combine(final_start, t_in),
+            exit_date=datetime.combine(final_end, t_out)
+        )
+        # print(f"DEBUG: Consolidated Op: {final_start} -> {final_end}")
+
+    
     def _apply_fill_from_anchor(self):
         """
         Excel-style Fill Right: Copia la celda izquierda (ancla) hacia la derecha.
         
-        CORRECCIÓN APLICADA: 
-        1. Itera sobre rangos para arreglar el bug de selección.
-        2. IMPONE las reglas de horario de Newmont/RGM (Business Logic Hardcoded).
-        3. FIX OFF-BY-ONE: La operación logística se registra desde el día ANCLA (inicio selección)
-           para que el "Entry Date" sea correcto (ej. del 21 al 25, no del 22 al 25).
+        VERSIÓN MEJORADA: SMART DRAG & CONSOLIDATION
+        1. Mantiene tu lógica de selección y corrección de fecha de inicio (Off-By-One).
+        2. Usa _calculate_time_logic para estandarizar reglas Newmont/RGM.
+        3. Invoca _consolidate_and_record_logistics para fusionar bloques adyacentes.
         """
         # 1. Obtener rangos seleccionados
         selected_ranges = self.schedule_table.selectedRanges()
@@ -1825,47 +1931,23 @@ class PlanStaffWidget(QWidget):
                     new_shift_type = source_info.get("shift_type")
                     new_remark = source_info.get("remark")
                     
-                    # Recuperar horas crudas de la fuente (pueden ser None o incorrectas)
+                    # Recuperar horas crudas de la fuente
                     raw_in_time = source_info.get("in_time")
                     raw_out_time = source_info.get("out_time")
 
-                    # [CORRECCIÓN DE FECHAS]
+                    # [TUS CORRECCIONES DE FECHAS SE MANTIENEN]
                     # Rango visual (donde pintamos): desde la siguiente columna (left_col + 1)
                     start_fill_date = self._date_col_dates[left_col + 1]
                     end_fill_date = self._date_col_dates[right_col]
                     
                     # Rango Lógico (Operación): INCLUYE el día ancla (left_col)
-                    # Esto arregla que el "Entry" salga el día 22 cuando arrastras desde el 21.
+                    # Esto asegura que la operación logística arranque el día que seleccionaste, no el siguiente.
                     operation_start_date = self._date_col_dates[left_col]
 
-                    # --- C. REGLA DE NEGOCIO: Determinación de Horarios (FIX 13:00 -> 06:00) ---
-                    from datetime import datetime, time as dtime
-                    
-                    final_in_obj = None
-                    final_out_obj = None
-
-                    # 1. Reglas Duras para Newmont (Prioridad Máxima para Status Base)
-                    if self.source == "Newmont":
-                        if new_status == "ON":
-                            final_in_obj = dtime(6, 0)   # 06:00 AM
-                            final_out_obj = dtime(12, 0) # 12:00 PM
-                        elif new_status == "ON NS":
-                            final_in_obj = dtime(12, 0)  # 12:00 PM
-                            final_out_obj = dtime(6, 0)  # 06:00 AM
-                    
-                    # 2. Reglas Duras para RGM (Si aplica)
-                    elif self.source == "RGM":
-                        if new_status in ("ON", "ON NS"):
-                            final_in_obj = dtime(7, 0)
-                            final_out_obj = dtime(7, 0)
-
-                    # 3. Si no es un status base hardcoded, usar lo que venga de la DB o default
-                    if final_in_obj is None:
-                        # Fallback default
-                        def_in = dtime(0, 0)
-                        def_out = dtime(0, 0)
-                        final_in_obj = _parse_hhmm_to_time(raw_in_time, def_in)
-                        final_out_obj = _parse_hhmm_to_time(raw_out_time, def_out)
+                    # --- C. REGLA DE NEGOCIO: Determinación de Horarios (INTEGRADA) ---
+                    # Usamos el nuevo helper para garantizar consistencia con la consolidación
+                    final_in_obj = self._calculate_time_logic(new_status, "IN", raw_in_time)
+                    final_out_obj = self._calculate_time_logic(new_status, "OUT", raw_out_time)
 
                     # Convertir a string para DB (HH:MM)
                     new_in_time_str = final_in_obj.strftime("%H:%M")
@@ -1883,44 +1965,24 @@ class PlanStaffWidget(QWidget):
                         self._cell_original_values[(r, c)] = new_status
 
                     # --- E. Persistencia ---
-                    
-                    # Calcular timestamps completos para Operations (Logística)
-                    # [CORRECCIÓN] Usamos operation_start_date (el día 21) en lugar de start_fill_date (el 22)
-                    new_entry_datetime = datetime.combine(operation_start_date, final_in_obj)
-                    new_exit_datetime = datetime.combine(end_fill_date, final_out_obj)
-
                     try:
-                        # 1. Guardar Operation (Entry/Exit correctos)
-                        # Aquí usamos operation_start_date para que la BD sepa que el bloque empieza el 21
-                        db.add_operation(
-                            username=username,
-                            role=role,
-                            badge=badge,
-                            start_date=operation_start_date, # <--- FECHA CORREGIDA
-                            end_date=end_fill_date,
-                            created_by=self.logged_username,
-                            entry_date=new_entry_datetime,
-                            exit_date=new_exit_datetime,
-                        )
-
-                        # 2. Guardar Schedule (SSoT)
-                        # Aquí seguimos usando start_fill_date porque el día ancla (21) ya tiene el valor correcto
-                        # y solo necesitamos actualizar del 22 en adelante en la tabla 'schedules'.
+                        # 1. Guardar Schedule (SSoT) - Día a día
+                        # Se guardan las celdas rellenadas (del 22 en adelante)
                         db.upsert_schedule_range(
-                            badge,
+                            badge, 
                             start_fill_date, 
-                            end_fill_date,
-                            new_status,
-                            new_shift_type,
-                            self.source,
+                            end_fill_date, 
+                            new_status, 
+                            new_shift_type, 
+                            self.source, 
                             new_in_time_str, 
                             new_out_time_str, 
-                            new_remark,
+                            new_remark
                         )
 
-                        # 3. Guardar Excel
+                        # 2. Guardar Excel - Fila Física
                         self._is_internal_update = True 
-                        success, message = excel.update_plan_staff_excel(
+                        excel.update_plan_staff_excel(
                             self.excel_file,
                             username,
                             role,
@@ -1933,9 +1995,19 @@ class PlanStaffWidget(QWidget):
                             new_in_time_str,
                             new_out_time_str,
                         )
-                        
-                        if not success:
-                            print(f"Excel Update Warning for {badge}: {message}")
+
+                        # 3. [MODIFICACIÓN CLAVE] CONSOLIDACIÓN LOGÍSTICA (Operations)
+                        # En lugar de guardar ciegamente, llamamos al consolidador.
+                        # Le pasamos operation_start_date (el día 21) y end_fill_date (el día 25).
+                        # Él se encargará de ver si hay que fusionar con el 20 o el 26.
+                        self._consolidate_and_record_logistics(
+                            badge, 
+                            role, 
+                            username,
+                            operation_start_date, # INCLUYE EL ANCLA
+                            end_fill_date,
+                            new_status
+                        )
 
                     except Exception as e:
                         print(f"Error saving drag-fill for {badge}: {e}")
@@ -1945,6 +2017,8 @@ class PlanStaffWidget(QWidget):
             self._bulk_editing = False
             self.rotation_changed.emit()
             self.schedule_table.viewport().update()
+    
+    
     # ---------- REQ-001: inline OFF→ON/ON NS guard ----------
     def _on_schedule_cell_changed(self, item: QTableWidgetItem):
         # 1. AGREGAR: Chequeo de la bandera _is_handling_change
