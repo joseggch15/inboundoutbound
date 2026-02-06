@@ -4029,7 +4029,7 @@ class CrudWidget(QWidget):
     def clear_crud_form(self):
         self.current_user_id = None
         self.crud_name_input.clear()
-        self.crud_role_input.clear()
+        self.crud_role_input.setCurrentIndex(0)
         self.crud_badge_input.clear()
         self.def_pickup_combo.setCurrentIndex(0)
         self.def_dropoff_combo.setCurrentIndex(0)
