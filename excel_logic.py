@@ -1978,7 +1978,12 @@ def regenerate_plan_from_db(plan_staff_file: str, source: str) -> Tuple[bool, st
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Operations_best_opt"
-            headers = ["TEAM", "ROLE", "NAME", "BADGE"]
+            headers = [
+                # "TEAM",  <-- Oculto temporalmente
+                "ROLE", 
+                "NAME", 
+                "BADGE"
+            ]
             for col_idx, h in enumerate(headers, start=1):
                 ws.cell(row=1, column=col_idx, value=h)
             wb.save(plan_staff_file)
