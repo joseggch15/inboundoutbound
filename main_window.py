@@ -20,6 +20,9 @@
 # --- MODIFICATION: Added time inputs for Entry/Exit dates and updated Hover Card to display them.
 # --- Integración Final: Se añade el botón y la lógica para "Generate Onsite Stay Report" en el PlanStaffWidget.
 
+import openpyxl
+from openpyxl.styles import PatternFill
+from openpyxl.comments import Comment
 import json
 import os
 from PyQt6.QtWidgets import (
@@ -65,9 +68,10 @@ from PyQt6.QtCore import (
     QRect,
     QSize,
 )
-from PyQt6.QtGui import QColor, QFont, QCursor, QIcon, QPixmap, QPainter, QPen
+from PyQt6.QtGui import QColor, QFont, QCursor, QIcon, QPixmap, QPainter, QPen, QKeySequence
 from datetime import datetime, date as pydate, timedelta
 from PyQt6.QtWidgets import QStyledItemDelegate
+from clipboard_logic import ScheduleClipboardService
 
 
 # App logic (unchanged)
@@ -3252,6 +3256,248 @@ class PlanStaffWidget(QWidget):
         box.setText(preview if len(preview) < 1500 else (preview[:1500] + "\n..."))
         box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
         box.exec()
+        
+    def keyPressEvent(self, event):
+        # COPY (Use QKeySequence, not Qt.KeySequence)
+        if event.matches(QKeySequence.StandardKey.Copy):
+            ScheduleClipboardService.copy_to_clipboard(
+                self.schedule_table, 
+                self._row_identities, 
+                self._date_col_dates, 
+                self._custom_shift_map
+            )
+            return
+
+        # PASTE (Use QKeySequence, not Qt.KeySequence)
+        if event.matches(QKeySequence.StandardKey.Paste):
+            self._handle_paste_operation()
+            return
+
+        super().keyPressEvent(event)
+
+    def _handle_paste_operation(self):
+        """
+        Maneja la operación de PEGAR (Paste) desde el portapapeles.
+        Fases:
+        1. Parsing del Clipboard.
+        2. Transacción BD (SSoT).
+        3. Escritura Masiva en Excel (Bulk Write) para mantener sincronía.
+        4. Consolidación Logística (Operations).
+        """
+        # 1. Parsing del Clipboard
+        payload, fmt = ScheduleClipboardService.parse_clipboard()
+        if not payload or not payload.get("grid"):
+            return
+
+        selected_ranges = self.schedule_table.selectedRanges()
+        if not selected_ranges:
+            return
+
+        # 2. Geometría y Configuración
+        anchor_row = selected_ranges[0].topRow()
+        anchor_col = selected_ranges[0].leftColumn()
+        
+        sel_rows = selected_ranges[0].rowCount()
+        sel_cols = selected_ranges[0].columnCount()
+        
+        src_rows = payload['rows']
+        src_cols = payload['cols']
+        src_grid = payload['grid']
+
+        # Determinar tamaño del pegado (Repetir patrón si selección es mayor que origen, o usar origen si es 1 celda)
+        if sel_rows == 1 and sel_cols == 1:
+            target_rows = src_rows
+            target_cols = src_cols
+        else:
+            target_rows = sel_rows
+            target_cols = sel_cols
+
+        # UI State - Bloquear actualizaciones internas para evitar recargas cíclicas
+        self._is_internal_update = True 
+        self._bulk_editing = True
+        
+        # Estructuras para acumular datos
+        badges_to_consolidate = {}
+        excel_updates_queue = [] # Lista de tuplas: (badge, date_obj, text_value, in_time, out_time, color_hex)
+        
+        try:
+            # =================================================================
+            # FASE 1: ACTUALIZACIÓN DE HORARIOS EN BD (SCHEDULES)
+            # =================================================================
+            conn = db.sqlite3.connect(db.DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute("BEGIN TRANSACTION")
+
+            try:
+                for r in range(target_rows):
+                    for c in range(target_cols):
+                        # --- Cálculos de coordenadas ---
+                        abs_row = anchor_row + r
+                        abs_col = anchor_col + c
+
+                        # Validaciones de límites
+                        if abs_row >= self.schedule_table.rowCount(): continue
+                        if abs_col >= self.schedule_table.columnCount(): continue
+                        if abs_row >= len(self._row_identities): continue
+                        if abs_col >= len(self._date_col_dates): continue
+
+                        identity = self._row_identities[abs_row]
+                        badge = identity.get("badge")
+                        if not badge: continue
+                        
+                        target_date = self._date_col_dates[abs_col]
+
+                        # --- Extracción de datos del portapapeles ---
+                        src_r_idx = r % src_rows
+                        src_c_idx = c % src_cols
+                        cell_data = src_grid[src_r_idx][src_c_idx]
+                        raw_text = cell_data.get("clean_code", "")
+                        
+                        # --- Lógica de Negocio (Horas) ---
+                        final_in = self._calculate_time_logic(raw_text, "IN")
+                        final_out = self._calculate_time_logic(raw_text, "OUT")
+                        in_str = final_in.strftime("%H:%M") if final_in else None
+                        out_str = final_out.strftime("%H:%M") if final_out else None
+                        
+                        # --- DB WRITE (Usando el cursor compartido) ---
+                        db.upsert_schedule_range(
+                            badge, target_date, target_date, 
+                            raw_text, None, self.source, 
+                            in_str, out_str, "",
+                            cursor=cursor
+                        )
+                        
+                        # --- Acumular para consolidación (Phase 3) ---
+                        if badge not in badges_to_consolidate:
+                            badges_to_consolidate[badge] = {
+                                "role": identity.get("role"), 
+                                "name": identity.get("name"), 
+                                "min": target_date, 
+                                "max": target_date,
+                                "status": raw_text
+                            }
+                        else:
+                            if target_date < badges_to_consolidate[badge]["min"]: 
+                                badges_to_consolidate[badge]["min"] = target_date
+                            if target_date > badges_to_consolidate[badge]["max"]: 
+                                badges_to_consolidate[badge]["max"] = target_date
+
+                        # --- Actualización Visual Inmediata ---
+                        item = self.schedule_table.item(abs_row, abs_col)
+                        if not item:
+                            item = QTableWidgetItem()
+                            self.schedule_table.setItem(abs_row, abs_col, item)
+                        item.setText(raw_text)
+                        self._apply_base_background(item, raw_text)
+                        self._cell_original_values[(abs_row, abs_col)] = raw_text
+
+                        # --- Determinar color para Excel ---
+                        # Usamos la misma lógica visual de la tabla para determinar el color hexadecimal
+                        bg_brush = item.background()
+                        color_hex = bg_brush.color().name() if bg_brush.style() != Qt.BrushStyle.NoBrush else None
+                        
+                        # Encolar para escritura en Excel
+                        excel_updates_queue.append({
+                            "badge": badge,
+                            "date": target_date,
+                            "val": raw_text,
+                            "in": in_str,
+                            "out": out_str,
+                            "color": color_hex
+                        })
+
+                # COMMIT: Guardar cambios en DB
+                cursor.execute("COMMIT")
+
+            except Exception as e:
+                cursor.execute("ROLLBACK")
+                raise e
+            finally:
+                conn.close()
+
+            # =================================================================
+            # FASE 2: ESCRITURA MASIVA EN EXCEL (BULK WRITE)
+            # =================================================================
+            if excel_updates_queue and os.path.exists(self.excel_file):
+                try:
+                    wb = openpyxl.load_workbook(self.excel_file)
+                    ws = wb.active
+                    
+                    # 1. Mapear cabeceras para encontrar columnas
+                    header_map = {cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)}
+                    date_map = {cell.value.date(): cell.column for cell in ws[1] if isinstance(cell.value, datetime)}
+                    
+                    # Detectar columna de Badge (RGM vs Newmont)
+                    badge_col_idx = header_map.get("BADGE") or header_map.get("Company ID")
+                    
+                    if badge_col_idx:
+                        # 2. Crear mapa rápido de Fila Excel por Badge
+                        row_map = {}
+                        for r_idx in range(2, ws.max_row + 1):
+                            cell_val = ws.cell(row=r_idx, column=badge_col_idx).value
+                            if cell_val:
+                                row_map[str(cell_val).strip()] = r_idx
+                        
+                        # 3. Aplicar actualizaciones
+                        for up in excel_updates_queue:
+                            r_idx = row_map.get(str(up["badge"]).strip())
+                            c_idx = date_map.get(up["date"])
+                            
+                            if r_idx and c_idx:
+                                cell = ws.cell(row=r_idx, column=c_idx)
+                                val_str = up["val"]
+                                cell.value = val_str
+                                
+                                # Aplicar Color
+                                if up["color"] and val_str:
+                                    # OpenPyXL espera ARGB o RGB hex sin '#', a veces hay que limpiar
+                                    clean_hex = up["color"].replace("#", "").upper()
+                                    if len(clean_hex) == 6:
+                                        cell.fill = PatternFill(start_color=clean_hex, end_color=clean_hex, fill_type="solid")
+                                else:
+                                    cell.fill = PatternFill(fill_type=None)
+                                    
+                                # Comentarios para Custom Shifts (Horas)
+                                if val_str not in ("ON", "ON NS", "OFF", "") and up["in"] and up["out"]:
+                                    cell.comment = Comment(f"{up['in']}-{up['out']}", "ShiftType")
+                                else:
+                                    cell.comment = None
+
+                        # 4. Guardar archivo físico
+                        wb.save(self.excel_file)
+                        
+                except Exception as ex_excel:
+                    print(f"Error writing to Excel during paste: {ex_excel}")
+                    # No lanzamos error fatal para no revertir la DB, pero notificamos en consola
+
+            # =================================================================
+            # FASE 3: CONSOLIDACIÓN Y REPORTES (OPERATIONS)
+            # =================================================================
+            if len(badges_to_consolidate) > 5:
+                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+
+            try:
+                for badge, info in badges_to_consolidate.items():
+                    self._consolidate_and_record_logistics(
+                        badge, info["role"], info["name"], 
+                        info["min"], info["max"], "PASTE_OP"
+                    )
+            finally:
+                QApplication.restoreOverrideCursor()
+
+            # Sincronización final de estados
+            self.check_excel_health()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Paste Error", f"Failed to paste data: {e}")
+        
+        finally:
+            self._is_internal_update = False
+            self._bulk_editing = False
+            self.rotation_changed.emit()
+            self.schedule_table.viewport().update()
+        
+        
 
 
 # -------------------------------------------------------------

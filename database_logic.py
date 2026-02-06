@@ -854,24 +854,46 @@ def list_user_default_locations(source: str) -> List[Dict]:
 # ---------------------------------------------------------------------
 # Operations & schedules
 # ---------------------------------------------------------------------
-def add_operation(username: str, role: str, badge: str, start_date: date, end_date: date, created_by: str, entry_date: Optional[datetime] = None, exit_date: Optional[datetime] = None):
+def add_operation(
+    username: str, 
+    role: str, 
+    badge: str, 
+    start_date: date, 
+    end_date: date, 
+    created_by: str, 
+    entry_date: Optional[datetime] = None, 
+    exit_date: Optional[datetime] = None,
+    cursor: Optional[sqlite3.Cursor] = None # <--- NEW ARGUMENT
+):
     """
-    MODIFIED: Handles datetime for entry/exit to store time.
+    MODIFIED: Handles datetime for entry/exit and supports external cursor.
     """
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO operations (username, role, badge, start_date, end_date, created_by, entry_date, exit_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            username, role, badge,
-            start_date.isoformat(), end_date.isoformat(),
-            created_by,
-            entry_date.strftime('%Y-%m-%d %H:%M') if entry_date else None,
-            exit_date.strftime('%Y-%m-%d %H:%M') if exit_date else None
-        ),
-    )
-    conn.commit()
-    conn.close()
+    should_close = False
+    if cursor is None:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        should_close = True
+
+    try:
+        cursor.execute(
+            "INSERT INTO operations (username, role, badge, start_date, end_date, created_by, entry_date, exit_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                username, role, badge,
+                start_date.isoformat(), end_date.isoformat(),
+                created_by,
+                entry_date.strftime('%Y-%m-%d %H:%M') if entry_date else None,
+                exit_date.strftime('%Y-%m-%d %H:%M') if exit_date else None
+            ),
+        )
+        if should_close:
+            cursor.connection.commit()
+    except Exception:
+        if should_close:
+            cursor.connection.rollback()
+        raise
+    finally:
+        if should_close:
+            cursor.connection.close()
 
 
 def upsert_schedule_day(
@@ -883,16 +905,22 @@ def upsert_schedule_day(
     in_time: Optional[str] = None,
     out_time: Optional[str] = None,
     remark: Optional[str] = None,
+    cursor: Optional[sqlite3.Cursor] = None,  # <--- NEW ARGUMENT
 ):
     """
-    Upsert de un día en schedules. Soporta:
-      - estados base: 'ON'/'ON NS'/'OFF' (in_time/out_time pueden ser None)
-      - tipos personalizados: status=code, shift_type=name, in_time/out_time HH:MM
+    Upsert de un día en schedules.
+    Updated to support external transactions via 'cursor'.
     """
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    should_close = False
+    
+    # If no cursor passed, we open a new connection (Legacy behavior)
+    if cursor is None:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        should_close = True
+
     try:
-        # UPDATE primero
+        # UPDATE first
         cursor.execute(
             "UPDATE schedules SET status = ?, shift_type = ?, in_time = ?, out_time = ?, remark = ? "
             "WHERE badge = ? AND date = ? AND source = ?",
@@ -904,9 +932,18 @@ def upsert_schedule_day(
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (badge, d.isoformat(), status, shift_type, source, in_time, out_time, remark),
             )
-        conn.commit()
+        
+        # Only commit if we opened the connection ourselves
+        if should_close:
+            cursor.connection.commit()
+            
+    except Exception:
+        if should_close:
+            cursor.connection.rollback()
+        raise
     finally:
-        conn.close()
+        if should_close:
+            cursor.connection.close()
 
 
 def upsert_schedule_range(
@@ -919,16 +956,44 @@ def upsert_schedule_range(
     in_time: Optional[str] = None,
     out_time: Optional[str] = None,
     remark: Optional[str] = None,
+    cursor: Optional[sqlite3.Cursor] = None,  # <--- NEW ARGUMENT
 ) -> int:
     """
     Marca por rango [start_d, end_d]. Devuelve cuántos días se escribieron.
     """
     total = 0
     d = start_d
-    while d <= end_d:
-        upsert_schedule_day(badge, d, status, shift_type, source, in_time, out_time, remark)
-        total += 1
-        d += timedelta(days=1)
+    
+    # If no cursor provided, wrap the ENTIRE loop in a single transaction
+    should_close = False
+    if cursor is None:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("BEGIN TRANSACTION") # Explicit transaction for speed
+        should_close = True
+
+    try:
+        while d <= end_d:
+            # Pass the cursor to the day function so it doesn't open new connections
+            upsert_schedule_day(
+                badge, d, status, shift_type, source, 
+                in_time, out_time, remark, 
+                cursor=cursor 
+            )
+            total += 1
+            d += timedelta(days=1)
+        
+        if should_close:
+            cursor.connection.commit()
+            
+    except Exception:
+        if should_close:
+            cursor.connection.rollback()
+        raise
+    finally:
+        if should_close:
+            cursor.connection.close()
+    
     return total
 
 
@@ -1264,30 +1329,46 @@ def get_operation_overlapping(badge: str, check_date: date) -> Optional[Dict]:
     conn.close()
     return dict(row) if row else None
 
-def delete_operations_in_range(badge: str, start_d: date, end_d: date):
+def delete_operations_in_range(
+    badge: str, 
+    start_d: date, 
+    end_d: date,
+    cursor: Optional[sqlite3.Cursor] = None # <--- NEW ARGUMENT
+):
     """
-    Elimina cualquier operación que esté TOTAL o PARCIALMENTE contenida en el rango,
-    o que se solape. Esto es vital para limpiar antes de re-insertar el bloque consolidado.
+    Elimina cualquier operación que esté TOTAL o PARCIALMENTE contenida en el rango.
+    Supports external cursor.
     """
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    # Borramos cualquier operación que se solape con el nuevo rango maestro
-    cursor.execute(
-        """
-        DELETE FROM operations 
-        WHERE badge = ? 
-          AND (
-            (start_date >= ? AND start_date <= ?) OR 
-            (end_date >= ? AND end_date <= ?) OR
-            (start_date <= ? AND end_date >= ?)
-          )
-        """,
-        (badge, start_d.isoformat(), end_d.isoformat(), 
-         start_d.isoformat(), end_d.isoformat(),
-         start_d.isoformat(), end_d.isoformat())
-    )
-    conn.commit()
-    conn.close()
+    should_close = False
+    if cursor is None:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        should_close = True
+
+    try:
+        cursor.execute(
+            """
+            DELETE FROM operations 
+            WHERE badge = ? 
+              AND (
+                (start_date >= ? AND start_date <= ?) OR 
+                (end_date >= ? AND end_date <= ?) OR
+                (start_date <= ? AND end_date >= ?)
+              )
+            """,
+            (badge, start_d.isoformat(), end_d.isoformat(), 
+             start_d.isoformat(), end_d.isoformat(),
+             start_d.isoformat(), end_d.isoformat())
+        )
+        if should_close:
+            cursor.connection.commit()
+    except Exception:
+        if should_close:
+            cursor.connection.rollback()
+        raise
+    finally:
+        if should_close:
+            cursor.connection.close()
 
 def is_working_status(status: str, source: str) -> bool:
     """Helper rápido para saber si un status cuenta como día de trabajo (para fusionar)."""
