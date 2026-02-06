@@ -1138,6 +1138,94 @@ class PlanStaffWidget(QWidget):
         self._current_form_cols = 3
         self._rebuild_registration_grid(self._current_form_cols)
 
+    def _smart_reflow(self, cursor, badge: str, center_date: datetime.date):
+        """
+        Recalcula y corrige los campos start_date y end_date para asegurar continuidad
+        alrededor de una fecha modificada. Soluciona la fragmentación de rangos.
+        """
+        # 1. Definir zona de "reconstrucción" (60 días antes y después para seguridad)
+        margin = timedelta(days=60)
+        search_start = center_date - margin
+        search_end = center_date + margin
+
+        # 2. Obtener la verdad atómica (Fecha + Tipo de Turno) ordenados cronológicamente
+        cursor.execute("""
+            SELECT date, shift_type 
+            FROM schedules 
+            WHERE badge = ? AND date BETWEEN ? AND ?
+            ORDER BY date ASC
+        """, (badge, search_start, search_end))
+        
+        rows = cursor.fetchall()
+        if not rows:
+            return
+
+        # Convertir a objetos manipulables
+        # data_points = lista de {'date': obj_date, 'type': str}
+        data_points = []
+        for r in rows:
+            d_val = r[0]
+            # Manejo robusto de fechas (si viene como string o como objeto)
+            if isinstance(d_val, str):
+                try:
+                    d_obj = datetime.strptime(d_val, "%Y-%m-%d").date()
+                except ValueError:
+                    continue # Saltar fechas inválidas
+            else:
+                d_obj = d_val
+            data_points.append({'date': d_obj, 'type': r[1]})
+
+        if not data_points:
+            return
+
+        # 3. Algoritmo de Agrupación (Clustering)
+        # Recorre los días y agrupa los que sean consecutivos Y tengan el mismo shift_type
+        updates = []
+        
+        # Iniciamos el primer grupo
+        current_block_start = data_points[0]['date']
+        # current_type = data_points[0]['type'] # No usado directamente en el loop, solo comparativa
+        block_members = [data_points[0]['date']] # Lista de fechas en el bloque actual
+
+        for i in range(1, len(data_points)):
+            prev = data_points[i-1]
+            curr = data_points[i]
+            
+            is_consecutive = (curr['date'] - prev['date']).days == 1
+            is_same_type = (curr['type'] == prev['type'])
+
+            if is_consecutive and is_same_type:
+                # Continuar el bloque actual
+                block_members.append(curr['date'])
+            else:
+                # El bloque se rompió. Cerrar el bloque anterior y guardar sus actualizaciones.
+                start_str = current_block_start.strftime("%Y-%m-%d")
+                end_str = block_members[-1].strftime("%Y-%m-%d")
+                
+                for member_date in block_members:
+                    updates.append((start_str, end_str, badge, member_date))
+                
+                # Iniciar nuevo bloque
+                current_block_start = curr['date']
+                block_members = [curr['date']]
+
+        # Cerrar el último bloque pendiente
+        if block_members:
+            start_str = current_block_start.strftime("%Y-%m-%d")
+            end_str = block_members[-1].strftime("%Y-%m-%d")
+            for member_date in block_members:
+                updates.append((start_str, end_str, badge, member_date))
+
+        # 4. Escritura Masiva (Bulk Update)
+        # Actualizamos start_date y end_date para todas las filas procesadas
+        if updates:
+            cursor.executemany("""
+                UPDATE schedules 
+                SET start_date = ?, end_date = ?
+                WHERE badge = ? AND date = ?
+            """, updates)
+    
+    
     def eventFilter(self, source, event):
         # Comportamiento extra para la tabla de horario:
         #  - Ocultar la tarjetita al salir
@@ -1818,7 +1906,7 @@ class PlanStaffWidget(QWidget):
         # Si no está en el mapa, intentamos usar lo que venía de la celda origen
         return _parse_hhmm_to_time(raw_time, dtime(0, 0))
     
-    def _consolidate_and_record_logistics(self, badge, role, username, op_start, op_end, status):
+    def _consolidate_and_record_logistics(self, badge, role, username, op_start, op_end, status, cursor=None):
         """
         EL MOTOR DE CONSOLIDACIÓN:
         1. Verifica si la operación nueva se toca con operaciones existentes (ayer/mañana).
@@ -1828,7 +1916,7 @@ class PlanStaffWidget(QWidget):
         """
         # A. Si es un día libre (OFF), NO consolidamos operaciones, solo limpiamos.
         if not db.is_working_status(status, self.source):
-            db.delete_operations_in_range(badge, op_start, op_end)
+            db.delete_operations_in_range(badge, op_start, op_end, cursor=cursor) ### <--- CAMBIO AQUÍ
             return
 
         final_start = op_start
@@ -1836,11 +1924,11 @@ class PlanStaffWidget(QWidget):
 
         # B. Fusión Izquierda (Looking Back - Ayer)
         prev_day = final_start - timedelta(days=1)
-        prev_op = db.get_operation_overlapping(badge, prev_day)
+        prev_op = db.get_operation_overlapping(badge, prev_day, cursor=cursor)
         
         if prev_op:
             # Doble check: Asegurar que el día anterior en el calendario (schedule) es trabajo
-            prev_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source)
+            prev_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source, cursor=cursor)
             prev_st = prev_map.get(prev_day.isoformat(), {}).get("status")
             
             if db.is_working_status(prev_st, self.source):
@@ -1851,11 +1939,11 @@ class PlanStaffWidget(QWidget):
 
         # C. Fusión Derecha (Looking Forward - Mañana)
         next_day = final_end + timedelta(days=1)
-        next_op = db.get_operation_overlapping(badge, next_day)
+        next_op = db.get_operation_overlapping(badge, next_day, cursor=cursor)
         
         if next_op:
             # Doble check: Asegurar que el día siguiente en el calendario es trabajo
-            next_map = db.get_schedule_map_for_range(badge, next_day, next_day, self.source)
+            next_map = db.get_schedule_map_for_range(badge, next_day, next_day, self.source,cursor=cursor)
             next_st = next_map.get(next_day.isoformat(), {}).get("status")
             
             if db.is_working_status(next_st, self.source):
@@ -1865,16 +1953,16 @@ class PlanStaffWidget(QWidget):
                     final_end = next_op_end
 
         # D. Limpieza: Borrar cualquier operación fragmentada en el nuevo rango maestro
-        db.delete_operations_in_range(badge, final_start, final_end)
+        db.delete_operations_in_range(badge, final_start, final_end, cursor=cursor)
 
         # E. Recálculo Inteligente de Horarios (Entry/Exit)
         # Usamos el status del PRIMER día para la Entry Date
-        map_start = db.get_schedule_map_for_range(badge, final_start, final_start, self.source)
+        map_start = db.get_schedule_map_for_range(badge, final_start, final_start, self.source, cursor=cursor)
         st_start = map_start.get(final_start.isoformat(), {}).get("status") or status
         t_in = self._calculate_time_logic(st_start, "IN")
 
         # Usamos el status del ÚLTIMO día para la Exit Date
-        map_end = db.get_schedule_map_for_range(badge, final_end, final_end, self.source)
+        map_end = db.get_schedule_map_for_range(badge, final_end, final_end, self.source, cursor=cursor)
         st_end = map_end.get(final_end.isoformat(), {}).get("status") or status
         t_out = self._calculate_time_logic(st_end, "OUT")
 
@@ -1887,7 +1975,8 @@ class PlanStaffWidget(QWidget):
             end_date=final_end,
             created_by=self.logged_username,
             entry_date=datetime.combine(final_start, t_in),
-            exit_date=datetime.combine(final_end, t_out)
+            exit_date=datetime.combine(final_end, t_out),
+            cursor=cursor  # <--- CRÍTICO: Pasar el cursor
         )
         # print(f"DEBUG: Consolidated Op: {final_start} -> {final_end}")
 
@@ -3277,12 +3366,14 @@ class PlanStaffWidget(QWidget):
 
     def _handle_paste_operation(self):
         """
-        Maneja la operación de PEGAR (Paste) desde el portapapeles.
-        Fases:
+        Maneja la operación de PEGAR (Paste) replicando la lógica "Smart Drag".
+        
+        Flujo por celda:
         1. Parsing del Clipboard.
-        2. Transacción BD (SSoT).
-        3. Escritura Masiva en Excel (Bulk Write) para mantener sincronía.
-        4. Consolidación Logística (Operations).
+        2. Cálculo de horas (Calculate Time Logic).
+        3. Upsert en Schedule (SSoT).
+        4. Consolidación Logística (Operations) inmediata para reparar vecinos.
+        5. Actualización Excel.
         """
         # 1. Parsing del Clipboard
         payload, fmt = ScheduleClipboardService.parse_clipboard()
@@ -3293,7 +3384,7 @@ class PlanStaffWidget(QWidget):
         if not selected_ranges:
             return
 
-        # 2. Geometría y Configuración
+        # 2. Geometría
         anchor_row = selected_ranges[0].topRow()
         anchor_col = selected_ranges[0].leftColumn()
         
@@ -3304,7 +3395,7 @@ class PlanStaffWidget(QWidget):
         src_cols = payload['cols']
         src_grid = payload['grid']
 
-        # Determinar tamaño del pegado (Repetir patrón si selección es mayor que origen, o usar origen si es 1 celda)
+        # Ajuste de tamaño (Repetir patrón o 1:1)
         if sel_rows == 1 and sel_cols == 1:
             target_rows = src_rows
             target_cols = src_cols
@@ -3312,39 +3403,41 @@ class PlanStaffWidget(QWidget):
             target_rows = sel_rows
             target_cols = sel_cols
 
-        # UI State - Bloquear actualizaciones internas para evitar recargas cíclicas
+        # UI State
         self._is_internal_update = True 
         self._bulk_editing = True
         
-        # Estructuras para acumular datos
-        badges_to_consolidate = {}
-        excel_updates_queue = [] # Lista de tuplas: (badge, date_obj, text_value, in_time, out_time, color_hex)
+        # Para optimización de Excel (escritura masiva al final)
+        excel_updates_queue = [] 
         
         try:
-            # =================================================================
-            # FASE 1: ACTUALIZACIÓN DE HORARIOS EN BD (SCHEDULES)
-            # =================================================================
             conn = db.sqlite3.connect(db.DB_FILE)
+            conn.row_factory = db.sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("BEGIN TRANSACTION")
 
             try:
                 for r in range(target_rows):
                     for c in range(target_cols):
-                        # --- Cálculos de coordenadas ---
+                        # --- Coordenadas ---
                         abs_row = anchor_row + r
                         abs_col = anchor_col + c
 
                         # Validaciones de límites
                         if abs_row >= self.schedule_table.rowCount(): continue
                         if abs_col >= self.schedule_table.columnCount(): continue
-                        if abs_row >= len(self._row_identities): continue
-                        if abs_col >= len(self._date_col_dates): continue
-
-                        identity = self._row_identities[abs_row]
+                        
+                        # Obtener Identidad
+                        identity = self._row_identities[abs_row] if abs_row < len(self._row_identities) else None
+                        if not identity: continue
+                        
                         badge = identity.get("badge")
+                        username = identity.get("name")
+                        role = identity.get("role")
                         if not badge: continue
                         
+                        # Fecha Objetivo
+                        if abs_col >= len(self._date_col_dates): continue
                         target_date = self._date_col_dates[abs_col]
 
                         # --- Extracción de datos del portapapeles ---
@@ -3353,13 +3446,17 @@ class PlanStaffWidget(QWidget):
                         cell_data = src_grid[src_r_idx][src_c_idx]
                         raw_text = cell_data.get("clean_code", "")
                         
-                        # --- Lógica de Negocio (Horas) ---
-                        final_in = self._calculate_time_logic(raw_text, "IN")
-                        final_out = self._calculate_time_logic(raw_text, "OUT")
+                        # --- [LOGICA SMART DRAG] 1. Calculo de Horas ---
+                        # Usamos raw_text como status base. 
+                        # NOTA: Al pegar texto plano, no tenemos horas "raw" previas, 
+                        # así que confiamos en la lógica de negocio para rellenarlas.
+                        final_in = self._calculate_time_logic(raw_text, "IN", None)
+                        final_out = self._calculate_time_logic(raw_text, "OUT", None)
+                        
                         in_str = final_in.strftime("%H:%M") if final_in else None
                         out_str = final_out.strftime("%H:%M") if final_out else None
                         
-                        # --- DB WRITE (Usando el cursor compartido) ---
+                        # --- [LOGICA SMART DRAG] 2. DB Schedule Upsert ---
                         db.upsert_schedule_range(
                             badge, target_date, target_date, 
                             raw_text, None, self.source, 
@@ -3367,22 +3464,18 @@ class PlanStaffWidget(QWidget):
                             cursor=cursor
                         )
                         
-                        # --- Acumular para consolidación (Phase 3) ---
-                        if badge not in badges_to_consolidate:
-                            badges_to_consolidate[badge] = {
-                                "role": identity.get("role"), 
-                                "name": identity.get("name"), 
-                                "min": target_date, 
-                                "max": target_date,
-                                "status": raw_text
-                            }
-                        else:
-                            if target_date < badges_to_consolidate[badge]["min"]: 
-                                badges_to_consolidate[badge]["min"] = target_date
-                            if target_date > badges_to_consolidate[badge]["max"]: 
-                                badges_to_consolidate[badge]["max"] = target_date
+                        # --- [LOGICA SMART DRAG] 3. Consolidación Logística ---
+                        # Esto es lo que repara los "vecinos". Al consolidar el día X, 
+                        # el sistema revisa X-1 y X+1. Si rompe un bloque antiguo, 
+                        # la función _consolidate_and_record_logistics se encarga de 
+                        # re-crear la operación correcta para este día.
+                        self._consolidate_and_record_logistics(
+                            badge, role, username, 
+                            target_date, target_date, raw_text,
+                            cursor=cursor
+                        )
 
-                        # --- Actualización Visual Inmediata ---
+                        # --- Actualización Visual ---
                         item = self.schedule_table.item(abs_row, abs_col)
                         if not item:
                             item = QTableWidgetItem()
@@ -3391,12 +3484,10 @@ class PlanStaffWidget(QWidget):
                         self._apply_base_background(item, raw_text)
                         self._cell_original_values[(abs_row, abs_col)] = raw_text
 
-                        # --- Determinar color para Excel ---
-                        # Usamos la misma lógica visual de la tabla para determinar el color hexadecimal
+                        # --- Cola para Excel ---
                         bg_brush = item.background()
                         color_hex = bg_brush.color().name() if bg_brush.style() != Qt.BrushStyle.NoBrush else None
                         
-                        # Encolar para escritura en Excel
                         excel_updates_queue.append({
                             "badge": badge,
                             "date": target_date,
@@ -3406,7 +3497,6 @@ class PlanStaffWidget(QWidget):
                             "color": color_hex
                         })
 
-                # COMMIT: Guardar cambios en DB
                 cursor.execute("COMMIT")
 
             except Exception as e:
@@ -3416,87 +3506,60 @@ class PlanStaffWidget(QWidget):
                 conn.close()
 
             # =================================================================
-            # FASE 2: ESCRITURA MASIVA EN EXCEL (BULK WRITE)
+            # FASE EXCEL: Escritura Masiva (Igual que antes, optimizado)
             # =================================================================
             if excel_updates_queue and os.path.exists(self.excel_file):
                 try:
                     wb = openpyxl.load_workbook(self.excel_file)
                     ws = wb.active
                     
-                    # 1. Mapear cabeceras para encontrar columnas
                     header_map = {cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)}
                     date_map = {cell.value.date(): cell.column for cell in ws[1] if isinstance(cell.value, datetime)}
-                    
-                    # Detectar columna de Badge (RGM vs Newmont)
                     badge_col_idx = header_map.get("BADGE") or header_map.get("Company ID")
                     
                     if badge_col_idx:
-                        # 2. Crear mapa rápido de Fila Excel por Badge
                         row_map = {}
                         for r_idx in range(2, ws.max_row + 1):
                             cell_val = ws.cell(row=r_idx, column=badge_col_idx).value
-                            if cell_val:
-                                row_map[str(cell_val).strip()] = r_idx
+                            if cell_val: row_map[str(cell_val).strip()] = r_idx
                         
-                        # 3. Aplicar actualizaciones
                         for up in excel_updates_queue:
                             r_idx = row_map.get(str(up["badge"]).strip())
                             c_idx = date_map.get(up["date"])
-                            
                             if r_idx and c_idx:
                                 cell = ws.cell(row=r_idx, column=c_idx)
                                 val_str = up["val"]
                                 cell.value = val_str
                                 
-                                # Aplicar Color
                                 if up["color"] and val_str:
-                                    # OpenPyXL espera ARGB o RGB hex sin '#', a veces hay que limpiar
                                     clean_hex = up["color"].replace("#", "").upper()
                                     if len(clean_hex) == 6:
                                         cell.fill = PatternFill(start_color=clean_hex, end_color=clean_hex, fill_type="solid")
                                 else:
                                     cell.fill = PatternFill(fill_type=None)
                                     
-                                # Comentarios para Custom Shifts (Horas)
-                                if val_str not in ("ON", "ON NS", "OFF", "") and up["in"] and up["out"]:
+                                if val_str not in ("ON", "ON NS", "OFF", "") and up["in"]:
                                     cell.comment = Comment(f"{up['in']}-{up['out']}", "ShiftType")
                                 else:
                                     cell.comment = None
 
-                        # 4. Guardar archivo físico
                         wb.save(self.excel_file)
-                        
                 except Exception as ex_excel:
                     print(f"Error writing to Excel during paste: {ex_excel}")
-                    # No lanzamos error fatal para no revertir la DB, pero notificamos en consola
 
-            # =================================================================
-            # FASE 3: CONSOLIDACIÓN Y REPORTES (OPERATIONS)
-            # =================================================================
-            if len(badges_to_consolidate) > 5:
-                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-
-            try:
-                for badge, info in badges_to_consolidate.items():
-                    self._consolidate_and_record_logistics(
-                        badge, info["role"], info["name"], 
-                        info["min"], info["max"], "PASTE_OP"
-                    )
-            finally:
-                QApplication.restoreOverrideCursor()
-
-            # Sincronización final de estados
+            # Sincronización final
             self.check_excel_health()
 
         except Exception as e:
             QMessageBox.critical(self, "Paste Error", f"Failed to paste data: {e}")
+            import traceback
+            traceback.print_exc()
         
         finally:
             self._is_internal_update = False
             self._bulk_editing = False
             self.rotation_changed.emit()
             self.schedule_table.viewport().update()
-        
         
 
 
@@ -3814,6 +3877,7 @@ class CrudWidget(QWidget):
         
         # Fetch from roles table
         roles = db.get_roles(self.source)
+        print(f"DEBUG: Cargando roles para {self.source}. Encontrados: {len(roles)}")
         for r in roles:
             self.crud_role_input.addItem(r["name"], r["id"])
             
@@ -4072,6 +4136,7 @@ class CrudWidget(QWidget):
             QMessageBox.critical(self, "Invalid Excel", str(ve))
 
     def refresh_ui_data(self):
+        self.populate_role_combo()
         self._populate_role_filter()
         self.load_users_table()
         self.clear_crud_form()

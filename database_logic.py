@@ -1012,7 +1012,7 @@ def clear_schedule_range(badge: str, start_d: date, end_d: date, source: str) ->
 
 
 def get_schedule_map_for_range(
-    badge: str, start_d: date, end_d: date, source: str
+    badge: str, start_d: date, end_d: date, source: str, cursor: Optional[sqlite3.Cursor] = None # <--- NUEVO ARGUMENTO
 ) -> Dict[str, Dict]:
     """Devuelve { 'YYYY-MM-DD': {'status':..., 'shift_type':..., 'in_time':..., 'out_time':..., 'remark':...} } para el rango."""
     conn = sqlite3.connect(DB_FILE)
@@ -1314,20 +1314,37 @@ def delete_shift_type(type_id: int) -> Tuple[bool, str, Optional[str], Optional[
     finally:
         conn.close()
         
-def get_operation_overlapping(badge: str, check_date: date) -> Optional[Dict]:
-    """Busca si existe una operación activa que cubra una fecha específica."""
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    iso = check_date.isoformat()
-    # Buscamos una operación donde start <= date <= end
-    cursor.execute(
-        "SELECT * FROM operations WHERE badge = ? AND start_date <= ? AND end_date >= ?",
-        (badge, iso, iso)
-    )
-    row = cursor.fetchone()
-    conn.close()
-    return dict(row) if row else None
+def get_operation_overlapping(badge: str, check_date: date, cursor: Optional[sqlite3.Cursor] = None) -> Optional[Dict]:
+    """
+    Busca si existe una operación activa que cubra una fecha específica.
+    Soporta cursor externo para evitar bloqueos (database is locked).
+    """
+    should_close = False
+    
+    # Si no nos pasan un cursor, abrimos una conexión propia (comportamiento original)
+    if cursor is None:
+        conn = sqlite3.connect(DB_FILE)
+        conn.row_factory = sqlite3.Row  # Importante para poder convertir a dict después
+        cursor = conn.cursor()
+        should_close = True
+
+    try:
+        iso = check_date.isoformat()
+        # Buscamos una operación donde start <= date <= end
+        cursor.execute(
+            "SELECT * FROM operations WHERE badge = ? AND start_date <= ? AND end_date >= ?",
+            (badge, iso, iso)
+        )
+        row = cursor.fetchone()
+        
+        # Convertimos a diccionario si encontramos datos
+        return dict(row) if row else None
+        
+    finally:
+        # Solo cerramos la conexión si NOSOTROS la abrimos.
+        # Si vino de fuera (transacción), la dejamos abierta.
+        if should_close:
+            cursor.connection.close()
 
 def delete_operations_in_range(
     badge: str, 
