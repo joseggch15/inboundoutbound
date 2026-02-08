@@ -1461,9 +1461,23 @@ def generate_rgm_transport_report(
 
             # --- OUTBOUND ---
             if not _is_working(st_next):
-                # 1. Definimos la fecha "Estándar" (+1 día) y hora estándar
-                standard_next_day = d + timedelta(days=1)
+                
+                # standard_next_day = d + timedelta(days=1)
                 standard_out_time_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map, "RGM")
+                # [NUEVA LÓGICA CONDICIONAL 1+D]
+                # Solo aplicamos "Día siguiente" si es ON o ON NS.
+                # Cualquier otro turno creado manualmente sale el MISMO día (como Newmont).
+                
+                if st_d in ["ON", "ON NS"]:
+                    standard_exit_date = d + timedelta(days=1)
+                else:
+                    standard_exit_date = d  # Salida el mismo día del turno
+                    
+                standard_next_day = standard_exit_date
+                
+                # [FIN DE NUEVA LÓGICA]
+                
+                
                 
                 final_outbound_date = standard_next_day
                 final_outbound_time = standard_out_time_str

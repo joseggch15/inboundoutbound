@@ -2730,9 +2730,13 @@ class PlanStaffWidget(QWidget):
             in_time_obj = _parse_hhmm_to_time(final_in_time, default_in)
             out_time_obj = _parse_hhmm_to_time(final_out_time, default_out)
 
-            # Guardar operación de 1 día (entry/exit = día con horas)
+           # 1. Calculamos si aplica "1+D" (Si es ON/ON NS -> end_date + 1)
+            # Usamos el helper que creamos. Nota: 'shift_type' ya viene como argumento.
+            real_exit_date = self._calculate_rgm_exit_date(shift_type, end_date)
+
+            # 2. Usamos real_exit_date en lugar de end_date
             entry_datetime = datetime.combine(start_date, in_time_obj)
-            exit_datetime = datetime.combine(end_date, out_time_obj)
+            exit_datetime = datetime.combine(real_exit_date, out_time_obj)
 
         # DB: operación
         db.add_operation(
@@ -2918,8 +2922,19 @@ class PlanStaffWidget(QWidget):
                         t_out = datetime.strptime("07:00", "%H:%M").time()
 
             # Crear los datetimes finales para guardar en BD
+            # --- INICIO DEL CAMBIO 1+D ---
+            
+            # 1. Calculamos la fecha de salida real
+            # Si es RGM y es ON/ON NS -> Salida es Mañana (end_date + 1)
+            # Si es RGM y es Otro (Capacitacion) -> Salida es Hoy (end_date)
+            # El método _calculate_rgm_exit_date encapsula esta lógica para no repetir if/else aquí.
+            real_exit_date = self._calculate_rgm_exit_date(schedule_status, end_date)
+
+            # 2. Combinamos con las horas (t_in / t_out) que ya calculaste arriba
             entry_datetime = datetime.combine(start_date, t_in)
-            exit_datetime = datetime.combine(end_date, t_out)
+            exit_datetime = datetime.combine(real_exit_date, t_out) # Usamos real_exit_date
+            
+            # --- FIN DEL CAMBIO 1+D ---
 
         # ---------------------------------------------------------------------
         # FIN DE LA CORRECCIÓN
@@ -4936,6 +4951,18 @@ class MainWindow(QMainWindow):
     def handle_logout(self):
         self.logout_signal.emit()
         self.close()
+        
+        
+        
+    def _calculate_rgm_exit_date(self, shift_code, end_date):
+        """
+        Si es RGM y el turno es ON u ON NS, la salida es al día siguiente.
+        Para cualquier otro turno (manual), la salida es el mismo día.
+        """
+        if self.source == "RGM" and shift_code in ["ON", "ON NS"]:
+            from datetime import timedelta
+            return end_date + timedelta(days=1)
+        return end_date
 
 
 # -------------------------------------------------------------
