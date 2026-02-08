@@ -4,19 +4,27 @@ import json
 from datetime import date, timedelta, datetime
 from typing import Tuple, List, Dict, Optional
 
-DB_FILE = "transporte_operaciones.db"
+#DB_FILE = "transporte_operaciones.db"
 
+# --- POR ESTO (Ruta absoluta segura) ---
+import sys
+from pathlib import Path
+
+def _app_dir() -> Path:
+    """Devuelve la carpeta donde corre el script o el .exe"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+DB_FILE = str(_app_dir() / "transporte_operaciones.db")
 
 def setup_database():
-    """Create database tables if they do not exist and run lightweight migrations."""
+    """Crea todas las tablas necesarias si no existen."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    # -------------------------
-    # Users (staff)
-    # -------------------------
-    cursor.execute(
-        """
+    # 1. Tabla de Usuarios
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -24,24 +32,17 @@ def setup_database():
             badge TEXT UNIQUE NOT NULL,
             source TEXT NOT NULL
         )
-    """
-    )
+    """)
     
-    # -------------------------
-    # Roles (Master List) - NEW
-    # -------------------------
-    cursor.execute(
-        """
+    # 2. Tabla de Roles
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS roles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source TEXT NOT NULL,
             name TEXT NOT NULL,
             UNIQUE (source, name)
-        )"""
-    )
-
-    # --- MIGRATION: Auto-populate roles from existing users ---
-    # This ensures your dropdown isn't empty and contains all currently used roles.
+        )""")
+    # Migración de roles
     try:
         cursor.execute(
             "INSERT OR IGNORE INTO roles (source, name) "
@@ -50,7 +51,105 @@ def setup_database():
     except Exception:
         pass
 
-    # ... (rest of setup_database) ...
+    # 3. NUEVA TABLA: File Registry (Para guardar rutas de Excel)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS file_registry (
+            source TEXT NOT NULL,
+            file_key TEXT NOT NULL,
+            path TEXT NOT NULL,
+            updated_by TEXT,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (source, file_key)
+        )""")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_registry_source ON file_registry(source)")
+
+    # 4. Tabla Locations
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS location (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            pickup_location TEXT NOT NULL,
+            UNIQUE (source, pickup_location)
+        )""")
+    
+    # 5. Tabla User Locations
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            badge TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            pickup_location TEXT,
+            dropoff_location TEXT,
+            is_default INTEGER NOT NULL DEFAULT 0
+        )""")
+
+    # 6. Tabla Operations
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            role TEXT,
+            badge TEXT,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            created_by TEXT,
+            entry_date TEXT,
+            exit_date TEXT
+        )""")
+
+    # 7. Tabla Schedules
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS schedules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            badge TEXT NOT NULL,
+            date TEXT NOT NULL,
+            status TEXT NOT NULL,
+            shift_type TEXT,
+            source TEXT NOT NULL,
+            in_time TEXT,
+            out_time TEXT,
+            remark TEXT,
+            UNIQUE (badge, date, source)
+        )""")
+
+    # 8. Tabla Audit Log
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            source TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            detail TEXT,
+            ts TEXT NOT NULL DEFAULT (datetime('now'))
+        )""")
+
+    # 9. Tabla Shift Types
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS shift_types (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            name TEXT NOT NULL,
+            code TEXT NOT NULL,
+            color_hex TEXT NOT NULL,
+            in_time TEXT NOT NULL,
+            out_time TEXT NOT NULL,
+            is_off INTEGER DEFAULT 0,
+            UNIQUE (source, name),
+            UNIQUE (source, code)
+        )""")
+
+    # 10. Report Settings
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS report_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            source TEXT NOT NULL,
+            settings_json TEXT,
+            UNIQUE(username, source)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -1399,3 +1498,26 @@ def is_working_status(status: str, source: str) -> bool:
             return False
             
     return True
+
+def get_file_path(source: str, file_key: str) -> Optional[str]:
+    """Recupera la ruta guardada de un archivo."""
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("SELECT path FROM file_registry WHERE source=? AND file_key=?", (source, file_key))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+def set_file_path(source: str, file_key: str, path: str, updated_by: Optional[str] = None) -> None:
+    """Guarda o actualiza la ruta de un archivo."""
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT OR REPLACE INTO file_registry (source, file_key, path, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, datetime('now'))
+        """,
+        (source, file_key, path, updated_by),
+    )
+    conn.commit()
+    conn.close()

@@ -937,6 +937,7 @@ class WeekendHeader(QHeaderView):
 class PlanStaffWidget(QWidget):
     # Emitted after saving a change so the Rotation History tab can refresh
     rotation_changed = pyqtSignal()
+    excel_path_changed = pyqtSignal(str, str)
 
     def __init__(self, source: str, excel_file: str, logged_username: str, preloaded_data=None):
         super().__init__()
@@ -3279,7 +3280,21 @@ class PlanStaffWidget(QWidget):
                 self, "Select PlanStaff", "", "Excel Files (*.xlsx)"
             )
             if new_path:
+                # Normalizar ruta
+                new_path = os.path.abspath(new_path)
+                old_path = self.excel_file
                 self.excel_file = new_path
+
+                # --- NUEVO: Persistir y notificar ---
+                # 1. Guardar en BD
+                db.set_file_path(self.source, "plan_staff", new_path, updated_by=self.logged_username)
+                db.log_event(self.logged_username, self.source, "EXCEL_PATH_UPDATE",
+                             f"plan_staff: {old_path} -> {new_path}")
+
+                # 2. Emitir señal para avisar a otros widgets
+                self.excel_path_changed.emit(self.source, new_path)
+                # ------------------------------------
+
                 self._missing_prompt_shown = False
                 self.check_excel_health()
                 self.refresh_ui_data()
@@ -4872,6 +4887,8 @@ class MainWindow(QMainWindow):
             self.logged_username,
             preloaded_data=preloaded_data 
         )
+        
+        self.plan_widget.excel_path_changed.connect(self._on_excel_path_changed)
         tabs.addTab(self.plan_widget, "📅 Plan Staff & Reports")
 
         # 2) Rotation History (new tab, no ID column)
@@ -4963,6 +4980,21 @@ class MainWindow(QMainWindow):
             from datetime import timedelta
             return end_date + timedelta(days=1)
         return end_date
+    
+    def _on_excel_path_changed(self, source: str, new_path: str) -> None:
+        """Actualiza la ruta del Excel en todos los widgets cuando cambia."""
+        if source != self.user_role:
+            return
+
+        self.excel_file = new_path
+
+        # Actualizar CRUD Widget si existe
+        if hasattr(self, "crud_widget"):
+            self.crud_widget.excel_file = new_path
+
+        # Actualizar Shift Types Widget si existe
+        if getattr(self, "can_manage_shift_types", False) and hasattr(self, "shift_types_widget"):
+            self.shift_types_widget.excel_file = new_path
 
 
 # -------------------------------------------------------------
@@ -5027,6 +5059,7 @@ class AdminMainWindow(QMainWindow):
         self.rgm_plan = PlanStaffWidget("RGM", rgm_excel, self.logged_username)
         self.tabs.addTab(self.rgm_plan, "📅 RGM Plan Staff")
 
+
         # 3) Newmont CRUD
         self.nm_crud = CrudWidget("Newmont", newmont_excel, self.logged_username)
         self.tabs.addTab(self.nm_crud, "👥 Newmont CRUD")
@@ -5034,6 +5067,9 @@ class AdminMainWindow(QMainWindow):
         # 4) Newmont Plan Staff
         self.nm_plan = PlanStaffWidget("Newmont", newmont_excel, self.logged_username)
         self.tabs.addTab(self.nm_plan, "📅 Newmont Plan Staff")
+
+        self.rgm_plan.excel_path_changed.connect(self._on_excel_path_changed)
+        self.nm_plan.excel_path_changed.connect(self._on_excel_path_changed)
 
         # 5) Rotation History (global; no ID column)
         self.rotation_history = RotationHistoryWidget(
@@ -5101,3 +5137,13 @@ class AdminMainWindow(QMainWindow):
     def handle_logout(self):
         self.logout_signal.emit()
         self.close()
+        
+    def _on_excel_path_changed(self, source: str, new_path: str) -> None:
+        if source == "RGM":
+            self.rgm_excel = new_path
+            self.rgm_crud.excel_file = new_path
+            self.rgm_types.excel_file = new_path
+        elif source == "Newmont":
+            self.newmont_excel = new_path
+            self.nm_crud.excel_file = new_path
+            self.nm_types.excel_file = new_path

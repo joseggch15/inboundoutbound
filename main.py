@@ -33,6 +33,15 @@ class StartupWorker(QThread):
             # Pasa 1: Setup de Base de Datos (10%)
             self.progress_updated.emit(10, "Initializing Database (SSoT)...")
             db.setup_database()
+
+            # --- NUEVO BLOQUE: Intentar recuperar ruta guardada (Fix Bug 3) ---
+            # Esto asegura que si ya localizaste el archivo antes, se use esa ruta
+            if self.source in ("RGM", "Newmont"):
+                saved_path = db.get_file_path(self.source, "plan_staff")
+                if saved_path and excel.os.path.exists(saved_path):
+                    self.excel_file = saved_path
+            # ------------------------------------------------------------------
+
             time.sleep(0.3) # Pequeña pausa estética para que el usuario lea
 
             # Paso 2: Validación de estructura Excel (30%)
@@ -65,15 +74,15 @@ class StartupWorker(QThread):
             # Paso 4: Finalización (100%)
             self.progress_updated.emit(100, "Ready.")
             
-            # Retornamos los datos pre-cargados
+            # Retornamos los datos pre-cargados Y la ruta resuelta
             payload = {
-                "schedule_df": preloaded_data
+                "schedule_df": preloaded_data,
+                "excel_file": self.excel_file  # <-- IMPORTANTE: Se agrega esto para actualizar la UI
             }
             self.finished_success.emit(payload)
 
         except Exception as e:
             self.finished_error.emit(str(e))
-
 # ---------------------------------------------------------
 # LAUNCHER MODIFICADO
 # ---------------------------------------------------------
@@ -155,6 +164,12 @@ class LauncherWindow(QWidget):
         
         # Extraemos el DataFrame pre-cargado
         schedule_df = preloaded_payload.get("schedule_df")
+
+# --- NUEVO: Recuperar ruta del payload ---
+        resolved_excel = preloaded_payload.get("excel_file")
+        if resolved_excel:
+             p["excel_file"] = resolved_excel
+        # -----------------------------------------
 
         if role == "Administrator":
             self.main_app_window = AdminMainWindow(
