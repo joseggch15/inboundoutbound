@@ -209,7 +209,8 @@ class RoleAdminWidget(QWidget):
         btn_del.setProperty("danger", True)
         
         h = QHBoxLayout()
-        h.addWidget(btn_new); h.addWidget(btn_save); h.addWidget(btn_del)
+        #h.addWidget(btn_new);
+        h.addWidget(btn_save); h.addWidget(btn_del)
         form.addLayout(h, row, 0, 1, 2)
 
         form_group = create_group_box("Manage Roles", form)
@@ -4005,7 +4006,7 @@ class CrudWidget(QWidget):
 
         # Action Buttons
         button_layout = QHBoxLayout()
-        button_layout.addWidget(self.crud_new_button)
+        #button_layout.addWidget(self.crud_new_button)
         button_layout.addWidget(self.crud_save_button)
         form_layout.addLayout(button_layout, row, 0, 1, 2)
         row += 1
@@ -4412,7 +4413,7 @@ class ShiftTypeAdminWidget(QWidget):
         # --------------------------------------
 
         actions = QHBoxLayout()
-        actions.addWidget(self.new_btn)
+        #actions.addWidget(self.new_btn)
         actions.addWidget(self.save_btn)
         actions.addWidget(self.delete_btn)
         
@@ -4768,7 +4769,7 @@ class LocationAdminWidget(QWidget):
         btn_save.setProperty("variant", "primary")
         btn_del.setProperty("danger", True)
         h = QHBoxLayout()
-        h.addWidget(btn_new)
+        #h.addWidget(btn_new)
         h.addWidget(btn_save)
         h.addWidget(btn_del)
         form.addLayout(h, row, 0, 1, 2)
