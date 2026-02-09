@@ -10,6 +10,7 @@ from ui_login import LoginWindow, LoadingWindow
 from ui.theme import apply_app_theme
 import database_logic as db
 import excel_logic as excel
+import traceback  # Necesario para el reporte de errores
 
 # ---------------------------------------------------------
 # CLASE WORKER PARA CARGA EN SEGUNDO PLANO
@@ -194,17 +195,60 @@ class LauncherWindow(QWidget):
         self.main_app_window = None
         self.show()
 
+# 1. Definimos la función que captura el error
+def exception_hook(exctype, value, tb):
+    """
+    Esta función se activa automáticamente si hay un error fatal.
+    Guarda el error en 'crash_log.txt' y muestra una alerta.
+    """
+    error_msg = "".join(traceback.format_exception(exctype, value, tb))
+    
+    print("\n ERROR CRÍTICO DETECTADO ")
+    print(error_msg)
+    
+    # Guardar el error en un archivo para leerlo después
+    try:
+        with open("crash_log.txt", "w", encoding="utf-8") as f:
+            f.write(error_msg)
+    except Exception:
+        pass
+
+    # Intentar mostrar una ventana de alerta visual
+    try:
+        from PyQt6.QtWidgets import QMessageBox, QApplication
+        # Solo mostrar si hay una aplicación activa
+        if QApplication.instance():
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Icon.Critical)
+            msg.setWindowTitle("Error Crítico")
+            msg.setText("Ha ocurrido un error inesperado y la aplicación debe cerrarse.")
+            msg.setInformativeText("Se ha generado un archivo 'crash_log.txt' con los detalles.")
+            msg.setDetailedText(error_msg)
+            msg.exec()
+    except Exception:
+        pass
+
+    # Llamar al manejo de errores por defecto de Python y salir
+    sys.__excepthook__(exctype, value, tb)
+    sys.exit(1)
+
 if __name__ == '__main__':
-    # ... (Resto del código igual) ...
+    # ---> AQUÍ ACTIVAMOS LA TRAMPA DE ERRORES <---
+    sys.excepthook = exception_hook
+
     try:
         QApplication.setHighDpiScaleFactorRoundingPolicy(
             Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
         )
     except Exception:
         pass
+    
     app = QApplication(sys.argv)
     app.setApplicationName("Inbound - Outbound PLG")
+    
     apply_app_theme(app)
+    
     launcher = LauncherWindow()
     launcher.show()
+    
     sys.exit(app.exec())

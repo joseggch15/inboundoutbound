@@ -2098,6 +2098,50 @@ def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]
             if ws.cell(r, badge_col).value
         }
 
+        for user in users_db:
+            badge = str(user.get("badge", "")).strip()
+            
+            # Solo actuamos si el usuario YA existe en el Excel (está en rows_by_badge)
+            if badge in rows_by_badge:
+                row_idx = rows_by_badge[badge]
+                
+                if variant == "RGM":
+                    # Actualizar Nombre
+                    if "NAME" in header_map:
+                        db_val = str(user.get("name", "") or "").strip()
+                        cell = ws.cell(row_idx, header_map["NAME"])
+                        if str(cell.value or "").strip() != db_val:
+                            cell.value = db_val
+                    # Actualizar Rol
+                    if "ROLE" in header_map:
+                        db_val = str(user.get("role", "") or "").strip()
+                        cell = ws.cell(row_idx, header_map["ROLE"])
+                        if str(cell.value or "").strip() != db_val:
+                            cell.value = db_val
+                
+                else: # Newmont
+                    # Partir nombre en Last/First
+                    name = str(user.get("name", "") or "").strip()
+                    if "," in name:
+                        last, first = (name.split(",", 1) + [""])[:2]
+                    else:
+                        last, first = (name.rsplit(" ", 1) + [""])[:2]
+                    
+                    last, first = last.strip(), first.strip()
+
+                    if "Last Name" in header_map:
+                        cell = ws.cell(row_idx, header_map["Last Name"])
+                        if str(cell.value or "").strip() != last:
+                            cell.value = last
+                    if "First Name" in header_map:
+                        cell = ws.cell(row_idx, header_map["First Name"])
+                        if str(cell.value or "").strip() != first:
+                            cell.value = first
+                    if "Discipline" in header_map:
+                        db_val = str(user.get("role", "") or "").strip()
+                        cell = ws.cell(row_idx, header_map["Discipline"])
+                        if str(cell.value or "").strip() != db_val:
+                            cell.value = db_val
         # --- 1. Add missing users ---
         added_users = 0
         for user in users_db:

@@ -1647,6 +1647,36 @@ class PlanStaffWidget(QWidget):
         else:
             df = excel.get_schedule_preview(self.excel_file)
         
+        try:
+            if df is not None and not df.empty:
+                # Importamos users desde la BD para asegurar datos frescos
+                users_db = db.get_all_users(self.source)
+                
+                # Creamos mapas de Badge -> Role y Badge -> Name
+                role_map = {str(u["badge"]).strip(): str(u.get("role") or "").strip() for u in users_db}
+                name_map = {str(u["badge"]).strip(): str(u.get("name") or "").strip() for u in users_db}
+
+                # Determinamos nombre de columna Badge (RGM usa BADGE, Newmont usa Company ID)
+                col_badge = "BADGE" if "BADGE" in df.columns else "Company ID"
+                
+                if col_badge in df.columns:
+                    # Normalizamos columna Badge para cruce exacto
+                    df[col_badge] = df[col_badge].astype(str).str.strip()
+                    
+                    # Sobreescribir ROL (Discipline o ROLE)
+                    col_role = "ROLE" if "ROLE" in df.columns else "Discipline"
+                    if col_role in df.columns:
+                        # .map busca el badge en role_map; .fillna mantiene el valor original si no lo encuentra
+                        df[col_role] = df[col_badge].map(role_map).fillna(df[col_role])
+
+                    # Sobreescribir NOMBRE (Solo si existe columna simple NAME, Newmont usa First/Last separados y es más complejo)
+                    if "NAME" in df.columns:
+                        df["NAME"] = df[col_badge].map(name_map).fillna(df["NAME"])
+                        
+                    print(f" UI Overlay applied: User metadata synced with DB for display.")
+        except Exception as e:
+            print(f" Warning: Could not apply DB overlay to preview: {e}")
+        
         self._loading_preview = True
         self._cell_original_values.clear()
         self._row_identities.clear()
