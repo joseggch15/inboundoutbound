@@ -114,6 +114,34 @@ DEBOUNCE_MS = 200
 
 WEEKEND_HEADER_YELLOW = "#FFEB3B"  # Amarillo vibrante para cabeceras
 
+
+def _is_off_like_payload(payload: dict) -> bool:
+    """
+    Determina si un turno representa un estado NO laborable.
+    Es la Fuente Única de Verdad (SSoT) para:
+      1. 'Do Not Mark Days' (kind='none')
+      2. Turnos Base 'OFF'
+      3. Turnos Custom con la bandera is_off=1 (ej. SICK, VACATION)
+    """
+    if not isinstance(payload, dict):
+        return False
+
+    # 1. Chequear 'Do Not Mark Days'
+    kind = payload.get('kind')
+    if kind == 'none':
+        return True
+
+    # 2. Chequear Turnos Custom marcados como 'Treat as OFF' (flag is_off)
+    # SQLite a veces retorna 1/0, forzamos conversión a bool
+    if bool(payload.get('is_off', False)):
+        return True
+
+    # 3. Fallback: El status base se llama estrictamente 'OFF'
+    if kind == 'base' and (payload.get('status') or '').strip().upper() == 'OFF':
+        return True
+
+    return False
+
 class ShiftCellDelegate(QStyledItemDelegate):
     def __init__(self, parent, get_options_callback):
         super().__init__(parent)
@@ -846,7 +874,7 @@ class DayScheduleEditor(QDialog):
         form.addRow("Pick Up:", self.pickup_combo)
         form.addRow("Drop Off:", self.dropoff_combo)
         form.addRow("Remarks:", self.remark_edit)
-
+        self.status_combo.currentIndexChanged.connect(self._on_status_changed)
         # NOTA: NO agregamos travel_diff_chk ni _travel_container al layout visual
         # form.addRow("", self.travel_diff_chk)
         # form.addRow("", self._travel_container)
@@ -864,6 +892,33 @@ class DayScheduleEditor(QDialog):
         # layout.addWidget(self.apply_to_range_chk)
 
         layout.addWidget(btn_box)
+        self._on_status_changed(self.status_combo.currentIndex())
+    
+    def _on_status_changed(self, index):
+        """
+        Refactorizado para soportar Turnos Custom marcados como OFF (SICK, etc).
+        """
+        data = self.status_combo.itemData(index)
+        
+        # Validación de seguridad
+        if not isinstance(data, dict):
+            return
+
+        # LÓGICA: Si el estatus es tipo OFF, limpiar logística inmediatamente.
+        if _is_off_like_payload(data):
+            # Bloquear señales para evitar recursividad o loops de actualización
+            with QSignalBlocker(self.pickup_combo), QSignalBlocker(self.dropoff_combo):
+                self.pickup_combo.setCurrentIndex(0) # Asume que el índice 0 es vacío/None
+                self.dropoff_combo.setCurrentIndex(0)
+                
+                # OPCIONAL: Feedback Visual - Deshabilitar campos
+                # self.pickup_combo.setEnabled(False)
+                # self.dropoff_combo.setEnabled(False)
+        else:
+            # OPCIONAL: Rehabilitar si se deshabilitaron
+            # self.pickup_combo.setEnabled(True)
+            # self.dropoff_combo.setEnabled(True)
+            pass
 
     def result_payload(self):
         from datetime import datetime
@@ -893,6 +948,8 @@ class DayScheduleEditor(QDialog):
             "entry_datetime": entry_dt,  # Será None (se calculará por defecto fuera)
             "exit_datetime": exit_dt,  # Será None (se calculará por defecto fuera)
         }
+    
+    
 
 
 # -------------------------------------------------------------
@@ -1268,7 +1325,7 @@ class PlanStaffWidget(QWidget):
 
         self.status_selector = QComboBox()
         self.status_selector.setFixedHeight(26)
-
+        self.status_selector.currentIndexChanged.connect(self._on_register_status_changed)
         self.start_date_edit = QDateEdit(QDate.currentDate())
         self.start_date_edit.setCalendarPopup(True)
         self.start_date_edit.setDisplayFormat("dd/MM/yyyy")
@@ -1453,6 +1510,7 @@ class PlanStaffWidget(QWidget):
                 "shift_type": None,
                 "in_time": None,
                 "out_time": None,
+                "is_off": True,
             },
         )
         self.status_selector.addItem(
@@ -1496,6 +1554,7 @@ class PlanStaffWidget(QWidget):
                         "name": t["name"],
                         "in_time": t["in_time"],
                         "out_time": t["out_time"],
+                        "is_off": t.get("is_off", 0),
                     },
                 )
         self.status_selector.setCurrentIndex(0)
@@ -2640,43 +2699,58 @@ class PlanStaffWidget(QWidget):
 
     def autofill_user_data(self, index):
         """
-        Rellena Rol, Badge Y Ubicaciones por defecto al seleccionar usuario.
+        Prellena rol/badge/defaults del usuario, pero respeta el Status actual.
+        Si el Status es tipo OFF, NO llenamos la logística.
         """
+        # 1. Obtener estado actual del selector de estatus
+        current_sel = self.status_selector.currentData()
+        is_current_status_off = _is_off_like_payload(current_sel) if isinstance(current_sel, dict) else False
+
         if index > 0:
-            # Recuperamos el usuario de la lista en memoria (el index-1 es por el item "-- Select --")
+            # La lista 'users_for_selector' coincide con el índice del combo (offset -1)
             user = self.users_for_selector[index - 1]
             
-            self.role_display.setText(user["role"])
-            self.badge_display.setText(user["badge"])
-            
-            # --- NUEVA LÓGICA: Pre-seleccionar Pick Up / Drop Off ---
-            
-            # 1. Obtenemos los valores que vienen de la BD (pueden ser None o texto)
+            # Llenar campos de solo lectura
+            self.role_display.setText(user.get("role", ""))
+            self.badge_display.setText(str(user.get("badge", "")) or "")
+
+            # Obtener defaults del usuario
             def_pu = user.get("pickup_location")
             def_do = user.get("dropoff_location")
 
-            # Función auxiliar interna para buscar y seleccionar en un combo sin romper nada
-            def set_combo(combo, val):
-                if val:
-                    idx = combo.findData(val) # Busca si la ubicación existe en la lista
-                    if idx >= 0:
-                        combo.setCurrentIndex(idx) # Si existe, la selecciona
-                    else:
-                        combo.setCurrentIndex(0) # Si no, lo deja en blanco
+            # GUARDAR ESTADO: Actualizamos la memoria del "último working" 
+            # para poder restaurar si el usuario cambia de OFF -> ON.
+            self._last_working_pickup = def_pu or None
+            self._last_working_dropoff = def_do or None
+
+            # 2. Lógica: Llenar combos O Limpiar combos basado en el Status
+            with QSignalBlocker(self.pickup_combo), QSignalBlocker(self.dropoff_combo):
+                if is_current_status_off:
+                    # El status dice NO -> Limpiar
+                    self.pickup_combo.setCurrentIndex(0)
+                    self.dropoff_combo.setCurrentIndex(0)
                 else:
-                    combo.setCurrentIndex(0) # Si no tiene default, lo deja en blanco
-
-            # 2. Aplicamos la selección a tus combos existentes
-            set_combo(self.pickup_combo, def_pu)
-            set_combo(self.dropoff_combo, def_do)
-            # -------------------------------------------------------
-
+                    # El status dice SI -> Llenar con Defaults
+                    self._set_combo_text(self.pickup_combo, def_pu)
+                    self._set_combo_text(self.dropoff_combo, def_do)
         else:
-            # Si seleccionó "-- Select a user --", limpiamos todo
+            # Resetear UI si no hay usuario seleccionado
             self.role_display.clear()
             self.badge_display.clear()
-            self.pickup_combo.setCurrentIndex(0)
-            self.dropoff_combo.setCurrentIndex(0)
+            self._last_working_pickup = None
+            self._last_working_dropoff = None
+            
+            with QSignalBlocker(self.pickup_combo), QSignalBlocker(self.dropoff_combo):
+                self.pickup_combo.setCurrentIndex(0)
+                self.dropoff_combo.setCurrentIndex(0)
+
+    def _set_combo_text(self, combo, text):
+        """Helper para setear el combo por texto de forma segura"""
+        if text:
+            idx = combo.findData(text)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+        else:
+            combo.setCurrentIndex(0)
 
     def _apply_schedule_period(
         self,
@@ -2990,6 +3064,26 @@ class PlanStaffWidget(QWidget):
             )
         else:  # Limpiar rango ("Do Not Mark Days")
             db.clear_schedule_range(badge, start_date, end_date, self.source)
+
+        is_off_day_guard = False
+        if sel:
+            # 1. Es "Do Not Mark Days" (kind='none')
+            if sel.get("kind") == "none":
+                is_off_day_guard = True
+            # 2. Es Custom con flag de OFF (ej. SICK, VACATION) -> sel.get("is_off")
+            elif sel.get("is_off"):
+                is_off_day_guard = True
+            # 3. Es Base 'OFF'
+            elif sel.get("status") == "OFF":
+                is_off_day_guard = True
+        else:
+            # Si no hay selección (sel is None), asumimos que no se marca (OFF-like)
+            is_off_day_guard = True
+
+        if is_off_day_guard:
+            pickup = None
+            dropoff = None
+
 
         # Guardar ubicación si aplica
         if pickup or dropoff:
@@ -3590,6 +3684,45 @@ class PlanStaffWidget(QWidget):
             self._bulk_editing = False
             self.rotation_changed.emit()
             self.schedule_table.viewport().update()
+            
+    def _on_register_status_changed(self, index):
+        data = self.status_selector.itemData(index)
+        if not isinstance(data, dict):
+            return
+
+        is_off = _is_off_like_payload(data)
+
+        with QSignalBlocker(self.pickup_combo), QSignalBlocker(self.dropoff_combo):
+            if is_off:
+                # 1. Lógica OFF: 
+                # Guardamos la selección actual antes de borrar (por si fue manual)
+                cur_pu = self.pickup_combo.currentData()
+                cur_do = self.dropoff_combo.currentData()
+                if cur_pu: self._last_working_pickup = cur_pu
+                if cur_do: self._last_working_dropoff = cur_do
+
+                # Limpiar
+                self.pickup_combo.setCurrentIndex(0)
+                self.dropoff_combo.setCurrentIndex(0)
+            
+            else:
+                # 2. Lógica ON: Restaurar estado previo válido
+                # Chequear si está vacío actualmente, si es así, restaurar memoria
+                if self.pickup_combo.currentIndex() <= 0:
+                    self._set_combo_text(self.pickup_combo, getattr(self, '_last_working_pickup', None))
+                
+                if self.dropoff_combo.currentIndex() <= 0:
+                    self._set_combo_text(self.dropoff_combo, getattr(self, '_last_working_dropoff', None))
+                
+                # Fallback: Si la memoria está vacía, intentar recargar del Objeto Usuario actual
+                if self.pickup_combo.currentIndex() <= 0 or self.dropoff_combo.currentIndex() <= 0:
+                     uidx = self.user_selector_combo.currentIndex()
+                     if uidx > 0:
+                         user = self.users_for_selector[uidx - 1]
+                         if self.pickup_combo.currentIndex() <= 0:
+                             self._set_combo_text(self.pickup_combo, user.get('pickup_location'))
+                         if self.dropoff_combo.currentIndex() <= 0:
+                             self._set_combo_text(self.dropoff_combo, user.get('dropoff_location'))
         
 
 
