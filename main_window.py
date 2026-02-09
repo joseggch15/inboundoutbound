@@ -4012,7 +4012,7 @@ class CrudWidget(QWidget):
         row += 1
         form_layout.addWidget(self.crud_delete_button, row, 0, 1, 2)
         row += 1
-        form_layout.addWidget(self.import_button, row, 0, 1, 2)
+        #form_layout.addWidget(self.import_button, row, 0, 1, 2)
 
         form_group = create_group_box("Manage User", form_layout)
         form_group.setFixedWidth(400)
