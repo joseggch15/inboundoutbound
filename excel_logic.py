@@ -1145,10 +1145,17 @@ def generate_transport_report(
                     pass  # Fallback to defaults
 
             # --- Shift Collision Detector: ruptura del imán ---
+            # --- Shift Collision Detector: Lógica de Ruptura ---
+            # 1. Verificar flags en el mapa cargado previamente (fne_days)
             force_today = d.isoformat() in fne_days
             force_next = next_d.isoformat() in fne_days
 
+            # 2. Definición de Entrada:
+            #    Es entrada si: (Ayer fue libre) O (Hoy está marcado como forzado)
             is_entry = force_today or (not _is_working(st_prev))
+
+            # 3. Definición de Salida:
+            #    Es salida si: (Mañana es libre) O (Mañana empieza un nuevo bloque forzado)
             is_exit = (not _is_working(st_next)) or force_next
 
             if is_entry:

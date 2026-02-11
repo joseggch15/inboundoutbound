@@ -1999,65 +1999,74 @@ class PlanStaffWidget(QWidget):
     
     def _consolidate_and_record_logistics(self, badge, role, username, op_start, op_end, status, cursor=None):
         """
-        EL MOTOR DE CONSOLIDACIÓN:
-        1. Verifica si la operación nueva se toca con operaciones existentes (ayer/mañana).
-        2. Si se tocan y son trabajo continuo, las fusiona en un solo bloque.
-        3. Recalcula las horas de Entrada (Entry) y Salida (Exit) basadas en el PRIMER y ÚLTIMO día.
-        4. Escribe la Operación Maestra en la BD.
+        EL MOTOR DE CONSOLIDACIÓN (PATCHED):
+        Respeta force_new_entry para evitar fusiones no deseadas.
         """
         # A. Si es un día libre (OFF), NO consolidamos operaciones, solo limpiamos.
         if not db.is_working_status(status, self.source):
-            db.delete_operations_in_range(badge, op_start, op_end, cursor=cursor) ### <--- CAMBIO AQUÍ
+            db.delete_operations_in_range(badge, op_start, op_end, cursor=cursor)
             return
 
         final_start = op_start
         final_end = op_end
 
-        # B. Fusión Izquierda (Looking Back - Ayer)
-        prev_day = final_start - timedelta(days=1)
-        prev_op = db.get_operation_overlapping(badge, prev_day, cursor=cursor)
+        # --- [CAMBIO 1] Detectar flags de ruptura ---
+        # Consultamos el mapa de hoy para ver si ESTE día es un inicio forzado
+        curr_map = db.get_schedule_map_for_range(badge, op_start, op_end, self.source, cursor=cursor)
         
-        if prev_op:
-            # Doble check: Asegurar que el día anterior en el calendario (schedule) es trabajo
-            prev_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source, cursor=cursor)
-            prev_st = prev_map.get(prev_day.isoformat(), {}).get("status")
+        # Flag: ¿Hoy es un inicio forzado?
+        is_force_start_today = (curr_map.get(op_start.isoformat(), {}).get("force_new_entry", 0) == 1)
+
+        # B. Fusión Izquierda (Looking Back - Ayer)
+        # SOLO entramos si HOY NO es un inicio forzado
+        if not is_force_start_today:  # <--- CONDICIÓN DE BLOQUEO AGREGADA
+            prev_day = final_start - timedelta(days=1)
+            prev_op = db.get_operation_overlapping(badge, prev_day, cursor=cursor)
             
-            if db.is_working_status(prev_st, self.source):
-                # ¡Fusión! Extendemos el inicio al inicio de la operación anterior
-                prev_op_start = datetime.strptime(prev_op['start_date'], "%Y-%m-%d").date()
-                if prev_op_start < final_start:
-                    final_start = prev_op_start
+            if prev_op:
+                prev_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source, cursor=cursor)
+                prev_st = prev_map.get(prev_day.isoformat(), {}).get("status")
+                
+                if db.is_working_status(prev_st, self.source):
+                    prev_op_start = datetime.strptime(prev_op['start_date'], "%Y-%m-%d").date()
+                    if prev_op_start < final_start:
+                        final_start = prev_op_start
 
         # C. Fusión Derecha (Looking Forward - Mañana)
         next_day = final_end + timedelta(days=1)
-        next_op = db.get_operation_overlapping(badge, next_day, cursor=cursor)
         
-        if next_op:
-            # Doble check: Asegurar que el día siguiente en el calendario es trabajo
-            next_map = db.get_schedule_map_for_range(badge, next_day, next_day, self.source,cursor=cursor)
-            next_st = next_map.get(next_day.isoformat(), {}).get("status")
-            
-            if db.is_working_status(next_st, self.source):
-                # ¡Fusión! Extendemos el final al final de la operación siguiente
-                next_op_end = datetime.strptime(next_op['end_date'], "%Y-%m-%d").date()
-                if next_op_end > final_end:
-                    final_end = next_op_end
+        # --- [CAMBIO 2] Verificar si MAÑANA es un inicio forzado ---
+        # Consultamos el mapa de mañana ANTES de decidir fusionar
+        next_map = db.get_schedule_map_for_range(badge, next_day, next_day, self.source, cursor=cursor)
+        next_info = next_map.get(next_day.isoformat(), {})
+        next_st = next_info.get("status")
+        
+        # Flag: ¿Mañana fuerza una nueva entrada?
+        is_force_start_tomorrow = (next_info.get("force_new_entry", 0) == 1)
 
-        # D. Limpieza: Borrar cualquier operación fragmentada en el nuevo rango maestro
+        # SOLO fusionamos si mañana NO fuerza una ruptura
+        if not is_force_start_tomorrow: # <--- CONDICIÓN DE BLOQUEO AGREGADA
+            next_op = db.get_operation_overlapping(badge, next_day, cursor=cursor)
+            
+            if next_op:
+                if db.is_working_status(next_st, self.source):
+                    next_op_end = datetime.strptime(next_op['end_date'], "%Y-%m-%d").date()
+                    if next_op_end > final_end:
+                        final_end = next_op_end
+
+        # D. Limpieza (Igual que antes)
         db.delete_operations_in_range(badge, final_start, final_end, cursor=cursor)
 
-        # E. Recálculo Inteligente de Horarios (Entry/Exit)
-        # Usamos el status del PRIMER día para la Entry Date
+        # E. Recálculo (Igual que antes)
         map_start = db.get_schedule_map_for_range(badge, final_start, final_start, self.source, cursor=cursor)
         st_start = map_start.get(final_start.isoformat(), {}).get("status") or status
         t_in = self._calculate_time_logic(st_start, "IN")
 
-        # Usamos el status del ÚLTIMO día para la Exit Date
         map_end = db.get_schedule_map_for_range(badge, final_end, final_end, self.source, cursor=cursor)
         st_end = map_end.get(final_end.isoformat(), {}).get("status") or status
         t_out = self._calculate_time_logic(st_end, "OUT")
 
-        # F. Inserción de la Operación Unificada
+        # F. Inserción (Igual que antes)
         db.add_operation(
             username=username, 
             role=role, 
@@ -2067,9 +2076,8 @@ class PlanStaffWidget(QWidget):
             created_by=self.logged_username,
             entry_date=datetime.combine(final_start, t_in),
             exit_date=datetime.combine(final_end, t_out),
-            cursor=cursor  # <--- CRÍTICO: Pasar el cursor
+            cursor=cursor 
         )
-        # print(f"DEBUG: Consolidated Op: {final_start} -> {final_end}")
 
     
     def _apply_fill_from_anchor(self):
@@ -2923,50 +2931,64 @@ class PlanStaffWidget(QWidget):
             # No muestro QMessageBox aquí para no interrumpir al usuario
             # pero podrías loguearlo si quieres.
             print("Excel update failed from cell edit:", message)
-    # --------------------------------------------------------------------------
-    # HELPER: Detección de Colisiones (Working -> Working)
+   
+   # --------------------------------------------------------------------------
+    # HELPER: Detección de Colisiones (Working -> Working con CAMBIO DE TURNO)
     # --------------------------------------------------------------------------
     def _resolve_force_new_entry_start(self, badge, start_date, new_status):
         """
-        Verifica si se está creando una continuidad Working->Working.
+        Detecta colisiones logísticas.
+        Regla: Solo dispara alerta si:
+          1. Ayer fue Working
+          2. Hoy es Working
+          3. El código de turno CAMBIÓ (ej: ON -> ON NS)
+        
         Retorna:
-          1 -> El usuario eligió SEPARAR (force_new_entry_start=1)
-          0 -> El usuario eligió CONTINUAR o no hubo colisión (force_new_entry_start=0)
-          None -> El usuario CANCELÓ la operación.
+          1 -> Separar (force_new_entry_start=1)
+          0 -> Unir (force_new_entry_start=0)
+          None -> Cancelar operación
         """
-        # 1. Si el nuevo estado es OFF o vacío, no hay colisión (no se parte viaje)
-        if not new_status or not db.is_working_status(new_status, self.source):
+        # 0. Normalización segura
+        n_code = str(new_status or "").strip().upper()
+        
+        # 1. Si el nuevo estado es OFF o vacío, no hay colisión
+        if not n_code or not db.is_working_status(n_code, self.source):
             return 0 
 
-        # 2. Consultar el día anterior en la BD
+        # 2. Consultar el día anterior
         prev_day = start_date - timedelta(days=1)
-        # Usamos get_schedule_map_for_range para obtener info precisa del día previo
         prev_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source)
         
-        # Extraer status del diccionario (key suele ser fecha string ISO)
         prev_day_str = prev_day.strftime("%Y-%m-%d")
-        
-        # Defensive coding: prev_map puede venir vacío o con otra key
         prev_info = prev_map.get(prev_day_str, {})
-        prev_status = prev_info.get("status")
+        raw_prev_status = prev_info.get("status")
+        p_code = str(raw_prev_status or "").strip().upper()
 
-        # 3. Si el día anterior era OFF, no hay colisión (Off -> Working es normal)
-        if not prev_status or not db.is_working_status(prev_status, self.source):
+        # 3. Si el día anterior era OFF (o vacío), es un inicio de ciclo normal
+        if not p_code or not db.is_working_status(p_code, self.source):
             return 0
 
-        # 4. COLISIÓN DETECTADA (Working -> Working) -> Preguntar al usuario
+        # --- FIX CRÍTICO: VALIDACIÓN DE IDENTIDAD ---
+        # Si ambos son Working, pero son EL MISMO TURNO (ej: ON -> ON), 
+        # es continuidad natural, no colisión.
+        if p_code == n_code:
+            return 0 
+        # --------------------------------------------
+
+        # 4. COLISIÓN REAL DETECTADA (Working A -> Working B)
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle("⚠️ Colisión de Turnos Detectada")
+        box.setWindowTitle("Cambio de Turno Detectado")
         box.setText(
-            f"Se detectó continuidad de turnos para {badge}:\n\n"
-            f"Día Previo: {prev_day_str} ({prev_status})\n"
-            f"Nuevo Día : {start_date.strftime('%Y-%m-%d')} ({new_status})\n\n"
-            "El sistema uniría esto en un solo viaje. ¿Qué desea hacer?"
+            f"Se detectó un cambio de turno activo para {badge}:\n\n"
+            f"Ayer: {prev_day_str} ({p_code})\n"
+            f"Hoy : {start_date.strftime('%Y-%m-%d')} ({n_code})\n\n"
+            "¿Desea UNIR esto al viaje actual o crear una NUEVA SALIDA?"
         )
 
-        cont_btn = box.addButton("Mantener Unido (1 Viaje)", QMessageBox.ButtonRole.AcceptRole)
-        sep_btn  = box.addButton("Partir Turno (Nueva Salida)", QMessageBox.ButtonRole.DestructiveRole)
+        # Botones re-fraseados para claridad mental del usuario
+        cont_btn = box.addButton("Unir (Continuidad)", QMessageBox.ButtonRole.AcceptRole)
+        sep_btn  = box.addButton("Separar (Nuevo Viaje)", QMessageBox.ButtonRole.DestructiveRole)
         cancel_btn = box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
 
         box.setDefaultButton(cont_btn)
@@ -2978,9 +3000,11 @@ class PlanStaffWidget(QWidget):
             return None # Señal de abortar
 
         if clicked == sep_btn:
-            return 1 # Force split
+            return 1 # Force split (User requested separation)
             
         return 0 # Default: unir
+   
+   
     # ---------- actions ----------
     def save_plan_changes(self):
         # 1. Limpiar estados de error visuales

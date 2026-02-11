@@ -1144,7 +1144,7 @@ def get_schedule_map_for_range(
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT date, status, shift_type, in_time, out_time, remark "
+        "SELECT date, status, shift_type, in_time, out_time, remark, force_new_entry "  # <--- AGREGADO
         "FROM schedules WHERE badge = ? AND source = ? AND date >= ? AND date <= ?",
         (badge, source, start_d.isoformat(), end_d.isoformat()),
     )
@@ -1155,6 +1155,7 @@ def get_schedule_map_for_range(
             "in_time": row["in_time"],
             "out_time": row["out_time"],
             "remark": row["remark"],
+            "force_new_entry": row["force_new_entry"]
         }
         for row in cursor.fetchall()
     }
