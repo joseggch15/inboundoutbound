@@ -1018,7 +1018,9 @@ class PlanStaffWidget(QWidget):
 
         # --- NUEVO: Bandera para evitar doble apertura de diálogo ---
         self._is_handling_change = False
-
+        
+        self._is_first_load = True
+        
         # ---------- root layout ----------
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -1637,229 +1639,241 @@ class PlanStaffWidget(QWidget):
 
     # [CAMBIO 5] Lógica crítica para usar los datos en memoria
     def load_schedule_data(self, use_preloaded=False):
+        """
+        Carga los datos del cronograma en la tabla, optimizado para evitar
+        parpadeos (flickering) y saltos de scroll inesperados.
+        """
         # -------------------------------------------------------------
-        # LÓGICA DE PRE-CARGA (WORKER THREAD)
+        # 1. OPTIMIZACIÓN: GUARDAR POSICIÓN DEL SCROLL (Evitar Salto)
         # -------------------------------------------------------------
-        df = None
-        if use_preloaded and hasattr(self, '_initial_preloaded_df') and self._initial_preloaded_df is not None:
-            print("DEBUG: Using preloaded dataframe (High Performance Mode).")
-            df = self._initial_preloaded_df
-            self._initial_preloaded_df = None 
-        else:
-            df = excel.get_schedule_preview(self.excel_file)
+        h_scroll_val = 0
+        v_scroll_val = 0
+        
+        # Guardamos dónde está mirando el usuario antes de tocar nada
+        if self.schedule_table.horizontalScrollBar():
+            h_scroll_val = self.schedule_table.horizontalScrollBar().value()
+        if self.schedule_table.verticalScrollBar():
+            v_scroll_val = self.schedule_table.verticalScrollBar().value()
+
+        # -------------------------------------------------------------
+        # 2. OPTIMIZACIÓN: CONGELAR ACTUALIZACIONES DE UI (Evitar Parpadeo)
+        # -------------------------------------------------------------
+        # Bloqueamos el repintado de los widgets principales.
+        # Esto evita que el usuario vea la tabla "vaciarse" y volver a llenarse.
+        self.setUpdatesEnabled(False)
+        self.schedule_table.setUpdatesEnabled(False)
+        self.frozen_table.setUpdatesEnabled(False)
         
         try:
-            if df is not None and not df.empty:
-                # Importamos users desde la BD para asegurar datos frescos
-                users_db = db.get_all_users(self.source)
-                
-                # Creamos mapas de Badge -> Role y Badge -> Name
-                role_map = {str(u["badge"]).strip(): str(u.get("role") or "").strip() for u in users_db}
-                name_map = {str(u["badge"]).strip(): str(u.get("name") or "").strip() for u in users_db}
-
-                # Determinamos nombre de columna Badge (RGM usa BADGE, Newmont usa Company ID)
-                col_badge = "BADGE" if "BADGE" in df.columns else "Company ID"
-                
-                if col_badge in df.columns:
-                    # Normalizamos columna Badge para cruce exacto
-                    df[col_badge] = df[col_badge].astype(str).str.strip()
-                    
-                    # Sobreescribir ROL (Discipline o ROLE)
-                    col_role = "ROLE" if "ROLE" in df.columns else "Discipline"
-                    if col_role in df.columns:
-                        # .map busca el badge en role_map; .fillna mantiene el valor original si no lo encuentra
-                        df[col_role] = df[col_badge].map(role_map).fillna(df[col_role])
-
-                    # Sobreescribir NOMBRE (Solo si existe columna simple NAME, Newmont usa First/Last separados y es más complejo)
-                    if "NAME" in df.columns:
-                        df["NAME"] = df[col_badge].map(name_map).fillna(df["NAME"])
-                        
-                    print(f" UI Overlay applied: User metadata synced with DB for display.")
-        except Exception as e:
-            print(f" Warning: Could not apply DB overlay to preview: {e}")
-        
-        self._loading_preview = True
-        self._cell_original_values.clear()
-        self._row_identities.clear()
-        self._date_col_dates.clear()
-
-        if df is None or df.empty:
-            self.frozen_table.clear()
-            self.schedule_table.clear()
-            self.frozen_table.setRowCount(0)
-            self.schedule_table.setRowCount(0)
-            self._loading_preview = False
-            return
-
-        if not use_preloaded:
+            # -------------------------------------------------------------
+            # LÓGICA DE PRE-CARGA DE DATOS (Tu lógica original)
+            # -------------------------------------------------------------
+            df = None
+            if use_preloaded and hasattr(self, '_initial_preloaded_df') and self._initial_preloaded_df is not None:
+                print("DEBUG: Using preloaded dataframe (High Performance Mode).")
+                df = self._initial_preloaded_df
+                self._initial_preloaded_df = None 
+            else:
+                df = excel.get_schedule_preview(self.excel_file)
+            
+            # --- Overlay de Usuarios desde BD (Tu lógica original) ---
             try:
-                ok_horizon, msg_horizon = excel.ensure_rolling_horizon_columns(
-                    self.excel_file
-                )
-                if ok_horizon:
-                    print(f"[AUTO-HORIZON] {msg_horizon}")
+                if df is not None and not df.empty:
+                    users_db = db.get_all_users(self.source)
+                    role_map = {str(u["badge"]).strip(): str(u.get("role") or "").strip() for u in users_db}
+                    name_map = {str(u["badge"]).strip(): str(u.get("name") or "").strip() for u in users_db}
+
+                    col_badge = "BADGE" if "BADGE" in df.columns else "Company ID"
+                    
+                    if col_badge in df.columns:
+                        df[col_badge] = df[col_badge].astype(str).str.strip()
+                        col_role = "ROLE" if "ROLE" in df.columns else "Discipline"
+                        if col_role in df.columns:
+                            df[col_role] = df[col_badge].map(role_map).fillna(df[col_role])
+
+                        if "NAME" in df.columns:
+                            df["NAME"] = df[col_badge].map(name_map).fillna(df["NAME"])
+                            
+                        print(f" UI Overlay applied: User metadata synced with DB for display.")
             except Exception as e:
-                print(f"[AUTO-HORIZON CRITICAL] Failed: {e}")
+                print(f" Warning: Could not apply DB overlay to preview: {e}")
+            
+            self._loading_preview = True
+            self._cell_original_values.clear()
+            self._row_identities.clear()
+            self._date_col_dates.clear()
 
-        custom_map = db.get_shift_type_map(self.source)
+            # Caso tabla vacía
+            if df is None or df.empty:
+                self.frozen_table.clear()
+                self.schedule_table.clear()
+                self.frozen_table.setRowCount(0)
+                self.schedule_table.setRowCount(0)
+                self._loading_preview = False
+                # Aunque esté vacía, debemos asegurar que el 'finally' se ejecute para restaurar UI
+                return 
 
-        # -----------------------------------------------------------
-        # ORDENAMIENTO Y ESTRUCTURA
-        # -----------------------------------------------------------
-        all_cols = list(df.columns)
-        actual_frozen_count = min(len(all_cols), FROZEN_COLUMN_COUNT)
+            # Auto-Horizon check (Tu lógica original)
+            if not use_preloaded:
+                try:
+                    ok_horizon, msg_horizon = excel.ensure_rolling_horizon_columns(self.excel_file)
+                    if ok_horizon:
+                        print(f"[AUTO-HORIZON] {msg_horizon}")
+                except Exception as e:
+                    print(f"[AUTO-HORIZON CRITICAL] Failed: {e}")
 
-        frozen_part = all_cols[:actual_frozen_count]
-        date_part = all_cols[actual_frozen_count:]
+            custom_map = db.get_shift_type_map(self.source)
 
-        date_mapping = []
-        for c in date_part:
-            d_obj = None
-            if hasattr(c, "to_pydatetime"):
-                d_obj = c.to_pydatetime().date()
-            elif isinstance(c, datetime):
-                d_obj = c.date()
-            elif isinstance(c, pydate):
-                d_obj = c
+            # -----------------------------------------------------------
+            # ORDENAMIENTO Y ESTRUCTURA (Tu lógica original)
+            # -----------------------------------------------------------
+            all_cols = list(df.columns)
+            actual_frozen_count = min(len(all_cols), FROZEN_COLUMN_COUNT)
 
-            if d_obj:
-                date_mapping.append((d_obj, c))
-            else:
-                date_mapping.append((pydate.max, c))
+            frozen_part = all_cols[:actual_frozen_count]
+            date_part = all_cols[actual_frozen_count:]
 
-        date_mapping.sort(key=lambda x: x[0])
-        sorted_date_cols = [x[1] for x in date_mapping]
-        new_column_order = frozen_part + sorted_date_cols
-        df = df[new_column_order]
+            date_mapping = []
+            for c in date_part:
+                d_obj = None
+                if hasattr(c, "to_pydatetime"):
+                    d_obj = c.to_pydatetime().date()
+                elif isinstance(c, datetime):
+                    d_obj = c.date()
+                elif isinstance(c, pydate):
+                    d_obj = c
 
-        cols = list(df.columns)
-        date_cols = []
-        for c in cols:
-            if hasattr(c, "to_pydatetime"):
-                date_cols.append(c.to_pydatetime().date())
-            elif isinstance(c, datetime):
-                date_cols.append(c.date())
-            else:
-                pass
+                if d_obj:
+                    date_mapping.append((d_obj, c))
+                else:
+                    date_mapping.append((pydate.max, c))
 
-        # Frozen Headers
-        actual_frozen_count = min(df.shape[1], FROZEN_COLUMN_COUNT)
-        frozen_headers = [str(c) for c in cols[:actual_frozen_count]]
+            date_mapping.sort(key=lambda x: x[0])
+            sorted_date_cols = [x[1] for x in date_mapping]
+            new_column_order = frozen_part + sorted_date_cols
+            df = df[new_column_order]
 
-        # Schedule Headers (Compacto: YYYY-MM-DD \n Dia)
-        schedule_headers = []
-        for d in date_cols:
-            # Usamos %a (Mon, Tue) para que sea corto
-            schedule_headers.append(f"{d.isoformat()}\n{d.strftime('%a')}")
-        self._date_col_dates = list(date_cols)
-        self.weekend_header.set_dates(self._date_col_dates)
+            cols = list(df.columns)
+            date_cols = []
+            for c in cols:
+                if hasattr(c, "to_pydatetime"):
+                    date_cols.append(c.to_pydatetime().date())
+                elif isinstance(c, datetime):
+                    date_cols.append(c.date())
+                else:
+                    pass
 
-        # Configurar Tablas
-        self.frozen_table.setRowCount(df.shape[0])
-        self.frozen_table.setColumnCount(actual_frozen_count)
-        self.frozen_table.setHorizontalHeaderLabels(frozen_headers)
+            # Configuración de Cabeceras
+            actual_frozen_count = min(df.shape[1], FROZEN_COLUMN_COUNT)
+            frozen_headers = [str(c) for c in cols[:actual_frozen_count]]
 
-        self.schedule_table.setRowCount(df.shape[0])
-        self.schedule_table.setColumnCount(len(schedule_headers))
-        for idx, header_text in enumerate(schedule_headers):
-            self.schedule_table.setHorizontalHeaderItem(
-                idx, QTableWidgetItem(header_text)
-            )
+            schedule_headers = []
+            for d in date_cols:
+                schedule_headers.append(f"{d.isoformat()}\n{d.strftime('%a')}")
+            self._date_col_dates = list(date_cols)
+            self.weekend_header.set_dates(self._date_col_dates)
 
-        # Cargar Filas
-        for i, row in df.iterrows():
-            badge_val = row.get("BADGE") if hasattr(row, "get") else (row["BADGE"] if "BADGE" in df.columns else "")
-            name_val = row.get("NAME") if hasattr(row, "get") else (row["NAME"] if "NAME" in df.columns else "")
-            role_val = row.get("ROLE") if hasattr(row, "get") else (row["ROLE"] if "ROLE" in df.columns else "")
+            # Configurar Tablas (Filas y Columnas)
+            self.frozen_table.setRowCount(df.shape[0])
+            self.frozen_table.setColumnCount(actual_frozen_count)
+            self.frozen_table.setHorizontalHeaderLabels(frozen_headers)
 
-            self._row_identities.append(
-                {
+            self.schedule_table.setRowCount(df.shape[0])
+            self.schedule_table.setColumnCount(len(schedule_headers))
+            for idx, header_text in enumerate(schedule_headers):
+                self.schedule_table.setHorizontalHeaderItem(
+                    idx, QTableWidgetItem(header_text)
+                )
+
+            # Cargar Filas (Loop Principal)
+            for i, row in df.iterrows():
+                badge_val = row.get("BADGE") if hasattr(row, "get") else (row["BADGE"] if "BADGE" in df.columns else "")
+                name_val = row.get("NAME") if hasattr(row, "get") else (row["NAME"] if "NAME" in df.columns else "")
+                role_val = row.get("ROLE") if hasattr(row, "get") else (row["ROLE"] if "ROLE" in df.columns else "")
+
+                self._row_identities.append({
                     "badge": str(badge_val) if badge_val is not None else "",
                     "name": str(name_val) if name_val is not None else "",
                     "role": str(role_val) if role_val is not None else "",
-                }
-            )
+                })
 
-            for j, val in enumerate(row):
-                text = _clean(val)
-                item = QTableWidgetItem(text)
+                for j, val in enumerate(row):
+                    text = _clean(val)
+                    item = QTableWidgetItem(text)
 
-                if j < actual_frozen_count:
-                    # Frozen table
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    self.frozen_table.setItem(i, j, item)
-                else:
-                    # Schedule table
-                    col_index = j - actual_frozen_count
-                    val_str = text.upper().strip()
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-                    if "ON NS" in val_str or "NIGHT" in val_str:
-                        item.setBackground(QColor("#FFFF99"))
-                    elif val_str == "ON" or "DAY" in val_str or val_str.isdigit():
-                        item.setBackground(QColor("#C6EFCE"))
-                    elif val_str in ("OFF", "BREAK", "KO", "LEAVE"):
-                        item.setBackground(QColor("#FFC7CE"))
+                    if j < actual_frozen_count:
+                        # Frozen table
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                        self.frozen_table.setItem(i, j, item)
                     else:
-                        if val_str in custom_map and custom_map[val_str].get("color_hex"):
-                            item.setBackground(QColor(custom_map[val_str]["color_hex"]))
+                        # Schedule table
+                        col_index = j - actual_frozen_count
+                        val_str = text.upper().strip()
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
-                    self.schedule_table.setItem(i, col_index, item)
-                    self._cell_original_values[(i, col_index)] = val_str
+                        # Coloreado
+                        if "ON NS" in val_str or "NIGHT" in val_str:
+                            item.setBackground(QColor("#FFFF99"))
+                        elif val_str == "ON" or "DAY" in val_str or val_str.isdigit():
+                            item.setBackground(QColor("#C6EFCE"))
+                        elif val_str in ("OFF", "BREAK", "KO", "LEAVE"):
+                            item.setBackground(QColor("#FFC7CE"))
+                        else:
+                            if val_str in custom_map and custom_map[val_str].get("color_hex"):
+                                item.setBackground(QColor(custom_map[val_str]["color_hex"]))
 
-                    key = self._warn_key_for(i, col_index)
-                    if key in self._warn_highlight_keys:
-                        item.setBackground(QColor(WARN_BG_HEX))
+                        self.schedule_table.setItem(i, col_index, item)
+                        self._cell_original_values[(i, col_index)] = val_str
+
+                        key = self._warn_key_for(i, col_index)
+                        if key in self._warn_highlight_keys:
+                            item.setBackground(QColor(WARN_BG_HEX))
+
+            # Estilos y Ajustes (Dentro del try, oculto por setUpdatesEnabled=False)
+            self.frozen_table.resizeColumnsToContents()
+            self.schedule_table.resizeColumnsToContents()
+
+            compact_height = 35
+            compact_font = QFont(); compact_font.setPointSize(7); compact_font.setBold(True)
+            
+            header_stylesheet = """
+                QHeaderView::section {
+                    padding-top: 0px; padding-bottom: 0px;
+                    padding-left: 2px; padding-right: 2px;
+                    margin: 0px; border-bottom: 1px solid #ccc; border-right: 1px solid #ccc;
+                }
+            """
+            
+            for table in [self.schedule_table, self.frozen_table]:
+                h = table.horizontalHeader()
+                h.setFont(compact_font)
+                h.setFixedHeight(compact_height)
+                h.setStyleSheet(header_stylesheet)
+                h.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            self._update_frozen_width()
+            self._loading_preview = False
+
+        finally:
+            # -------------------------------------------------------------
+            # 3. DESCONGELAR UI (Pintar todo de una sola vez)
+            # -------------------------------------------------------------
+            # Pase lo que pase (éxito o error), reactivamos la interfaz.
+            self.schedule_table.setUpdatesEnabled(True)
+            self.frozen_table.setUpdatesEnabled(True)
+            self.setUpdatesEnabled(True)
 
         # -------------------------------------------------------------
-        # CORRECCIÓN DE ESTILO Y VISIBILIDAD (ELIMINAR PADDING)
+        # 4. RESTAURAR SCROLL O CENTRAR (Lógica de "First Load")
         # -------------------------------------------------------------
-        
-        # 1. Ajustar columnas al contenido
-        self.frozen_table.resizeColumnsToContents()
-        self.schedule_table.resizeColumnsToContents()
-
-        # 2. Definir altura compacta (35px es suficiente si quitamos el padding)
-        compact_height = 35
-        
-        # 3. Fuente pequeña y negrita
-        compact_font = QFont()
-        compact_font.setPointSize(7)
-        compact_font.setBold(True)
-
-        # 4. TRUCO DE INGENIERÍA: Hoja de estilos para eliminar el padding interno
-        # Esto permite que el texto use todo el espacio vertical disponible.
-        # Ajustamos RGM/Newmont colors si quisieras, pero aquí usamos blanco/básico para legibilidad.
-        # NOTA: Ajusta 'background-color' si usas un tema oscuro o corporativo específico.
-        header_stylesheet = """
-            QHeaderView::section {
-                padding-top: 0px;
-                padding-bottom: 0px;
-                padding-left: 2px;
-                padding-right: 2px;
-                margin: 0px;
-                border-bottom: 1px solid #ccc;
-                border-right: 1px solid #ccc;
-            }
-        """
-
-        # Aplicar a Tabla DERECHA (Fechas)
-        h_sched = self.schedule_table.horizontalHeader()
-        h_sched.setFont(compact_font)
-        h_sched.setFixedHeight(compact_height)
-        h_sched.setStyleSheet(header_stylesheet)
-        h_sched.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Aplicar a Tabla IZQUIERDA (Nombres) - Exactamente igual para alineación perfecta
-        h_frozen = self.frozen_table.horizontalHeader()
-        h_frozen.setFont(compact_font)
-        h_frozen.setFixedHeight(compact_height)
-        h_frozen.setStyleSheet(header_stylesheet)
-        h_frozen.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self._update_frozen_width()
-        self._loading_preview = False
-        self._center_today_column()
+        if self._is_first_load:
+            # Si es la PRIMERA VEZ, centramos en hoy.
+            self._center_today_column()
+            self._is_first_load = False # Marcamos como ya cargado.
+        else:
+            # Si es un REFRESCO, restauramos la posición anterior.
+            self.schedule_table.horizontalScrollBar().setValue(h_scroll_val)
+            self.schedule_table.verticalScrollBar().setValue(v_scroll_val)
 
     def _center_today_column(self):
         """Scroll horizontally so today's date is visible and centered (REQ-002)."""
@@ -1904,8 +1918,13 @@ class PlanStaffWidget(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        # Also center on show (e.g. when user navigates to the tab)
-        self._center_today_column()
+        
+        # ARREGLO: Solo centrar si es la primera vez absoluta que se muestra
+        # Esto previene saltos si el usuario cambia de pestaña y regresa.
+        if self._is_first_load:
+            self._center_today_column()
+            # Nota: No ponemos False aquí inmediatamente, dejamos que load_schedule_data lo maneje
+        
         self._update_frozen_width()
 
     def _warn_key_for(self, row: int, col: int) -> str:
