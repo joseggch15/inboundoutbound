@@ -1,24 +1,24 @@
 # excel_logic.py
 # ============================================================
 # Utilidades de Excel para PlanStaff con SSoT (SQLite),
-# validación de estructura, importación validada,
-# exportación/regeneración desde BD, comparación Excel↔BD,
+# validaciÃ³n de estructura, importaciÃ³n validada,
+# exportaciÃ³n/regeneraciÃ³n desde BD, comparaciÃ³n Excelâ†”BD,
 # y utilidades de reporte.
 #
-# Esta versión corrige el error de Pylance:
-#    "variant no está definido"
+# Esta versiÃ³n corrige el error de Pylance:
+#    "variant no estÃ¡ definido"
 # garantizando que la variable 'variant' se inicializa y se
 # propaga correctamente en validate_excel_structure y en
 # cualquier flujo que la use (meta['variant']).
 #
-# MODIFICACIÓN: La generación de reportes de transporte ahora
+# MODIFICACIÃ“N: La generaciÃ³n de reportes de transporte ahora
 # consulta la tabla 'operations' para usar las fechas y horas
-# de entrada/salida personalizadas si están disponibles.
+# de entrada/salida personalizadas si estÃ¡n disponibles.
 #
-# NUEVO: Agregada la función para generar el reporte de períodos
-# de estadía onsite para la gestión de campamentos.
+# NUEVO: Agregada la funciÃ³n para generar el reporte de perÃ­odos
+# de estadÃ­a onsite para la gestiÃ³n de campamentos.
 #
-# CORRECCIÓN (Onsite Stay Report): La lógica de cálculo de períodos
+# CORRECCIÃ“N (Onsite Stay Report): La lÃ³gica de cÃ¡lculo de perÃ­odos
 # ahora analiza todas las fechas del Excel para identificar los
 # bloques de trabajo completos antes de filtrar por el rango del
 # reporte, solucionando la inconsistencia en las fechas de inicio.
@@ -36,16 +36,16 @@ import openpyxl
 import xlsxwriter
 from openpyxl.styles import PatternFill
 from openpyxl.comments import Comment
-import calendar  # <--- Necesario para calcular el último día del mes
+import calendar  # <--- Necesario para calcular el Ãºltimo dÃ­a del mes
 from database_logic import get_shift_types, get_shift_type_map
 
 # ============================================================
-# Helpers / Normalización
+# Helpers / NormalizaciÃ³n
 # ============================================================
 
 
 def _is_blank_series(s: pd.Series) -> bool:
-    """True si toda la serie es NaN o strings vacíos."""
+    """True si toda la serie es NaN o strings vacÃ­os."""
     if s is None:
         return True
     if s.isna().all():
@@ -65,12 +65,12 @@ def _prefix_for_file(plan_staff_file: str) -> str:
 def _normalize_status(v: object) -> Tuple[Optional[str], Optional[str]]:
     """
     Normaliza celdas a ('ON'|'ON NS'|'OFF'|None, 'Day Shift'|'Night Shift'|None).
-    - Valores numéricos o 'OK' se consideran ON (día).
-    - 'ON' -> ON (día)
+    - Valores numÃ©ricos o 'OK' se consideran ON (dÃ­a).
+    - 'ON' -> ON (dÃ­a)
     - 'ON NS' o 'NIGHT' -> ON NS (noche)
     - 'OFF', 'Break', 'KO', 'Leave' -> OFF
     - Cualquier otro valor -> None (ignorar)
-    Nota: Tipos personalizados (códigos) no se normalizan aquí (se tratan fuera).
+    Nota: Tipos personalizados (cÃ³digos) no se normalizan aquÃ­ (se tratan fuera).
     """
     if v is None:
         return None, None
@@ -83,7 +83,7 @@ def _normalize_status(v: object) -> Tuple[Optional[str], Optional[str]]:
         return "ON", "Day Shift"
     if "ON NS" in s or "NIGHT" in s:
         return "ON NS", "Night Shift"
-    # dígitos o 'OK'
+    # dÃ­gitos o 'OK'
     if s.isdigit() or s == "OK":
         return "ON", "Day Shift"
     return None, None
@@ -113,7 +113,7 @@ def _fill_for_base_status(status: Optional[str]) -> Optional[PatternFill]:
     s = str(status).strip().upper()
     green = PatternFill(
         start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"
-    )  # ON día
+    )  # ON dÃ­a
     red = PatternFill(
         start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"
     )  # OFF
@@ -146,7 +146,7 @@ def _get_transport_time_str(
     kind: str,
     comment: Optional[str],
     custom_map: Dict,
-    source: str = "RGM",  # <--- NUEVO PARÁMETRO
+    source: str = "RGM",  # <--- NUEVO PARÃMETRO
 ) -> str:
     """
     Determines the transport time ('HH:MM:SS') based on shift status.
@@ -166,7 +166,7 @@ def _get_transport_time_str(
     # Priority 2: Standard shifts (LOGIC SPLIT BY SOURCE)
     if source == "Newmont":
         # Newmont Rules:
-        # ON (Día): Entrada 06:00, Salida 12:00
+        # ON (DÃ­a): Entrada 06:00, Salida 12:00
         # ON NS (Noche): Entrada 12:00, Salida 06:00
         if su == "ON":
             return "06:00:00" if kind == "IN" else "12:00:00"
@@ -175,7 +175,7 @@ def _get_transport_time_str(
 
     else:
         # RGM / Default Rules:
-        # ON (Día): Entrada 07:00, Salida 07:00
+        # ON (DÃ­a): Entrada 07:00, Salida 07:00
         # ON NS (Noche): Entrada 07:00, Salida 07:00
         if su == "ON":
             return "07:00:00" if kind == "IN" else "07:00:00"
@@ -204,7 +204,7 @@ def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
     """
     Carga un DataFrame con columnas: ROLE, NAME, BADGE y columnas fecha.
     Aplica FR-07: limpia NaN/None en celdas de fechas para no mostrar 'nan'.
-    Si el archivo no existe o falla, retorna df vacío.
+    Si el archivo no existe o falla, retorna df vacÃ­o.
     """
     if not os.path.exists(plan_staff_file):
         return pd.DataFrame()
@@ -229,7 +229,7 @@ def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
         for key in ["ROLE", "NAME", "BADGE"]:
             if key in df.columns:
                 keep.append(key)
-        # si no había BADGE pero hay Company ID, también
+        # si no habÃ­a BADGE pero hay Company ID, tambiÃ©n
         if "Company ID" in df.columns and "BADGE" not in keep:
             df["BADGE"] = df["Company ID"].astype(str)
             keep.append("BADGE")
@@ -240,7 +240,7 @@ def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
 
         df_out = df[keep].copy()
 
-        # FR-07: limpiar NaN/None -> '' SOLO para visualización en la UI (no altera importación)
+        # FR-07: limpiar NaN/None -> '' SOLO para visualizaciÃ³n en la UI (no altera importaciÃ³n)
         for c in date_cols:
             if c in df_out.columns:
                 df_out[c] = df_out[c].apply(
@@ -260,7 +260,7 @@ def get_schedule_preview(plan_staff_file: str) -> pd.DataFrame:
 
 
 def get_roles_from_excel(plan_staff_file: str) -> list:
-    """Lista de roles únicos (si está disponible)."""
+    """Lista de roles Ãºnicos (si estÃ¡ disponible)."""
     if not os.path.exists(plan_staff_file):
         return [f"Role not available ({os.path.basename(plan_staff_file)} not found)"]
     try:
@@ -360,7 +360,7 @@ def get_users_from_excel(plan_staff_file: str) -> list:
 
 
 # ============================================================
-# Escritura / actualización del plan staff (Excel)
+# Escritura / actualizaciÃ³n del plan staff (Excel)
 # ============================================================
 
 
@@ -382,8 +382,8 @@ def update_plan_staff_excel(
     - Busca por BADGE y, si no, por NAME.
     - Escribe:
         * Estados base -> 'ON' / 'ON NS' / 'OFF' con colores legacy.
-        * Tipos personalizados -> código (p.ej. 'SOP') y color del tipo.
-        Además añade un comentario con 'IN-OUT' (HH:MM-HH:MM) si viene in_time/out_time.
+        * Tipos personalizados -> cÃ³digo (p.ej. 'SOP') y color del tipo.
+        AdemÃ¡s aÃ±ade un comentario con 'IN-OUT' (HH:MM-HH:MM) si viene in_time/out_time.
     - Si schedule_status es None, limpia el rango.
     """
     try:
@@ -402,7 +402,7 @@ def update_plan_staff_excel(
         # Colores base
         green = PatternFill(
             start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"
-        )  # ON día
+        )  # ON dÃ­a
         red = PatternFill(
             start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"
         )  # OFF
@@ -430,7 +430,7 @@ def update_plan_staff_excel(
                 return yel
             if s == "OFF":
                 return red
-            # código personalizado
+            # cÃ³digo personalizado
             info = custom_map.get(s)
             if info and info.get("color_hex"):
                 hex6 = info["color_hex"].lstrip("#").upper()
@@ -514,7 +514,7 @@ def update_plan_staff_excel(
 
 
 # ============================================================
-# FR-01: Detección de conflictos (sobrescritura)
+# FR-01: DetecciÃ³n de conflictos (sobrescritura)
 # ============================================================
 
 
@@ -576,7 +576,7 @@ def find_conflicts(
 
 
 # ============================================================
-# FR-02: Importar Excel -> DB (usuarios + schedules) con validación
+# FR-02: Importar Excel -> DB (usuarios + schedules) con validaciÃ³n
 # ============================================================
 
 
@@ -584,12 +584,12 @@ def import_excel_to_db(plan_staff_file: str, source: str) -> Tuple[int, int, int
     """
     Procesa .xlsx y almacena en la BD:
       - Usuarios (name, role, badge)
-      - Schedules día-a-día (ON/ON NS/OFF)
+      - Schedules dÃ­a-a-dÃ­a (ON/ON NS/OFF)
     Devuelve: (nuevos_usuarios, usuarios_omitidos, upserts_schedule)
 
-    Si el archivo NO es válido (estructura), levanta ValueError con detalle.
+    Si el archivo NO es vÃ¡lido (estructura), levanta ValueError con detalle.
     """
-    # Validación previa estricta
+    # ValidaciÃ³n previa estricta
     ok, errors, _meta = validate_excel_structure(plan_staff_file)
     if not ok:
         raise ValueError(
@@ -614,10 +614,10 @@ def import_excel_to_db(plan_staff_file: str, source: str) -> Tuple[int, int, int
     after_badges = {u["badge"] for u in after}
     skipped = len(before_badges & after_badges)  # aproximado para el mensaje
 
-    # ---- Validación de tipos de turno personalizados (códigos) ----
+    # ---- ValidaciÃ³n de tipos de turno personalizados (cÃ³digos) ----
     # Recorremos todas las columnas de fechas y recopilamos valores que no sean
-    # estados base ('ON', 'ON NS', 'OFF') ni equivalentes a ON por números/OK/DAY/NIGHT.
-    # Cualquier otro valor se considera un "código" de turno que debe existir en shift_types.
+    # estados base ('ON', 'ON NS', 'OFF') ni equivalentes a ON por nÃºmeros/OK/DAY/NIGHT.
+    # Cualquier otro valor se considera un "cÃ³digo" de turno que debe existir en shift_types.
     try:
         from database_logic import get_shift_type_map
 
@@ -643,23 +643,23 @@ def import_excel_to_db(plan_staff_file: str, source: str) -> Tuple[int, int, int
                 if su in ("ON", "ON NS", "OFF", "BREAK", "KO", "LEAVE"):
                     continue
                 if su.isdigit() or su == "OK" or ("DAY" in su) or ("NIGHT" in su):
-                    # se tratará como ON (día/noche) -> no requiere tipo personalizado
+                    # se tratarÃ¡ como ON (dÃ­a/noche) -> no requiere tipo personalizado
                     continue
-                # Si llega aquí lo tratamos como código personalizado
+                # Si llega aquÃ­ lo tratamos como cÃ³digo personalizado
                 if su not in _custom_map:
                     unknown_codes.add(su)
         if unknown_codes:
-            # abortar importación (la UI capturará este ValueError y lo mostrará en un QMessageBox)
+            # abortar importaciÃ³n (la UI capturarÃ¡ este ValueError y lo mostrarÃ¡ en un QMessageBox)
             raise ValueError(
-                "Se detectaron turnos/códigos no registrados en 'shift_types':\n  - "
+                "Se detectaron turnos/cÃ³digos no registrados en 'shift_types':\n  - "
                 + "\n  - ".join(sorted(unknown_codes))
-                + "\n\nRegístrelos primero (nombre, código y horarios IN/OUT) en 'Shift Types' para continuar."
+                + "\n\nRegÃ­strelos primero (nombre, cÃ³digo y horarios IN/OUT) en 'Shift Types' para continuar."
             )
     except ValueError:
         # re-lanzar para que la capa UI lo muestre
         raise
     except Exception:
-        # fallas al leer códigos no deben romper la importación; continuamos
+        # fallas al leer cÃ³digos no deben romper la importaciÃ³n; continuamos
         pass
 
     # Importar schedules (solo estados base reconocidos)
@@ -805,7 +805,7 @@ def export_plan_from_db(
             return s, ""
 
         # Escribir/actualizar usuarios
-        # Índice rápido por badge ya existente
+        # Ãndice rÃ¡pido por badge ya existente
         badge_col = (
             header_map["BADGE"] if variant == "RGM" else header_map["Company ID"]
         )
@@ -838,7 +838,7 @@ def export_plan_from_db(
                 ws.cell(row=row_idx, column=header_map["Discipline"], value=role)
                 ws.cell(row=row_idx, column=header_map["Company ID"], value=badge)
 
-            # Rellenar días
+            # Rellenar dÃ­as
             # Fechas ordenadas por las que ya existen en plantilla
             dates_sorted = sorted(date_map.keys())
             for d in dates_sorted:
@@ -866,7 +866,7 @@ def export_plan_from_db(
                     cell.fill = PatternFill(fill_type=None)
                     cell.comment = None
 
-        # Expandir columnas si hay fechas en BD que no existían en plantilla
+        # Expandir columnas si hay fechas en BD que no existÃ­an en plantilla
         # (opcional; se puede agregar al final)
         all_sched_dates: Set[date] = set()
         for b, per_day in sched_by_badge.items():
@@ -918,7 +918,7 @@ def export_plan_from_db(
 
 
 # ============================================================
-# Reporte de transporte (IN/OUT) — MODIFIED to use xlsxwriter
+# Reporte de transporte (IN/OUT) â€” MODIFIED to use xlsxwriter
 # ============================================================
 
 
@@ -944,12 +944,13 @@ def generate_transport_report(
             get_shift_type_map,
             get_user_location_for_date,
             get_all_operations,
+            get_force_new_entry_map,
         )
 
         custom_map: Dict[str, Dict] = {
             k.strip().upper(): v for k, v in get_shift_type_map(source).items()
         }
-        # Crear un mapa de operaciones por badge para búsqueda rápida
+        # Crear un mapa de operaciones por badge para bÃºsqueda rÃ¡pida
         ops_by_badge = {}
         for op in get_all_operations():
             b = op.get("badge")
@@ -1003,12 +1004,12 @@ def generate_transport_report(
         return su
 
     def _is_working(s):
-        # 1. Chequeo básico
+        # 1. Chequeo bÃ¡sico
         if not s or s in ("OFF", "BREAK", "KO", "LEAVE"):
             return False
         
         # 2. Chequeo avanzado: Consultar flag 'is_off' en DB
-        # shift_map_data ya fue definido unas líneas arriba en tu código
+        # shift_map_data ya fue definido unas lÃ­neas arriba en tu cÃ³digo
         if s in shift_map_data and shift_map_data[s].get("is_off"):
             return False
             
@@ -1018,6 +1019,16 @@ def generate_transport_report(
     all_in_events, all_out_events = [], []
     company_default = "PLGims"
     dates_sorted = sorted(date_cols.values())
+
+    # ---- 6.1) Cargar mapa force_new_entry para ruptura del imán ----
+    force_new_entry_by_badge: Dict[str, set] = {}
+    try:
+        if dates_sorted:
+            force_new_entry_by_badge = get_force_new_entry_map(
+                source, min(dates_sorted), max(dates_sorted)
+            )
+    except Exception:
+        force_new_entry_by_badge = {}
 
     def _find_operation_for_date(badge: str, target_date: date, user_ops: List[Dict]):
         if not user_ops:
@@ -1062,7 +1073,7 @@ def generate_transport_report(
 
     try:
         # Cargamos el mapa INTELIGENTE que incluye 'is_off'
-        # Asumimos Newmont por defecto en esta función si no se especifica
+        # Asumimos Newmont por defecto en esta funciÃ³n si no se especifica
         shift_map_data = get_shift_type_map("Newmont") 
     except Exception as e:
         print(f"Error loading map: {e}")
@@ -1078,6 +1089,7 @@ def generate_transport_report(
             ws_src.cell(row=r_idx, column=role_col).value or ""
         ).strip(), get_name(r_idx)
         user_operations = ops_by_badge.get(badge, [])
+        fne_days = force_new_entry_by_badge.get(badge, set())
 
         per_day: Dict[date, Tuple[Optional[str], Optional[str]]] = {}
         for c, d in date_cols.items():
@@ -1132,8 +1144,12 @@ def generate_transport_report(
                 except (ValueError, TypeError):
                     pass  # Fallback to defaults
 
-            is_entry = not _is_working(st_prev)
-            is_exit = not _is_working(st_next)
+            # --- Shift Collision Detector: ruptura del imán ---
+            force_today = d.isoformat() in fne_days
+            force_next = next_d.isoformat() in fne_days
+
+            is_entry = force_today or (not _is_working(st_prev))
+            is_exit = (not _is_working(st_next)) or force_next
 
             if is_entry:
                 pu, _ = get_user_location_for_date(badge, d)
@@ -1358,7 +1374,7 @@ def generate_rgm_transport_report(
 
     # --- Carga de Datos (BD + Excel) ---
     try:
-        from database_logic import get_shift_type_map, get_user_location_for_date, get_all_operations
+        from database_logic import get_shift_type_map, get_user_location_for_date, get_all_operations, get_force_new_entry_map
         custom_map = {k.strip().upper(): v for k, v in get_shift_type_map("RGM").items()}
         ops_by_badge = {}
         for op in get_all_operations():
@@ -1414,6 +1430,16 @@ def generate_rgm_transport_report(
     all_in, all_out = [], []
     dates_sorted = sorted(date_cols.values())
 
+    # ---- Cargar mapa force_new_entry para ruptura del imán (RGM) ----
+    force_new_entry_by_badge: Dict[str, set] = {}
+    try:
+        if dates_sorted:
+            force_new_entry_by_badge = get_force_new_entry_map(
+                "RGM", min(dates_sorted), max(dates_sorted)
+            )
+    except Exception:
+        force_new_entry_by_badge = {}
+
     for r in range(2, ws_src.max_row + 1):
         badge = str(ws_src.cell(r, header_map["BADGE"]).value or "").strip()
         if not badge: continue
@@ -1422,6 +1448,7 @@ def generate_rgm_transport_report(
         dept = str(ws_src.cell(r, header_map["ROLE"]).value or "")
         pos = "Technician"
         u_ops = ops_by_badge.get(badge, [])
+        fne_days = force_new_entry_by_badge.get(badge, set())
 
         per_day = {}
         for c, d in date_cols.items():
@@ -1440,9 +1467,13 @@ def generate_rgm_transport_report(
             st_next, _ = per_day.get(next_d, (None, None))
             
             op = _find_op(badge, d, u_ops)
+
+            # --- Shift Collision Detector: ruptura del imán (RGM) ---
+            force_today = d.isoformat() in fne_days
+            force_next = next_d.isoformat() in fne_days
             
             # --- INBOUND ---
-            if not _is_working(st_prev):
+            if force_today or (not _is_working(st_prev)):
                 entry_date = d
                 entry_time = _get_transport_time_str(st_d, "IN", cmt_d, custom_map, "RGM")
                 if op and op.get("entry_date"):
@@ -1460,44 +1491,44 @@ def generate_rgm_transport_report(
                 ])
 
             # --- OUTBOUND ---
-            if not _is_working(st_next):
+            if (not _is_working(st_next)) or force_next:
                 
                 # standard_next_day = d + timedelta(days=1)
                 standard_out_time_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map, "RGM")
-                # [NUEVA LÓGICA CONDICIONAL 1+D]
-                # Solo aplicamos "Día siguiente" si es ON o ON NS.
-                # Cualquier otro turno creado manualmente sale el MISMO día (como Newmont).
+                # [NUEVA LÃ“GICA CONDICIONAL 1+D]
+                # Solo aplicamos "DÃ­a siguiente" si es ON o ON NS.
+                # Cualquier otro turno creado manualmente sale el MISMO dÃ­a (como Newmont).
                 
                 if st_d in ["ON", "ON NS"]:
                     standard_exit_date = d + timedelta(days=1)
                 else:
-                    standard_exit_date = d  # Salida el mismo día del turno
+                    standard_exit_date = d  # Salida el mismo dÃ­a del turno
                     
                 standard_next_day = standard_exit_date
                 
-                # [FIN DE NUEVA LÓGICA]
+                # [FIN DE NUEVA LÃ“GICA]
                 
                 
                 
                 final_outbound_date = standard_next_day
                 final_outbound_time = standard_out_time_str
 
-                # 2. Verificamos la BD (Heurística Inteligente)
+                # 2. Verificamos la BD (HeurÃ­stica Inteligente)
                 if op and op.get("exit_date"):
                     try:
                         dt = datetime.strptime(op["exit_date"], "%Y-%m-%d %H:%M")
                         db_date = dt.date()
                         db_time_str = dt.strftime("%H:%M:%S")
                         
-                        # --- ANÁLISIS DE CASO ---
+                        # --- ANÃLISIS DE CASO ---
                         # A) Caso Manual (Ej. 28 de Enero a las 16:00)
-                        #    - La hora (16:00) es DIFERENTE a la hora estándar (07:00).
+                        #    - La hora (16:00) es DIFERENTE a la hora estÃ¡ndar (07:00).
                         #    - O la fecha es DIFERENTE a la del turno 'd'.
                         #    -> RESPETAMOS LA BD.
                         
-                        # B) Caso Sucio/Automático (Ej. 19 de Enero a las 07:00)
+                        # B) Caso Sucio/AutomÃ¡tico (Ej. 19 de Enero a las 07:00)
                         #    - La fecha es IGUAL a 'd' (19 == 19).
-                        #    - Y la hora es IGUAL a la estándar (07:00 == 07:00).
+                        #    - Y la hora es IGUAL a la estÃ¡ndar (07:00 == 07:00).
                         #    -> LO IGNORAMOS (Usamos standard_next_day).
 
                         is_manual_override = False
@@ -1506,7 +1537,7 @@ def generate_rgm_transport_report(
                         if db_date != d:
                             is_manual_override = True
                         else:
-                            # Si la fecha es igual a 'd', solo es manual si CAMBIÓ LA HORA.
+                            # Si la fecha es igual a 'd', solo es manual si CAMBIÃ“ LA HORA.
                             # Comparamos solo HH:MM para evitar problemas de segundos.
                             std_hm = standard_out_time_str[:5] # "07:00"
                             db_hm = db_time_str[:5]            # "16:00" o "07:00"
@@ -1555,7 +1586,7 @@ def generate_rgm_transport_report(
     return output.read(), "RGM Transportation report generated."
 
 # ============================================================
-# Utilidad: Propagar cambios de código/color a Excel (inmediato)
+# Utilidad: Propagar cambios de cÃ³digo/color a Excel (inmediato)
 # ============================================================
 
 
@@ -1563,7 +1594,7 @@ def apply_shift_type_update_to_excel(
     plan_staff_file: str, source: str, old_code: str, new_code: str, color_hex: str
 ) -> Tuple[bool, str]:
     """
-    Reemplaza en TODO el archivo Excel el código viejo por el nuevo y aplica el color indicado.
+    Reemplaza en TODO el archivo Excel el cÃ³digo viejo por el nuevo y aplica el color indicado.
     No altera comentarios ni otros contenidos.
     """
     try:
@@ -1655,7 +1686,7 @@ def generate_stay_period_report(
 
     # --- 3. Calculate stay periods ---
     stay_periods = []
-    # CORRECCIÓN: Se obtienen TODAS las fechas del Excel para analizar los bloques de trabajo
+    # CORRECCIÃ“N: Se obtienen TODAS las fechas del Excel para analizar los bloques de trabajo
     # completos, en lugar de pre-filtrar por el rango del reporte, lo que causaba el error.
     sorted_dates = sorted(date_cols.keys())
 
@@ -1665,7 +1696,7 @@ def generate_stay_period_report(
             continue
 
         current_period_start = None
-        # Iterar sobre todas las fechas para detectar los períodos de estadía completos
+        # Iterar sobre todas las fechas para detectar los perÃ­odos de estadÃ­a completos
         for i, d in enumerate(sorted_dates):
             cell_val = ws_src.cell(row=r_idx, column=date_cols[d]).value
             is_working = (
@@ -1675,14 +1706,14 @@ def generate_stay_period_report(
             )
 
             if is_working and current_period_start is None:
-                # Comienzo de un nuevo período de trabajo
+                # Comienzo de un nuevo perÃ­odo de trabajo
                 current_period_start = d
 
             if not is_working and current_period_start is not None:
-                # Fin del período actual. El bloque está completo.
+                # Fin del perÃ­odo actual. El bloque estÃ¡ completo.
                 period_end = sorted_dates[i - 1]
 
-                # Ahora, se verifica si este período completo se superpone con el rango del reporte
+                # Ahora, se verifica si este perÃ­odo completo se superpone con el rango del reporte
                 if not (period_end < start_date or current_period_start > end_date):
                     stay_periods.append(
                         {
@@ -1694,10 +1725,10 @@ def generate_stay_period_report(
                     )
                 current_period_start = None
 
-        # Verificar si un período estaba en curso hasta el último día del Excel
+        # Verificar si un perÃ­odo estaba en curso hasta el Ãºltimo dÃ­a del Excel
         if current_period_start is not None:
             period_end = sorted_dates[-1]
-            # También se verifica la superposición para este último período
+            # TambiÃ©n se verifica la superposiciÃ³n para este Ãºltimo perÃ­odo
             if not (period_end < start_date or current_period_start > end_date):
                 stay_periods.append(
                     {
@@ -1753,7 +1784,7 @@ def generate_stay_period_report(
 
 
 # ============================================================
-# VALIDACIÓN de estructura y salud del archivo (SSoT guardrails)
+# VALIDACIÃ“N de estructura y salud del archivo (SSoT guardrails)
 # ============================================================
 
 
@@ -1810,7 +1841,7 @@ def validate_excel_structure(plan_staff_file: str) -> Tuple[bool, List[str], Dic
     if meta["date_columns"] == 0:
         errors.append("No date columns detected in first row (datetime cells).")
 
-    # Confirmar headers mínimos por variante
+    # Confirmar headers mÃ­nimos por variante
     if variant == "RGM":
         for h in ("NAME", "ROLE", "BADGE"):
             if h not in header_map:
@@ -1824,7 +1855,7 @@ def validate_excel_structure(plan_staff_file: str) -> Tuple[bool, List[str], Dic
 
 
 # ============================================================
-# Comparación Excel ↔ BD (coherencia con SSoT)
+# ComparaciÃ³n Excel â†” BD (coherencia con SSoT)
 # ============================================================
 
 
@@ -1960,14 +1991,14 @@ def check_db_sync_with_excel(plan_staff_file: str, source: str) -> Dict:
 
 
 # ============================================================
-# REGENERACIÓN desde BD (SSoT) — independiente del archivo
+# REGENERACIÃ“N desde BD (SSoT) â€” independiente del archivo
 # ============================================================
 
 
 def regenerate_plan_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]:
     """
     Regenera el archivo PlanStaff (en la ruta indicada) a partir de la BD (SSoT).
-    - Si el archivo NO existe o su estructura es inválida, crea una plantilla mínima RGM (NAME/ROLE/BADGE).
+    - Si el archivo NO existe o su estructura es invÃ¡lida, crea una plantilla mÃ­nima RGM (NAME/ROLE/BADGE).
     - Luego exporta el estado actual (usuarios+schedules) a dicho archivo.
     """
     try:
@@ -1982,7 +2013,7 @@ def regenerate_plan_from_db(plan_staff_file: str, source: str) -> Tuple[bool, st
     ok, _errors, _meta = validate_excel_structure(plan_staff_file)
 
     if not ok:
-        # Crear plantilla mínima (RGM-like compatible con export_plan_from_db)
+        # Crear plantilla mÃ­nima (RGM-like compatible con export_plan_from_db)
         try:
             (
                 os.makedirs(os.path.dirname(plan_staff_file), exist_ok=True)
@@ -2022,12 +2053,12 @@ def regenerate_plan_from_db(plan_staff_file: str, source: str) -> Tuple[bool, st
 # ============================================================
 def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]:
     """
-    Sincroniza la información desde la BD hacia el Excel existente:
-        • Agrega usuarios faltantes (filas) por BADGE.
-        • Agrega columnas de fechas que existen en BD y no en el Excel.
-        • Escribe solo celdas VACÍAS con el estado proveniente de la BD
+    Sincroniza la informaciÃ³n desde la BD hacia el Excel existente:
+        â€¢ Agrega usuarios faltantes (filas) por BADGE.
+        â€¢ Agrega columnas de fechas que existen en BD y no en el Excel.
+        â€¢ Escribe solo celdas VACÃAS con el estado proveniente de la BD
           (no modifica valores ya presentes en el Excel).
-        • Aplica color y, si el status es un código, comenta 'IN-OUT' (HH:MM-HH:MM).
+        â€¢ Aplica color y, si el status es un cÃ³digo, comenta 'IN-OUT' (HH:MM-HH:MM).
     """
     ok, _errors, _meta = validate_excel_structure(plan_staff_file)
     if not ok:
@@ -2101,7 +2132,7 @@ def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]
         for user in users_db:
             badge = str(user.get("badge", "")).strip()
             
-            # Solo actuamos si el usuario YA existe en el Excel (está en rows_by_badge)
+            # Solo actuamos si el usuario YA existe en el Excel (estÃ¡ en rows_by_badge)
             if badge in rows_by_badge:
                 row_idx = rows_by_badge[badge]
                 
@@ -2221,7 +2252,7 @@ def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]
 def remove_user_from_excel(plan_staff_file: str, badge: str) -> Tuple[bool, str]:
     """
     Elimina la fila completa de un usuario en el Excel basado en su BADGE.
-    Se usa para mantener la sincronía cuando se elimina un usuario de la BD.
+    Se usa para mantener la sincronÃ­a cuando se elimina un usuario de la BD.
     """
     if not os.path.exists(plan_staff_file):
         return False, "File not found."
@@ -2235,7 +2266,7 @@ def remove_user_from_excel(plan_staff_file: str, badge: str) -> Tuple[bool, str]
             cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)
         }
 
-        # Determinar la columna del badge según la variante (RGM vs Newmont)
+        # Determinar la columna del badge segÃºn la variante (RGM vs Newmont)
         badge_col_idx = None
         if "BADGE" in header_map:
             badge_col_idx = header_map["BADGE"]
@@ -2267,25 +2298,25 @@ def remove_user_from_excel(plan_staff_file: str, badge: str) -> Tuple[bool, str]
 
 
 # ============================================================
-# HORIZONTE MÓVIL (Rolling Horizon)
+# HORIZONTE MÃ“VIL (Rolling Horizon)
 # ============================================================
 
 
 def ensure_rolling_horizon_columns(plan_staff_file: str) -> Tuple[bool, str]:
     """
     Garantiza que el Excel tenga columnas de fecha hasta N meses en el futuro
-    según la fecha actual del sistema.
+    segÃºn la fecha actual del sistema.
 
     Regla:
-      - Si hoy es día 1-7: Horizonte = Mes actual + 3 meses.
-      - Si hoy es día >7:  Horizonte = Mes actual + 2 meses.
-      - Extiende hasta el ÚLTIMO día de ese mes objetivo.
+      - Si hoy es dÃ­a 1-7: Horizonte = Mes actual + 3 meses.
+      - Si hoy es dÃ­a >7:  Horizonte = Mes actual + 2 meses.
+      - Extiende hasta el ÃšLTIMO dÃ­a de ese mes objetivo.
 
     Ejemplo:
       - Hoy 10-Ene-2026 -> Meta: 31-Mar-2026.
       - Hoy 05-Mar-2026 -> Meta: 30-Jun-2026.
 
-    No altera celdas existentes, solo agrega encabezados vacíos datetime al final.
+    No altera celdas existentes, solo agrega encabezados vacÃ­os datetime al final.
     """
     if not os.path.exists(plan_staff_file):
         return False, f"File not found: {plan_staff_file}"
@@ -2300,20 +2331,20 @@ def ensure_rolling_horizon_columns(plan_staff_file: str) -> Tuple[bool, str]:
         target_year = today.year
         target_month = today.month + months_ahead
 
-        # Ajuste de año (si nos pasamos de diciembre)
+        # Ajuste de aÃ±o (si nos pasamos de diciembre)
         while target_month > 12:
             target_month -= 12
             target_year += 1
 
-        # Obtener el último día del mes objetivo
+        # Obtener el Ãºltimo dÃ­a del mes objetivo
         _, last_day = calendar.monthrange(target_year, target_month)
         target_date = date(target_year, target_month, last_day)
 
-        # 2. Cargar Excel para inspección y edición
+        # 2. Cargar Excel para inspecciÃ³n y ediciÃ³n
         wb = openpyxl.load_workbook(plan_staff_file)
         ws = wb.active
 
-        # 3. Detectar última fecha existente
+        # 3. Detectar Ãºltima fecha existente
         max_existing_date = None
         existing_dates = set()
 
@@ -2324,7 +2355,7 @@ def ensure_rolling_horizon_columns(plan_staff_file: str) -> Tuple[bool, str]:
                 existing_dates.add(d)
                 if max_existing_date is None or d > max_existing_date:
                     max_existing_date = d
-            # Soporte por si openpyxl leyó como Timestamp de pandas (raro en header pero posible)
+            # Soporte por si openpyxl leyÃ³ como Timestamp de pandas (raro en header pero posible)
             elif hasattr(cell.value, "date"):
                 d = cell.value.date()
                 existing_dates.add(d)
@@ -2346,8 +2377,8 @@ def ensure_rolling_horizon_columns(plan_staff_file: str) -> Tuple[bool, str]:
         while current_date <= target_date:
             if current_date not in existing_dates:
                 new_col_idx = ws.max_column + 1
-                # Escribimos el objeto datetime. OpenPyXL aplicará formato fecha por defecto.
-                # Al agregar columna, las filas de abajo (usuarios) quedan vacías (None) automáticamente.
+                # Escribimos el objeto datetime. OpenPyXL aplicarÃ¡ formato fecha por defecto.
+                # Al agregar columna, las filas de abajo (usuarios) quedan vacÃ­as (None) automÃ¡ticamente.
                 ws.cell(
                     row=1,
                     column=new_col_idx,

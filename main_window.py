@@ -2165,7 +2165,17 @@ class PlanStaffWidget(QWidget):
                         self._cell_original_values[(r, c)] = new_status
 
                     # --- E. Persistencia ---
+                    # --- E. Persistencia ---
                     try:
+                        # [PATCH COLISIÓN] ----------------------------------------
+                        # Verificar si el inicio del relleno choca con el día anterior
+                        force_flag = self._resolve_force_new_entry_start(badge, start_fill_date, new_status)
+                        
+                        if force_flag is None:
+                            # Usuario canceló en el popup -> Abortar este empleado
+                            continue 
+                        # ---------------------------------------------------------
+
                         # 1. Guardar Schedule (SSoT) - Día a día
                         # Se guardan las celdas rellenadas (del 22 en adelante)
                         db.upsert_schedule_range(
@@ -2177,7 +2187,8 @@ class PlanStaffWidget(QWidget):
                             self.source, 
                             new_in_time_str, 
                             new_out_time_str, 
-                            new_remark
+                            new_remark,
+                            force_new_entry_start=force_flag  # <--- NUEVO ARGUMENTO
                         )
 
                         # 2. Guardar Excel - Fila Física
@@ -2462,6 +2473,17 @@ class PlanStaffWidget(QWidget):
 
             # Actualizar Base de Datos
             try:
+                # [PATCH COLISIÓN] ----------------------------------------
+                # start_date_block es la fecha donde inicia el cambio
+                force_flag = self._resolve_force_new_entry_start(badge, start_date_block, schedule_status)
+                
+                if force_flag is None:
+                    # Usuario canceló -> Revertir visualmente y salir
+                    with QSignalBlocker(self.schedule_table):
+                        item.setText(old_text)
+                    self._apply_base_background(item, old_text)
+                    return
+                # ---------------------------------------------------------
                 db.add_operation(
                     username=username,
                     role=role,
@@ -2483,6 +2505,7 @@ class PlanStaffWidget(QWidget):
                     in_time,
                     out_time,
                     remark,
+                    force_new_entry_start=force_flag
                 )
 
                 if pickup or dropoff:
@@ -2900,7 +2923,64 @@ class PlanStaffWidget(QWidget):
             # No muestro QMessageBox aquí para no interrumpir al usuario
             # pero podrías loguearlo si quieres.
             print("Excel update failed from cell edit:", message)
+    # --------------------------------------------------------------------------
+    # HELPER: Detección de Colisiones (Working -> Working)
+    # --------------------------------------------------------------------------
+    def _resolve_force_new_entry_start(self, badge, start_date, new_status):
+        """
+        Verifica si se está creando una continuidad Working->Working.
+        Retorna:
+          1 -> El usuario eligió SEPARAR (force_new_entry_start=1)
+          0 -> El usuario eligió CONTINUAR o no hubo colisión (force_new_entry_start=0)
+          None -> El usuario CANCELÓ la operación.
+        """
+        # 1. Si el nuevo estado es OFF o vacío, no hay colisión (no se parte viaje)
+        if not new_status or not db.is_working_status(new_status, self.source):
+            return 0 
 
+        # 2. Consultar el día anterior en la BD
+        prev_day = start_date - timedelta(days=1)
+        # Usamos get_schedule_map_for_range para obtener info precisa del día previo
+        prev_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source)
+        
+        # Extraer status del diccionario (key suele ser fecha string ISO)
+        prev_day_str = prev_day.strftime("%Y-%m-%d")
+        
+        # Defensive coding: prev_map puede venir vacío o con otra key
+        prev_info = prev_map.get(prev_day_str, {})
+        prev_status = prev_info.get("status")
+
+        # 3. Si el día anterior era OFF, no hay colisión (Off -> Working es normal)
+        if not prev_status or not db.is_working_status(prev_status, self.source):
+            return 0
+
+        # 4. COLISIÓN DETECTADA (Working -> Working) -> Preguntar al usuario
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("⚠️ Colisión de Turnos Detectada")
+        box.setText(
+            f"Se detectó continuidad de turnos para {badge}:\n\n"
+            f"Día Previo: {prev_day_str} ({prev_status})\n"
+            f"Nuevo Día : {start_date.strftime('%Y-%m-%d')} ({new_status})\n\n"
+            "El sistema uniría esto en un solo viaje. ¿Qué desea hacer?"
+        )
+
+        cont_btn = box.addButton("Mantener Unido (1 Viaje)", QMessageBox.ButtonRole.AcceptRole)
+        sep_btn  = box.addButton("Partir Turno (Nueva Salida)", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+
+        box.setDefaultButton(cont_btn)
+        box.exec()
+        
+        clicked = box.clickedButton()
+
+        if clicked == cancel_btn or clicked is None:
+            return None # Señal de abortar
+
+        if clicked == sep_btn:
+            return 1 # Force split
+            
+        return 0 # Default: unir
     # ---------- actions ----------
     def save_plan_changes(self):
         # 1. Limpiar estados de error visuales
@@ -2911,7 +2991,7 @@ class PlanStaffWidget(QWidget):
         mark_error(self.entry_date_edit, False)
         mark_error(self.exit_date_edit, False)
 
-        # 2. Leer datos básicos del formulario
+        # 2. Leer datos bÃ¡sicos del formulario
         username = self.user_selector_combo.currentText()
         badge = self.badge_display.text()
         role = self.role_display.text()
@@ -2922,7 +3002,7 @@ class PlanStaffWidget(QWidget):
         dropoff = self.dropoff_combo.currentData() or None
         remark = self.remarks_input.text().strip() or None
 
-        # 3. Validaciones básicas
+        # 3. Validaciones bÃ¡sicas
         if not username or username == "-- Select a user --":
             mark_error(self.user_selector_combo, True)
             QMessageBox.warning(self, "Incomplete Data", "Please select an employee.")
@@ -2943,7 +3023,7 @@ class PlanStaffWidget(QWidget):
             )
             return
 
-        # 4. Interpretar selección del turno (Status/Shift)
+        # 4. Interpretar selecciÃ³n del turno (Status/Shift)
         sel = self.status_selector.currentData()
         if not sel or sel.get("kind") in ("none", "separator"):
             schedule_status = None
@@ -2957,13 +3037,13 @@ class PlanStaffWidget(QWidget):
             in_time_raw, out_time_raw = sel.get("in_time"), sel.get("out_time")
 
         # ---------------------------------------------------------------------
-        # 5. CÁLCULO DE FECHAS Y HORAS DE VIAJE (CORRECCIÓN PUNTUAL)
+        # 5. CÃLCULO DE FECHAS Y HORAS DE VIAJE (CORRECCIÃ“N PUNTUAL)
         # ---------------------------------------------------------------------
         entry_datetime = None
         exit_datetime = None
 
         if self.travel_dates_check.isChecked():
-            # OPCIÓN A: El usuario define fechas específicas manualmente
+            # OPCIÃ“N A: El usuario define fechas especÃ­ficas manualmente
             entry_date = self.entry_date_edit.date().toPyDate()
             entry_time = self.entry_time_edit.time().toPyTime()
             entry_datetime = datetime.combine(entry_date, entry_time)
@@ -2972,7 +3052,7 @@ class PlanStaffWidget(QWidget):
             exit_time = self.exit_time_edit.time().toPyTime()
             exit_datetime = datetime.combine(exit_date, exit_time)
 
-            # Validación lógica de viaje
+            # ValidaciÃ³n lÃ³gica de viaje
             if entry_datetime > exit_datetime:
                 mark_error(self.entry_date_edit, True)
                 mark_error(self.exit_date_edit, True)
@@ -2995,15 +3075,15 @@ class PlanStaffWidget(QWidget):
                     return
 
         elif schedule_status is not None:
-            # OPCIÓN B: Automático (Check desmarcado) -> Calcular Defaults
+            # OPCIÃ“N B: AutomÃ¡tico (Check desmarcado) -> Calcular Defaults
             # Se usa la fecha de inicio del periodo para Entry y fin para Exit.
-            # Se inyectan las horas según el tipo de turno o reglas de negocio.
+            # Se inyectan las horas segÃºn el tipo de turno o reglas de negocio.
 
             # Hora por defecto base (07:00 / 07:00) Para RGM
             t_in = datetime.strptime("07:00", "%H:%M").time()
             t_out = datetime.strptime("07:00", "%H:%M").time()
 
-            # Lógica de Horas
+            # LÃ³gica de Horas
             if in_time_raw and out_time_raw:
                 # Si el turno (custom) ya trae horas definidas en DB
                 try: 
@@ -3015,7 +3095,7 @@ class PlanStaffWidget(QWidget):
                 is_newmont = (self.source == "Newmont")
                 
                 if is_newmont:
-                    if schedule_status == "ON": # Día Newmont
+                    if schedule_status == "ON": # DÃ­a Newmont
                         t_in = datetime.strptime("06:00", "%H:%M").time()
                         t_out = datetime.strptime("12:00", "%H:%M").time()
                     elif schedule_status == "ON NS": # Noche Newmont
@@ -3031,9 +3111,9 @@ class PlanStaffWidget(QWidget):
             # --- INICIO DEL CAMBIO 1+D ---
             
             # 1. Calculamos la fecha de salida real
-            # Si es RGM y es ON/ON NS -> Salida es Mañana (end_date + 1)
+            # Si es RGM y es ON/ON NS -> Salida es MaÃ±ana (end_date + 1)
             # Si es RGM y es Otro (Capacitacion) -> Salida es Hoy (end_date)
-            # El método _calculate_rgm_exit_date encapsula esta lógica para no repetir if/else aquí.
+            # El mÃ©todo _calculate_rgm_exit_date encapsula esta lÃ³gica para no repetir if/else aquÃ­.
             real_exit_date = self._calculate_rgm_exit_date(schedule_status, end_date)
 
             # 2. Combinamos con las horas (t_in / t_out) que ya calculaste arriba
@@ -3043,10 +3123,10 @@ class PlanStaffWidget(QWidget):
             # --- FIN DEL CAMBIO 1+D ---
 
         # ---------------------------------------------------------------------
-        # FIN DE LA CORRECCIÓN
+        # FIN DE LA CORRECCIÃ“N
         # ---------------------------------------------------------------------
 
-        # 6. Detección de Conflictos (Overwrite check)
+        # 6. DetecciÃ³n de Conflictos (Overwrite check)
         conflicts_excel = excel.find_conflicts(
             self.excel_file, username, badge, start_date, end_date
         )
@@ -3064,14 +3144,67 @@ class PlanStaffWidget(QWidget):
             if box.clickedButton() != accept_btn:
                 return
 
-        # Para auditoría
+        # Para auditorÃ­a
         prev_map = db.get_schedule_map_for_range(
             badge, start_date, end_date, self.source
         )
 
+        # ----------------------------------------------------------
+        # 6.5) Shift Collision Detector (Working-Working)
+        # ----------------------------------------------------------
+        # Regla:
+        #   - Si Ayer fue OFF (o Non-Working) y Hoy es Working: guardar silencioso (force_new_entry=0).
+        #   - Si Ayer fue Working y Hoy es Working: preguntar si se une al viaje actual o se separa.
+        force_new_entry_flag = 0
+
+        try:
+            print(f"[SCD] schedule_status={schedule_status!r}, source={self.source!r}, badge={badge!r}, start_date={start_date}")
+            if schedule_status and db.is_working_status(schedule_status, self.source):
+                prev_day = start_date - timedelta(days=1)
+                prev_day_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source)
+                prev_status = prev_day_map.get(prev_day.isoformat(), {}).get("status")
+                print(f"[SCD] prev_day={prev_day}, prev_day_map={prev_day_map}, prev_status={prev_status!r}")
+
+                if prev_status and db.is_working_status(prev_status, self.source):
+                    print("[SCD] >>> WORKING->WORKING detected! Showing popup...")
+                    box = QMessageBox(self)
+                    box.setIcon(QMessageBox.Icon.Question)
+                    box.setWindowTitle("Shift Collision Detector")
+                    box.setText(
+                        f"El día anterior ({prev_day.isoformat()}) tiene turno activo: {prev_status}.\n\n"
+                        "¿Desea UNIR esto al viaje actual o registrar una NUEVA entrada?"
+                    )
+
+                    join_btn = box.addButton("Unir (Continuar)", QMessageBox.ButtonRole.AcceptRole)
+                    sep_btn  = box.addButton("Separar (Nueva Entrada)", QMessageBox.ButtonRole.DestructiveRole)
+                    cancel_btn = box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+
+                    box.setDefaultButton(join_btn)
+                    box.exec()
+
+                    clicked = box.clickedButton()
+                    if clicked == sep_btn:
+                        force_new_entry_flag = 1
+                        print("[SCD] User chose: SEPARAR (force_new_entry=1)")
+                    elif clicked == join_btn:
+                        force_new_entry_flag = 0
+                        print("[SCD] User chose: UNIR (force_new_entry=0)")
+                    else:
+                        print("[SCD] User chose: CANCELAR — aborting save")
+                        return  # Cancelar — aborta el guardado
+                else:
+                    print(f"[SCD] No collision: prev_day was OFF/empty (force_new_entry=0)")
+            else:
+                print(f"[SCD] Skipped: schedule_status={schedule_status!r} is not working or is None")
+        except Exception as e:
+            import traceback as _tb
+            print(f"[SCD] *** EXCEPTION in Shift Collision Detector: {e}")
+            _tb.print_exc()
+            force_new_entry_flag = 0
+
         # 7. Guardar en BD (SSoT)
         if schedule_status is not None:
-            # Aquí es donde se guardan los datetimes calculados (entry_datetime/exit_datetime)
+            # AquÃ­ es donde se guardan los datetimes calculados (entry_datetime/exit_datetime)
             db.add_operation(
                 username=username,
                 role=role,
@@ -3079,8 +3212,8 @@ class PlanStaffWidget(QWidget):
                 start_date=start_date,
                 end_date=end_date,
                 created_by=self.logged_username,
-                entry_date=entry_datetime,  # Ahora siempre tendrá valor si hay turno
-                exit_date=exit_datetime,  # Ahora siempre tendrá valor si hay turno
+                entry_date=entry_datetime,  # Ahora siempre tendrÃ¡ valor si hay turno
+                exit_date=exit_datetime,  # Ahora siempre tendrÃ¡ valor si hay turno
             )
             db.upsert_schedule_range(
                 badge,
@@ -3092,6 +3225,7 @@ class PlanStaffWidget(QWidget):
                 in_time_raw,
                 out_time_raw,
                 remark,
+                force_new_entry_start=force_new_entry_flag,
             )
         else:  # Limpiar rango ("Do Not Mark Days")
             db.clear_schedule_range(badge, start_date, end_date, self.source)
@@ -3108,7 +3242,7 @@ class PlanStaffWidget(QWidget):
             elif sel.get("status") == "OFF":
                 is_off_day_guard = True
         else:
-            # Si no hay selección (sel is None), asumimos que no se marca (OFF-like)
+            # Si no hay selecciÃ³n (sel is None), asumimos que no se marca (OFF-like)
             is_off_day_guard = True
 
         if is_off_day_guard:
@@ -3116,7 +3250,7 @@ class PlanStaffWidget(QWidget):
             dropoff = None
 
 
-        # Guardar ubicación si aplica
+        # Guardar ubicaciÃ³n si aplica
         if pickup or dropoff:
             db.assign_user_location_range(badge, start_date, end_date, pickup, dropoff)
             db.log_event(
@@ -3143,7 +3277,7 @@ class PlanStaffWidget(QWidget):
         )
         QTimer.singleShot(2000, lambda: setattr(self, "_is_internal_update", False))
 
-        # 9. Auditoría y Finalización
+        # 9. AuditorÃ­a y FinalizaciÃ³n
         new_map = db.get_schedule_map_for_range(
             badge, start_date, end_date, self.source
         )
@@ -3610,12 +3744,21 @@ class PlanStaffWidget(QWidget):
                         
                         in_str = final_in.strftime("%H:%M") if final_in else None
                         out_str = final_out.strftime("%H:%M") if final_out else None
+                        # [PATCH COLISIÓN] --------------------------------
+                        # Validamos colisión celda por celda al pegar
+                        force_flag = self._resolve_force_new_entry_start(badge, target_date, raw_text)
+                        
+                        if force_flag is None:
+                            # Si cancela, saltamos esta celda (o podrías hacer 'break' para cancelar todo)
+                            continue
+                        # -------------------------------------------------
                         
                         # --- [LOGICA SMART DRAG] 2. DB Schedule Upsert ---
                         db.upsert_schedule_range(
                             badge, target_date, target_date, 
                             raw_text, None, self.source, 
                             in_str, out_str, "",
+                            force_new_entry_start=force_flag,
                             cursor=cursor
                         )
                         
@@ -3754,8 +3897,16 @@ class PlanStaffWidget(QWidget):
                              self._set_combo_text(self.pickup_combo, user.get('pickup_location'))
                          if self.dropoff_combo.currentIndex() <= 0:
                              self._set_combo_text(self.dropoff_combo, user.get('dropoff_location'))
-        
 
+    def _calculate_rgm_exit_date(self, shift_code, end_date):
+        """
+        Si es RGM y el turno es ON u ON NS, la salida es al día siguiente.
+        Para cualquier otro turno (manual), la salida es el mismo día.
+        """
+        if self.source == "RGM" and shift_code in ["ON", "ON NS"]:
+            from datetime import timedelta
+            return end_date + timedelta(days=1)
+        return end_date
 
 # -------------------------------------------------------------
 # Widget: Rotation History (own tab, without ID column)
@@ -5135,15 +5286,7 @@ class MainWindow(QMainWindow):
         
         
         
-    def _calculate_rgm_exit_date(self, shift_code, end_date):
-        """
-        Si es RGM y el turno es ON u ON NS, la salida es al día siguiente.
-        Para cualquier otro turno (manual), la salida es el mismo día.
-        """
-        if self.source == "RGM" and shift_code in ["ON", "ON NS"]:
-            from datetime import timedelta
-            return end_date + timedelta(days=1)
-        return end_date
+  
     
     def _on_excel_path_changed(self, source: str, new_path: str) -> None:
         """Actualiza la ruta del Excel en todos los widgets cuando cambia."""
