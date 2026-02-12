@@ -32,7 +32,7 @@ def limpiar_base_datos():
             "location",         # Maestro de puntos de recogida (solicitaste borrarlo)
             "roles",            # Maestro de roles (se regenerará solo después)
             "audit_log",        # Logs
-            # "shift_types"     # OPCIONAL: Descomenta si quieres borrar los tipos de turno también
+            "shift_types"     # OPCIONAL: Descomenta si quieres borrar los tipos de turno también
         ]
 
         print("\n🧹 Limpiando tablas transaccionales...")

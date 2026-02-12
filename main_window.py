@@ -1563,40 +1563,7 @@ class PlanStaffWidget(QWidget):
         self.status_selector.setCurrentIndex(0)
         self.status_selector.blockSignals(False)
 
-    def _status_options_for_dialog(self):
-        """Devuelve la lista de opciones (icono, texto, payload) para los diálogos/combos."""
-        options = []
-
-        # Opción neutra (no marcar)
-        options.append((QIcon(), "— Do Not Mark Days —", {"kind": "none"}))
-
-        # Base: OFF / ON / ON NS
-        options.append(
-            (QIcon(), "OFF", {"kind": "base", "status": "OFF", "shift_type": None})
-        )
-        options.append(
-            (QIcon(), "ON (Day)", {"kind": "base", "status": "ON", "shift_type": None})
-        )
-        options.append(
-            (
-                QIcon(),
-                "ON NS (Night)",
-                {"kind": "base", "status": "ON NS", "shift_type": None},
-            )
-        )
-
-        # Tipos de turno personalizados (self._custom_shift_map ya existe)
-        for code, info in (self._custom_shift_map or {}).items():
-            display_name = info.get("name") or code
-            options.append(
-                (
-                    QIcon(),
-                    display_name,
-                    {"kind": "custom", "status": "ON", "shift_type": code},
-                )
-            )
-
-        return options
+  
 
     def _status_options_for_dialog(self):
         """
@@ -1811,16 +1778,14 @@ class PlanStaffWidget(QWidget):
                         val_str = text.upper().strip()
                         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
-                        # Coloreado
-                        if "ON NS" in val_str or "NIGHT" in val_str:
-                            item.setBackground(QColor("#FFFF99"))
-                        elif val_str == "ON" or "DAY" in val_str or val_str.isdigit():
-                            item.setBackground(QColor("#C6EFCE"))
-                        elif val_str in ("OFF", "BREAK", "KO", "LEAVE"):
-                            item.setBackground(QColor("#FFC7CE"))
-                        else:
-                            if val_str in custom_map and custom_map[val_str].get("color_hex"):
-                                item.setBackground(QColor(custom_map[val_str]["color_hex"]))
+                        self._apply_status_background(item, val_str)
+
+                        # Protección Legacy: Si el Excel tiene "DAY" o números (1,2,3) y no es un turno custom
+                        # forzamos el verde (ON) para que no se vea blanco.
+                        if val_str and val_str not in ("ON", "ON NS", "NIGHT", "OFF", "BREAK", "KO", "LEAVE"):
+                            if not (self._custom_shift_map or {}).get(val_str):
+                                if "DAY" in val_str or val_str.isdigit():
+                                    item.setBackground(QColor("#C6EFCE"))
 
                         self.schedule_table.setItem(i, col_index, item)
                         self._cell_original_values[(i, col_index)] = val_str
@@ -1939,19 +1904,36 @@ class PlanStaffWidget(QWidget):
             d = self._date_col_dates[col].isoformat()
         return f"{badge}|{d}"
 
-    def _apply_base_background(self, item: QTableWidgetItem, value_upper: str):
-        """Apply default background based on the cell value."""
-        if value_upper == "ON":
+    def _apply_status_background(self, item: QTableWidgetItem, value: str | None) -> None:
+        """
+        UNIFIED background renderer — handles base codes AND custom shift types.
+        Must be the ONLY place where cell background color is decided.
+        Replaces the old duplicated _apply_base_background().
+        """
+        from PyQt6.QtGui import QBrush
+        s = (value or "").strip().upper()
+
+        # 1) Empty → clear background
+        if not s:
+            item.setBackground(QBrush())  # NoBrush / transparent
+            return
+
+        # 2) Custom shift types first (code → color_hex from DB)
+        info = (self._custom_shift_map or {}).get(s)
+        if info and info.get("color_hex"):
+            item.setBackground(QColor(info["color_hex"]))
+            return
+
+        # 3) Base status codes
+        if s == "ON":
             item.setBackground(QColor("#C6EFCE"))
-        elif value_upper in ("ON NS", "NIGHT"):
+        elif s in ("ON NS", "NIGHT"):
             item.setBackground(QColor("#FFFF99"))
-        elif value_upper in ("OFF", "BREAK", "KO", "LEAVE"):
+        elif s in ("OFF", "BREAK", "KO", "LEAVE"):
             item.setBackground(QColor("#FFC7CE"))
-        elif value_upper == "":
-            item.setBackground(QColor(255, 255, 255, 0))  # transparent/no fill
         else:
-            # leave as-is (could be a custom code already colored on load)
-            pass
+            # 4) Unknown code → clear (avoid residual colors from previous value)
+            item.setBackground(QBrush())
 
     def _apply_base_background(self, item: QTableWidgetItem, value_upper: str):
         """Apply default background based on the cell value."""
@@ -2188,7 +2170,8 @@ class PlanStaffWidget(QWidget):
                             self.schedule_table.setItem(r, c, item)
                         
                         item.setText(new_status)
-                        self._apply_base_background(item, new_status)
+                        #self._apply_base_background(item, new_status)
+                        self._apply_status_background(item, new_status)
                         self._cell_original_values[(r, c)] = new_status
 
                     # --- E. Persistencia ---
@@ -3822,7 +3805,8 @@ class PlanStaffWidget(QWidget):
                             item = QTableWidgetItem()
                             self.schedule_table.setItem(abs_row, abs_col, item)
                         item.setText(raw_text)
-                        self._apply_base_background(item, raw_text)
+                        #self._apply_base_background(item, raw_text)
+                        self._apply_status_background(item, raw_text)
                         self._cell_original_values[(abs_row, abs_col)] = raw_text
 
                         # --- Cola para Excel ---
