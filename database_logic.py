@@ -20,6 +20,7 @@ DB_FILE = str(_app_dir() / "transporte_operaciones.db")
 
 def setup_database():
     """Crea todas las tablas necesarias si no existen."""
+    # Conectamos a la base de datos
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
@@ -42,7 +43,8 @@ def setup_database():
             name TEXT NOT NULL,
             UNIQUE (source, name)
         )""")
-    # MigraciÃ³n de roles
+    
+    # Migración automática de roles existentes en usuarios
     try:
         cursor.execute(
             "INSERT OR IGNORE INTO roles (source, name) "
@@ -51,7 +53,7 @@ def setup_database():
     except Exception:
         pass
 
-    # 3. NUEVA TABLA: File Registry (Para guardar rutas de Excel)
+    # 3. File Registry
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS file_registry (
             source TEXT NOT NULL,
@@ -63,7 +65,7 @@ def setup_database():
         )""")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_registry_source ON file_registry(source)")
 
-    # 4. Tabla Locations
+    # 4. Tabla Locations (Corregida y consolidada aquí)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS location (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +74,27 @@ def setup_database():
             UNIQUE (source, pickup_location)
         )""")
     
+    # Migración de esquema antiguo de location
+    try:
+        cols = [r[1] for r in cursor.execute("PRAGMA table_info(location)").fetchall()]
+        if "source" not in cols:
+            cursor.execute("ALTER TABLE location RENAME TO location_old")
+            cursor.execute("""
+                CREATE TABLE location (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    pickup_location TEXT NOT NULL,
+                    UNIQUE (source, pickup_location)
+                )
+            """)
+            cursor.execute("INSERT INTO location (source, pickup_location) SELECT 'RGM', pickup_location FROM location_old")
+            cursor.execute("INSERT OR IGNORE INTO location (source, pickup_location) SELECT 'Newmont', pickup_location FROM location_old")
+            cursor.execute("DROP TABLE location_old")
+    except sqlite3.OperationalError:
+        pass
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_location_source ON location(source)")
+
     # 5. Tabla User Locations
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_locations (
@@ -83,6 +106,14 @@ def setup_database():
             dropoff_location TEXT,
             is_default INTEGER NOT NULL DEFAULT 0
         )""")
+    
+    # Migraciones suaves para user_locations
+    try: cursor.execute("ALTER TABLE user_locations ADD COLUMN dropoff_location TEXT")
+    except sqlite3.OperationalError: pass
+    try: cursor.execute("ALTER TABLE user_locations ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError: pass
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ul_badge ON user_locations(badge)")
 
     # 6. Tabla Operations
     cursor.execute("""
@@ -97,6 +128,14 @@ def setup_database():
             entry_date TEXT,
             exit_date TEXT
         )""")
+    
+    # Migraciones suaves para operations
+    try: cursor.execute("ALTER TABLE operations ADD COLUMN created_by TEXT")
+    except sqlite3.OperationalError: pass
+    try: cursor.execute("ALTER TABLE operations ADD COLUMN entry_date TEXT")
+    except sqlite3.OperationalError: pass
+    try: cursor.execute("ALTER TABLE operations ADD COLUMN exit_date TEXT")
+    except sqlite3.OperationalError: pass
 
     # 7. Tabla Schedules
     cursor.execute("""
@@ -113,14 +152,16 @@ def setup_database():
             force_new_entry INTEGER NOT NULL DEFAULT 0,
             UNIQUE (badge, date, source)
         )""")
-
-    # --- Migración blanda: agregar columna force_new_entry si falta (DBs existentes) ---
-    try:
-        cursor.execute(
-            "ALTER TABLE schedules ADD COLUMN force_new_entry INTEGER NOT NULL DEFAULT 0"
-        )
-    except sqlite3.OperationalError:
-        pass
+    
+    # Migraciones suaves para schedules
+    try: cursor.execute("ALTER TABLE schedules ADD COLUMN force_new_entry INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError: pass
+    try: cursor.execute("ALTER TABLE schedules ADD COLUMN in_time TEXT")
+    except sqlite3.OperationalError: pass
+    try: cursor.execute("ALTER TABLE schedules ADD COLUMN out_time TEXT")
+    except sqlite3.OperationalError: pass
+    try: cursor.execute("ALTER TABLE schedules ADD COLUMN remark TEXT")
+    except sqlite3.OperationalError: pass
 
     # 8. Tabla Audit Log
     cursor.execute("""
@@ -132,6 +173,7 @@ def setup_database():
             detail TEXT,
             ts TEXT NOT NULL DEFAULT (datetime('now'))
         )""")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)")
 
     # 9. Tabla Shift Types
     cursor.execute("""
@@ -147,6 +189,8 @@ def setup_database():
             UNIQUE (source, name),
             UNIQUE (source, code)
         )""")
+    try: cursor.execute("ALTER TABLE shift_types ADD COLUMN is_off INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
 
     # 10. Report Settings
     cursor.execute("""
@@ -158,10 +202,11 @@ def setup_database():
             UNIQUE(username, source)
         )
     """)
+    try: cursor.execute("ALTER TABLE report_settings ADD COLUMN settings_json TEXT")
+    except sqlite3.OperationalError: pass
 
     conn.commit()
     conn.close()
-
 # --- Add these new CRUD functions at the end of database_logic.py ---
 
 def get_roles(source: Optional[str] = None) -> List[Dict]:
@@ -236,6 +281,21 @@ def delete_role(role_id: int, source: str) -> Tuple[bool, str]:
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     try:
+        # 1. Obtener el nombre del rol antes de borrar
+        cur.execute("SELECT name FROM roles WHERE id=? AND source=?", (role_id, source))
+        row = cur.fetchone()
+        if not row:
+            return False, "Role not found."
+        role_name = row[0]
+
+        # 2. Verificar si hay usuarios usando este rol
+        cur.execute("SELECT COUNT(*) FROM users WHERE source=? AND role=?", (source, role_name))
+        count = cur.fetchone()[0]
+        
+        if count > 0:
+            return False, f"Cannot delete '{role_name}': It is assigned to {count} user(s)."
+
+        # 3. Si no hay usuarios, proceder con el borrado
         cur.execute("DELETE FROM roles WHERE id=? AND source=?", (role_id, source))
         conn.commit()
         if cur.rowcount:
@@ -244,18 +304,14 @@ def delete_role(role_id: int, source: str) -> Tuple[bool, str]:
     finally:
         conn.close()
 
-    # -------------------------
-    # Locations (maestro de puntos) â€” ahora multi-tenant por 'source'
-    # -------------------------
-    cursor.execute(
-        """
+  
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS location (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source TEXT NOT NULL,                -- RGM | Newmont
             pickup_location TEXT NOT NULL,
             UNIQUE (source, pickup_location)
-        )"""
-    )
+        )""")
     
     
 
@@ -809,6 +865,27 @@ def delete_location(loc_id: int, source: str) -> Tuple[bool, str]:
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     try:
+        # 1. Verificar nombre
+        cur.execute("SELECT pickup_location FROM location WHERE id=? AND source=?", (loc_id, source))
+        row = cur.fetchone()
+        if not row:
+            return False, "Location not found for this company."
+        loc_name = row[0]
+
+        # 2. Verificar uso en user_locations (pickup o dropoff)
+        # Hacemos JOIN con users para asegurar que filtramos por el source correcto
+        query = """
+            SELECT COUNT(*) FROM user_locations ul
+            JOIN users u ON u.badge = ul.badge
+            WHERE u.source = ? AND (ul.pickup_location = ? OR ul.dropoff_location = ?)
+        """
+        cur.execute(query, (source, loc_name, loc_name))
+        count = cur.fetchone()[0]
+
+        if count > 0:
+            return False, f"Cannot delete '{loc_name}': It is assigned to {count} user(s)."
+
+        # 3. Borrar
         cur.execute("DELETE FROM location WHERE id=? AND source=?", (loc_id, source))
         conn.commit()
         if cur.rowcount:
@@ -839,6 +916,26 @@ def delete_location_admin(loc_id: int) -> Tuple[bool, str]:
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     try:
+        # 1. Verificar nombre y source
+        cur.execute("SELECT source, pickup_location FROM location WHERE id=?", (loc_id,))
+        row = cur.fetchone()
+        if not row:
+            return False, "Location not found."
+        source, loc_name = row[0], row[1]
+
+        # 2. Verificar uso
+        query = """
+            SELECT COUNT(*) FROM user_locations ul
+            JOIN users u ON u.badge = ul.badge
+            WHERE u.source = ? AND (ul.pickup_location = ? OR ul.dropoff_location = ?)
+        """
+        cur.execute(query, (source, loc_name, loc_name))
+        count = cur.fetchone()[0]
+
+        if count > 0:
+            return False, f"Cannot delete '{loc_name}' ({source}): It is assigned to {count} user(s)."
+
+        # 3. Borrar
         cur.execute("DELETE FROM location WHERE id=?", (loc_id,))
         conn.commit()
         if cur.rowcount:

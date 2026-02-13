@@ -288,18 +288,38 @@ class RoleAdminWidget(QWidget):
         self._new_role()
 
     def _delete_role(self):
-        if not self.role_id: return
+        if not self.role_id: 
+            return
+            
+        # Determinar el 'source' (RGM o Newmont)
         src = self.scope_source
-        if src is None and self.owner_combo: # Admin case fallback
-             src = self.role_table.item(self.role_table.currentRow(), 1).text()
+        if src is None and self.owner_combo: # Caso especial para Admin
+             # Intenta leer la columna oculta o el texto de la tabla
+             current_row = self.role_table.currentRow()
+             if current_row >= 0:
+                 src = self.role_table.item(current_row, 1).text()
 
-        confirm = QMessageBox.question(self, "Confirm", "Delete this role?")
+        # 1. Confirmación de seguridad (UI)
+        confirm = QMessageBox.question(
+            self, 
+            "Confirm", 
+            "Delete this role?\n\nThis will fail if currently assigned to users."
+        )
+        
         if confirm == QMessageBox.StandardButton.Yes:
+            # 2. Lógica de Base de Datos
+            # Llamamos a la nueva función protegida en db
             ok, msg = db.delete_role(self.role_id, src)
-            QMessageBox.information(self, "Role", msg)
-            self._reload_table()
-            self.roles_changed.emit()
-            self._new_role()
+            
+            # 3. Feedback
+            if ok:
+                QMessageBox.information(self, "Role", msg)
+                self._reload_table()
+                self.roles_changed.emit()
+                self._new_role()
+            else:
+                # Aquí mostramos el aviso si hay usuarios con este rol
+                QMessageBox.warning(self, "Cannot Delete", msg)
 
     def _load_to_form(self, item):
         row = item.row()
@@ -5089,17 +5109,41 @@ class LocationAdminWidget(QWidget):
         self._new_loc()
 
     def _delete_loc(self):
+        # 1. Validación básica: ¿Hay algo seleccionado?
         if not self.loc_id:
             QMessageBox.warning(self, "Location", "Please select a row.")
             return
+            
+        # 2. Confirmación de seguridad (UI)
+        # Esto evita clics accidentales
+        reply = QMessageBox.question(
+            self,
+            "Confirm Deletion",
+            f"Are you sure you want to delete this Location?\n\nThis will fail if users are currently assigned to it.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # 3. Ejecución en Base de Datos
+        # Ahora esperamos recibir DOS valores: ok (True/False) y msg (el mensaje)
         if self.scope_source is None:
+            # Modo Admin Global
             ok, msg = db.delete_location_admin(self.loc_id)
         else:
+            # Modo Site Manager (RGM/Newmont)
             ok, msg = db.delete_location(self.loc_id, self.scope_source)
-        QMessageBox.information(self, "Location", msg)
-        self._reload_table()
-        self.locations_changed.emit()
-        self._new_loc()
+        
+        # 4. Feedback al usuario
+        if ok:
+            # Si se borró bien, mostramos éxito y recargamos la tabla
+            QMessageBox.information(self, "Success", msg)
+            self._reload_table()
+            self.locations_changed.emit()
+            self._new_loc()
+        else:
+            # Si la BD dijo que NO (porque hay usuarios usándola), mostramos el error
+            QMessageBox.warning(self, "Cannot Delete", msg)
 
     def _load_to_form(self, item):
         row = item.row()
