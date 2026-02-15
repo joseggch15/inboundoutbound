@@ -1722,14 +1722,17 @@ def get_force_new_entry_map(source: str, start_d: date, end_d: date) -> Dict[str
 
 
 def is_working_status(status: str, source: str) -> bool:
-    """Helper rÃ¡pido para saber si un status cuenta como dÃ­a de trabajo (para fusionar)."""
-    if not status or status.upper() in ("OFF", "BREAK", "KO", "LEAVE", ""):
+    """Helper rápido para saber si un status cuenta como día de trabajo (para fusionar)."""
+    if not status:
+        return False
+    su = status.strip().upper()
+    if su in ("OFF", "BREAK", "KO", "LEAVE", ""):
         return False
     
     # Chequear si es un custom type marcado como 'is_off'
     types = get_shift_types(source)
     for t in types:
-        if t["code"] == status and t.get("is_off"):
+        if str(t.get("code", "")).strip().upper() == su and t.get("is_off"):
             return False
             
     return True

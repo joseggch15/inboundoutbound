@@ -2997,7 +2997,17 @@ class PlanStaffWidget(QWidget):
             return 0 
 
         # ---------------------------------------------------------
-        # 2. CONSTRUCCIÓN DEL DIÁLOGO PERSONALIZADO
+        # 2. REGLA DE NEGOCIO: ¿Mostrar editor de hora de salida?
+        #    SOLO para RGM + turno anterior es ON o ON NS puro.
+        #    Nunca para Newmont. Nunca para Shift Types custom.
+        # ---------------------------------------------------------
+        ask_prev_exit_time = (
+            self.source == "RGM"
+            and p_code in ("ON", "ON NS")
+        )
+
+        # ---------------------------------------------------------
+        # 3. CONSTRUCCIÓN DEL DIÁLOGO PERSONALIZADO
         # ---------------------------------------------------------
         dialog = QDialog(self)
         dialog.setWindowTitle("Gestión de Turnos Consecutivos")
@@ -3025,23 +3035,24 @@ class PlanStaffWidget(QWidget):
         
         layout.addSpacing(10)
 
-        # B) Grupo de Configuración para "Separar"
-        grp_split = QGroupBox("Si elige 'Separar (Nuevo Viaje)':")
-        grp_split.setStyleSheet("QGroupBox { font-weight: bold; color: #374151; }")
-        grp_layout = QVBoxLayout(grp_split)
-        
-        grp_layout.addWidget(QLabel(f"Defina la hora real de SALIDA del viaje de ayer ({prev_day.strftime('%d/%m')}):"))
-        
-        # Heurística: Si ayer fue turno de noche (NS), sugerir 06:00, sino 18:00
-        default_hour = 6 if ("NS" in p_code or "NIGHT" in p_code) else 18
-        time_edit = QTimeEdit(QTime(default_hour, 0))
-        time_edit.setDisplayFormat("HH:mm")
-        time_edit.setStyleSheet("font-size: 13px; padding: 4px;")
-        grp_layout.addWidget(time_edit)
-        
-        layout.addWidget(grp_split)
-        
-        layout.addSpacing(10)
+        # B) Grupo de hora de salida — SOLO si aplica (RGM + ON/ON NS)
+        time_edit = None
+        if ask_prev_exit_time:
+            grp_split = QGroupBox("Si elige 'Separar (Nuevo Viaje)':")
+            grp_split.setStyleSheet("QGroupBox { font-weight: bold; color: #374151; }")
+            grp_layout = QVBoxLayout(grp_split)
+            
+            grp_layout.addWidget(QLabel(f"Defina la hora real de SALIDA del viaje de ayer ({prev_day.strftime('%d/%m')}):"))
+            
+            # Heurística: Si ayer fue turno de noche (NS), sugerir 06:00, sino 18:00
+            default_hour = 6 if ("NS" in p_code or "NIGHT" in p_code) else 18
+            time_edit = QTimeEdit(QTime(default_hour, 0))
+            time_edit.setDisplayFormat("HH:mm")
+            time_edit.setStyleSheet("font-size: 13px; padding: 4px;")
+            grp_layout.addWidget(time_edit)
+            
+            layout.addWidget(grp_split)
+            layout.addSpacing(10)
 
         # C) Botonera
         btn_box = QDialogButtonBox()
@@ -3075,22 +3086,22 @@ class PlanStaffWidget(QWidget):
             
         elif result == 20: # SEPARAR
             print("[SCD] User chose: SEPARATE (1)")
-            try:
-                # 1. Capturar hora
-                custom_exit_time = time_edit.time().toPyTime()
-                
-                # 2. Actualizar BD (Viaje anterior)
-                # Esta función debe existir en database_logic.py (ver Paso 2 del prompt anterior)
-                success, msg = db.update_operation_exit_time_by_date(badge, prev_day, custom_exit_time)
-                
-                if success:
-                    print(f"[SCD] ✅ Previous exit time updated: {msg}")
-                else:
-                    print(f"[SCD] ❌ Failed to update previous exit time: {msg}")
-                    QMessageBox.warning(self, "Database Warning", f"Could not update previous trip exit time:\n{msg}")
-
-            except Exception as e:
-                print(f"[SCD] Error processing split: {e}")
+            
+            # Actualizar hora de salida del viaje anterior SOLO si se mostró el editor
+            if ask_prev_exit_time and time_edit is not None:
+                try:
+                    custom_exit_time = time_edit.time().toPyTime()
+                    success, msg = db.update_operation_exit_time_by_date(badge, prev_day, custom_exit_time)
+                    
+                    if success:
+                        print(f"[SCD] ✅ Previous exit time updated: {msg}")
+                    else:
+                        print(f"[SCD] ❌ Failed to update previous exit time: {msg}")
+                        QMessageBox.warning(self, "Database Warning", f"Could not update previous trip exit time:\n{msg}")
+                except Exception as e:
+                    print(f"[SCD] Error processing split: {e}")
+            else:
+                print(f"[SCD] Skip exit time update (source={self.source}, prev={p_code})")
             
             return 1 # Force split flag
             
