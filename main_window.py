@@ -2086,7 +2086,14 @@ class PlanStaffWidget(QWidget):
         map_end = db.get_schedule_map_for_range(badge, final_end, final_end, self.source, cursor=cursor)
         st_end = map_end.get(final_end.isoformat(), {}).get("status") or status
         t_out = self._calculate_time_logic(st_end, "OUT")
-
+        
+        # E.2  Calcular fecha real de salida (regla 1+D para RGM)
+        real_exit_date = self._calculate_rgm_exit_date(st_end, final_end)
+        if is_force_start_tomorrow:
+            # "Separar" → la salida es el mismo día final, sin +1
+            real_exit_date = final_end
+        
+        
         # F. Inserción (Igual que antes)
         db.add_operation(
             username=username, 
@@ -2096,7 +2103,7 @@ class PlanStaffWidget(QWidget):
             end_date=final_end,
             created_by=self.logged_username,
             entry_date=datetime.combine(final_start, t_in),
-            exit_date=datetime.combine(final_end, t_out),
+            exit_date=datetime.combine(real_exit_date, t_out), # Usar fecha calculada
             cursor=cursor 
         )
 
@@ -2514,6 +2521,7 @@ class PlanStaffWidget(QWidget):
                     self._apply_base_background(item, old_text)
                     return
                 # ---------------------------------------------------------
+                db.delete_operations_in_range(badge, start_date_block, end_date_block)
                 db.add_operation(
                     username=username,
                     role=role,
@@ -2896,7 +2904,8 @@ class PlanStaffWidget(QWidget):
             # 2. Usamos real_exit_date en lugar de end_date
             entry_datetime = datetime.combine(start_date, in_time_obj)
             exit_datetime = datetime.combine(real_exit_date, out_time_obj)
-
+        
+        db.delete_operations_in_range(badge, start_date, end_date)
         # DB: operación
         db.add_operation(
             username=username,
@@ -2957,74 +2966,136 @@ class PlanStaffWidget(QWidget):
    # --------------------------------------------------------------------------
     # HELPER: Detección de Colisiones (Working -> Working con CAMBIO DE TURNO)
     # --------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
+    # HELPER: Detección de Colisiones con UI Avanzada
+    # --------------------------------------------------------------------------
     def _resolve_force_new_entry_start(self, badge, start_date, new_status):
         """
-        Detecta colisiones logísticas.
-        Regla: Solo dispara alerta si:
-          1. Ayer fue Working
-          2. Hoy es Working
-          3. El código de turno CAMBIÓ (ej: ON -> ON NS)
+        Detecta colisiones (Working -> Working) y gestiona la ruptura de viajes.
+        Si el usuario elige SEPARAR, actualiza inmediatamente la hora de salida del viaje ANTERIOR.
         
         Retorna:
-          1 -> Separar (force_new_entry_start=1)
-          0 -> Unir (force_new_entry_start=0)
+          1 -> Separar (force_new_entry_start=1 para hoy)
+          0 -> Unir (force_new_entry_start=0 para hoy)
           None -> Cancelar operación
         """
-        # 0. Normalización segura
+        # 1. Validaciones básicas (sin cambios)
         n_code = str(new_status or "").strip().upper()
-        
-        # 1. Si el nuevo estado es OFF o vacío, no hay colisión
         if not n_code or not db.is_working_status(n_code, self.source):
             return 0 
 
-        # 2. Consultar el día anterior
         prev_day = start_date - timedelta(days=1)
         prev_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source)
-        
-        prev_day_str = prev_day.strftime("%Y-%m-%d")
-        prev_info = prev_map.get(prev_day_str, {})
-        raw_prev_status = prev_info.get("status")
-        p_code = str(raw_prev_status or "").strip().upper()
+        prev_info = prev_map.get(prev_day.isoformat(), {})
+        p_code = str(prev_info.get("status") or "").strip().upper()
 
-        # 3. Si el día anterior era OFF (o vacío), es un inicio de ciclo normal
         if not p_code or not db.is_working_status(p_code, self.source):
             return 0
 
-        # --- FIX CRÍTICO: VALIDACIÓN DE IDENTIDAD ---
-        # Si ambos son Working, pero son EL MISMO TURNO (ej: ON -> ON), 
-        # es continuidad natural, no colisión.
+        # Si son el mismo código (ej: ON -> ON), asumimos continuidad automática
         if p_code == n_code:
             return 0 
-        # --------------------------------------------
 
-        # 4. COLISIÓN REAL DETECTADA (Working A -> Working B)
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle("Cambio de Turno Detectado")
-        box.setText(
-            f"Se detectó un cambio de turno activo para {badge}:\n\n"
-            f"Ayer: {prev_day_str} ({p_code})\n"
-            f"Hoy : {start_date.strftime('%Y-%m-%d')} ({n_code})\n\n"
-            "¿Desea UNIR esto al viaje actual o crear una NUEVA SALIDA?"
-        )
-
-        # Botones re-fraseados para claridad mental del usuario
-        cont_btn = box.addButton("Unir (Continuidad)", QMessageBox.ButtonRole.AcceptRole)
-        sep_btn  = box.addButton("Separar (Nuevo Viaje)", QMessageBox.ButtonRole.DestructiveRole)
-        cancel_btn = box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
-
-        box.setDefaultButton(cont_btn)
-        box.exec()
+        # ---------------------------------------------------------
+        # 2. CONSTRUCCIÓN DEL DIÁLOGO PERSONALIZADO
+        # ---------------------------------------------------------
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Gestión de Turnos Consecutivos")
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+        dialog.setFixedWidth(420)
         
-        clicked = box.clickedButton()
+        layout = QVBoxLayout(dialog)
 
-        if clicked == cancel_btn or clicked is None:
-            return None # Señal de abortar
+        # A) Panel de Información (Alerta Visual)
+        info_frame = QFrame()
+        info_frame.setStyleSheet("background-color: #FFF3E0; border: 1px solid #FFE0B2; border-radius: 4px; padding: 6px;")
+        info_layout = QVBoxLayout(info_frame)
+        
+        lbl_info = QLabel(
+            f"<h3 style='color:#E65100; margin:0;'>⚠️ Cambio de Turno Detectado</h3>"
+            f"<div style='margin-top:5px;'>"
+            f"El usuario <b>{badge}</b> tiene turnos consecutivos diferentes:<br>"
+            f"• Ayer ({prev_day.strftime('%d/%m')}): <b>{p_code}</b><br>"
+            f"• Hoy ({start_date.strftime('%d/%m')}): <b>{n_code}</b>"
+            f"</div>"
+        )
+        lbl_info.setTextFormat(Qt.TextFormat.RichText)
+        info_layout.addWidget(lbl_info)
+        layout.addWidget(info_frame)
+        
+        layout.addSpacing(10)
 
-        if clicked == sep_btn:
-            return 1 # Force split (User requested separation)
+        # B) Grupo de Configuración para "Separar"
+        grp_split = QGroupBox("Si elige 'Separar (Nuevo Viaje)':")
+        grp_split.setStyleSheet("QGroupBox { font-weight: bold; color: #374151; }")
+        grp_layout = QVBoxLayout(grp_split)
+        
+        grp_layout.addWidget(QLabel(f"Defina la hora real de SALIDA del viaje de ayer ({prev_day.strftime('%d/%m')}):"))
+        
+        # Heurística: Si ayer fue turno de noche (NS), sugerir 06:00, sino 18:00
+        default_hour = 6 if ("NS" in p_code or "NIGHT" in p_code) else 18
+        time_edit = QTimeEdit(QTime(default_hour, 0))
+        time_edit.setDisplayFormat("HH:mm")
+        time_edit.setStyleSheet("font-size: 13px; padding: 4px;")
+        grp_layout.addWidget(time_edit)
+        
+        layout.addWidget(grp_split)
+        
+        layout.addSpacing(10)
+
+        # C) Botonera
+        btn_box = QDialogButtonBox()
+        
+        # Botón UNIR (Primary)
+        btn_join = btn_box.addButton("Unir (Mismo Viaje)", QDialogButtonBox.ButtonRole.AcceptRole)
+        btn_join.setStyleSheet("padding: 6px 15px;")
+        
+        # Botón SEPARAR (Action/Destructive) - Color Rojo para resaltar ruptura
+        btn_split = btn_box.addButton("Separar (Nuevo Viaje)", QDialogButtonBox.ButtonRole.ActionRole)
+        btn_split.setStyleSheet("background-color: #D32F2F; color: white; padding: 6px 15px; font-weight: bold;")
+        
+        # Botón CANCELAR
+        btn_cancel = btn_box.addButton("Cancelar", QDialogButtonBox.ButtonRole.RejectRole)
+        
+        layout.addWidget(btn_box)
+
+        # Conectar señales (Usamos códigos de salida: 10=Join, 20=Split)
+        btn_join.clicked.connect(lambda: dialog.done(10))
+        btn_split.clicked.connect(lambda: dialog.done(20))
+        btn_cancel.clicked.connect(dialog.reject)
+
+        # ---------------------------------------------------------
+        # 3. EJECUCIÓN Y PROCESAMIENTO
+        # ---------------------------------------------------------
+        result = dialog.exec()
+
+        if result == 10: # UNIR
+            print("[SCD] User chose: JOIN (0)")
+            return 0
             
-        return 0 # Default: unir
+        elif result == 20: # SEPARAR
+            print("[SCD] User chose: SEPARATE (1)")
+            try:
+                # 1. Capturar hora
+                custom_exit_time = time_edit.time().toPyTime()
+                
+                # 2. Actualizar BD (Viaje anterior)
+                # Esta función debe existir en database_logic.py (ver Paso 2 del prompt anterior)
+                success, msg = db.update_operation_exit_time_by_date(badge, prev_day, custom_exit_time)
+                
+                if success:
+                    print(f"[SCD] ✅ Previous exit time updated: {msg}")
+                else:
+                    print(f"[SCD] ❌ Failed to update previous exit time: {msg}")
+                    QMessageBox.warning(self, "Database Warning", f"Could not update previous trip exit time:\n{msg}")
+
+            except Exception as e:
+                print(f"[SCD] Error processing split: {e}")
+            
+            return 1 # Force split flag
+            
+        else: # Cancelar o cerrar ventana
+            return None
    
    
     # ---------- actions ----------
@@ -3198,59 +3269,62 @@ class PlanStaffWidget(QWidget):
         # ----------------------------------------------------------
         # 6.5) Shift Collision Detector (Working-Working)
         # ----------------------------------------------------------
-        # Regla:
-        #   - Si Ayer fue OFF (o Non-Working) y Hoy es Working: guardar silencioso (force_new_entry=0).
-        #   - Si Ayer fue Working y Hoy es Working: preguntar si se une al viaje actual o se separa.
         force_new_entry_flag = 0
-
+        
         try:
-            print(f"[SCD] schedule_status={schedule_status!r}, source={self.source!r}, badge={badge!r}, start_date={start_date}")
+            # Debug log to trace the collision check
+            print(f"[SCD] Checking collision: schedule_status={schedule_status!r}, badge={badge!r}, start_date={start_date}")
+
+            # Only check for collision if the NEW status is a working status.
+            # (Non-working statuses like 'OFF' usually imply a simple overwrite or update, handled elsewhere)
             if schedule_status and db.is_working_status(schedule_status, self.source):
-                prev_day = start_date - timedelta(days=1)
-                prev_day_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source)
-                prev_status = prev_day_map.get(prev_day.isoformat(), {}).get("status")
-                print(f"[SCD] prev_day={prev_day}, prev_day_map={prev_day_map}, prev_status={prev_status!r}")
+                
+                # ✅ ARCHITECTURAL FIX: Use the unified resolution logic.
+                # prevent duplication of logic by reusing _resolve_force_new_entry_start.
+                # This method handles the UI dialog AND the database update for the PREVIOUS shift.
+                force_result = self._resolve_force_new_entry_start(badge, start_date, schedule_status)
+                
+                if force_result is None:
+                    # The user clicked "Cancel" or closed the dialog.
+                    # We must abort the entire save operation to prevent data corruption.
+                    print("[SCD] User cancelled the collision resolution. Aborting save.")
+                    return 
+                
+                force_new_entry_flag = force_result
+                print(f"[SCD] Collision resolved. Force Flag: {force_new_entry_flag}")
 
-                if prev_status and db.is_working_status(prev_status, self.source):
-                    print("[SCD] >>> WORKING->WORKING detected! Showing popup...")
-                    box = QMessageBox(self)
-                    box.setIcon(QMessageBox.Icon.Question)
-                    box.setWindowTitle("Shift Collision Detector")
-                    box.setText(
-                        f"El día anterior ({prev_day.isoformat()}) tiene turno activo: {prev_status}.\n\n"
-                        "¿Desea UNIR esto al viaje actual o registrar una NUEVA entrada?"
-                    )
-
-                    join_btn = box.addButton("Unir (Continuar)", QMessageBox.ButtonRole.AcceptRole)
-                    sep_btn  = box.addButton("Separar (Nueva Entrada)", QMessageBox.ButtonRole.DestructiveRole)
-                    cancel_btn = box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
-
-                    box.setDefaultButton(join_btn)
-                    box.exec()
-
-                    clicked = box.clickedButton()
-                    if clicked == sep_btn:
-                        force_new_entry_flag = 1
-                        print("[SCD] User chose: SEPARAR (force_new_entry=1)")
-                    elif clicked == join_btn:
-                        force_new_entry_flag = 0
-                        print("[SCD] User chose: UNIR (force_new_entry=0)")
-                    else:
-                        print("[SCD] User chose: CANCELAR — aborting save")
-                        return  # Cancelar — aborta el guardado
-                else:
-                    print(f"[SCD] No collision: prev_day was OFF/empty (force_new_entry=0)")
             else:
-                print(f"[SCD] Skipped: schedule_status={schedule_status!r} is not working or is None")
+                print(f"[SCD] Skipped: '{schedule_status}' is not a working status or is invalid.")
+
         except Exception as e:
+            # Fallback safety: If the detector crashes, assume NO force (Standard Overwrite/Error)
+            # but log the stack trace critical for debugging.
             import traceback as _tb
-            print(f"[SCD] *** EXCEPTION in Shift Collision Detector: {e}")
+            print(f"[SCD] *** CRITICAL EXCEPTION in Shift Collision Detector: {e}")
             _tb.print_exc()
             force_new_entry_flag = 0
+
+        # ----------------------------------------------------------
+        # 6.6) Post-Resolution Date Correction
+        # ----------------------------------------------------------
+        # If the user chose "Separar" (Force New), the new shift implies a break in continuity.
+        # Often, a "Separated" shift should end on the SAME DAY, not D+1, unless specified.
+        # This logic ensures the NEW trip's exit_datetime is calculated correctly.
+        
+        if force_new_entry_flag == 1 and exit_datetime:
+            # Recalculate the end date for the NEW entry specifically for a separated trip.
+            # separated_trip=True usually forces the date to be start_date (removes D+1 logic).
+            real_exit_date = self._calculate_rgm_exit_date(
+                schedule_status, end_date, separated_trip=True
+            )
+            # Combine the new date with the originally selected time
+            exit_datetime = datetime.combine(real_exit_date, exit_datetime.time())
+            print(f"[LOGIC] Exit Date Recalculated due to SEPARATION: {exit_datetime}")
 
         # 7. Guardar en BD (SSoT)
         if schedule_status is not None:
             # AquÃ­ es donde se guardan los datetimes calculados (entry_datetime/exit_datetime)
+            db.delete_operations_in_range(badge, start_date, end_date)
             db.add_operation(
                 username=username,
                 role=role,
@@ -3945,12 +4019,16 @@ class PlanStaffWidget(QWidget):
                          if self.dropoff_combo.currentIndex() <= 0:
                              self._set_combo_text(self.dropoff_combo, user.get('dropoff_location'))
 
-    def _calculate_rgm_exit_date(self, shift_code, end_date):
+    def _calculate_rgm_exit_date(self, shift_code, end_date, separated_trip=False):
         """
-        Si es RGM y el turno es ON u ON NS, la salida es al día siguiente.
-        Para cualquier otro turno (manual), la salida es el mismo día.
+        RGM exit date logic:
+        - ON/ON NS normal -> Next Day (1+D rule).
+        - ON/ON NS separated -> Same Day (Trip ends here).
+        - Other shifts -> Same Day.
         """
         if self.source == "RGM" and shift_code in ["ON", "ON NS"]:
+            if separated_trip:
+                return end_date
             from datetime import timedelta
             return end_date + timedelta(days=1)
         return end_date

@@ -950,7 +950,7 @@ def generate_transport_report(
         custom_map: Dict[str, Dict] = {
             k.strip().upper(): v for k, v in get_shift_type_map(source).items()
         }
-        # Crear un mapa de operaciones por badge para bÃºsqueda rÃ¡pida
+        # Crear un mapa de operaciones por badge para bÃƒÂºsqueda rÃƒÂ¡pida
         ops_by_badge = {}
         for op in get_all_operations():
             b = op.get("badge")
@@ -1004,12 +1004,12 @@ def generate_transport_report(
         return su
 
     def _is_working(s):
-        # 1. Chequeo bÃ¡sico
+        # 1. Chequeo bÃƒÂ¡sico
         if not s or s in ("OFF", "BREAK", "KO", "LEAVE"):
             return False
         
         # 2. Chequeo avanzado: Consultar flag 'is_off' en DB
-        # shift_map_data ya fue definido unas lÃ­neas arriba en tu cÃ³digo
+        # shift_map_data ya fue definido unas lÃƒÂ­neas arriba en tu cÃƒÂ³digo
         if s in shift_map_data and shift_map_data[s].get("is_off"):
             return False
             
@@ -1020,7 +1020,7 @@ def generate_transport_report(
     company_default = "PLGims"
     dates_sorted = sorted(date_cols.values())
 
-    # ---- 6.1) Cargar mapa force_new_entry para ruptura del imán ----
+    # ---- 6.1) Cargar mapa force_new_entry para ruptura del imÃ¡n ----
     force_new_entry_by_badge: Dict[str, set] = {}
     try:
         if dates_sorted:
@@ -1031,17 +1031,26 @@ def generate_transport_report(
         force_new_entry_by_badge = {}
 
     def _find_operation_for_date(badge: str, target_date: date, user_ops: List[Dict]):
+        """
+        Busca la operación que cubre target_date.
+        CORRECCIÓN: Si hay overlaps, selecciona la más reciente (mayor id).
+        """
         if not user_ops:
             return None
+        best = None
+        best_id = -1
         for op in user_ops:
             try:
                 op_start = datetime.fromisoformat(op["start_date"]).date()
                 op_end = datetime.fromisoformat(op["end_date"]).date()
                 if op_start <= target_date <= op_end:
-                    return op
+                    op_id = op.get("id", 0)
+                    if op_id > best_id:
+                        best = op
+                        best_id = op_id
             except (ValueError, TypeError):
                 continue
-        return None
+        return best
 
     if is_rgm:
         name_col, role_col, badge_col = (
@@ -1073,7 +1082,7 @@ def generate_transport_report(
 
     try:
         # Cargamos el mapa INTELIGENTE que incluye 'is_off'
-        # Asumimos Newmont por defecto en esta funciÃ³n si no se especifica
+        # Asumimos Newmont por defecto en esta funciÃƒÂ³n si no se especifica
         shift_map_data = get_shift_type_map("Newmont") 
     except Exception as e:
         print(f"Error loading map: {e}")
@@ -1128,6 +1137,14 @@ def generate_transport_report(
                 st_d, "OUT", cmt_d, custom_map, source=source
             )
 
+            # --- Shift Collision Detector: ruptura del imán ---
+            # 1. Verificar flags en el mapa cargado previamente (fne_days)
+            force_today = d.isoformat() in fne_days
+            force_next = next_d.isoformat() in fne_days
+
+            # ────────────────────────────────────────────────────────
+            # Override de operación para fechas/horas de entrada/salida
+            # ────────────────────────────────────────────────────────
             if operation and operation.get("entry_date") and operation.get("exit_date"):
                 try:
                     entry_dt = datetime.strptime(
@@ -1137,18 +1154,32 @@ def generate_transport_report(
                         operation["exit_date"], "%Y-%m-%d %H:%M"
                     )
 
-                    entry_date_to_use = entry_dt.date()
-                    time_in_str = entry_dt.strftime("%H:%M:%S")
-                    exit_date_to_use = exit_dt.date()
-                    time_out_str = exit_dt.strftime("%H:%M:%S")
+                    # ENTRY override: solo si NO es inicio forzado (force_today)
+                    if not force_today:
+                        entry_date_to_use = entry_dt.date()
+                        time_in_str = entry_dt.strftime("%H:%M:%S")
+
+                    # EXIT override
+                    if force_next:
+                        # Separación forzada: usar el override de "Separar"
+                        # solo si la fecha es razonable (mismo día o d+1)
+                        if exit_dt.date() == d or exit_dt.date() == d + timedelta(days=1):
+                            exit_date_to_use = exit_dt.date()
+                            time_out_str = exit_dt.strftime("%H:%M:%S")
+                    else:
+                        # Fin natural: verificar que sea un override manual real
+                        std_exit_time = _get_transport_time_str(
+                            st_d, "OUT", cmt_d, custom_map, source=source
+                        )
+                        is_manual_override = (
+                            exit_dt.date() != d
+                            or exit_dt.strftime("%H:%M:%S") != std_exit_time
+                        )
+                        if is_manual_override:
+                            exit_date_to_use = exit_dt.date()
+                            time_out_str = exit_dt.strftime("%H:%M:%S")
                 except (ValueError, TypeError):
                     pass  # Fallback to defaults
-
-            # --- Shift Collision Detector: ruptura del imán ---
-            # --- Shift Collision Detector: Lógica de Ruptura ---
-            # 1. Verificar flags en el mapa cargado previamente (fne_days)
-            force_today = d.isoformat() in fne_days
-            force_next = next_d.isoformat() in fne_days
 
             # 2. Definición de Entrada:
             #    Es entrada si: (Ayer fue libre) O (Hoy está marcado como forzado)
@@ -1424,14 +1455,23 @@ def generate_rgm_transport_report(
         return "C 14/7 DAY"
 
     def _find_op(badge, d, ops):
+        """
+        Busca la operación para RGM priorizando la más reciente por ID.
+        """
         if not ops: return None
+        best = None
+        best_id = -1
         for op in ops:
             try:
                 s = datetime.fromisoformat(op["start_date"]).date()
                 e = datetime.fromisoformat(op["end_date"]).date()
-                if s <= d <= e: return op
+                if s <= d <= e:
+                    op_id = int(op.get("id", 0))
+                    if op_id > best_id:
+                        best = op
+                        best_id = op_id
             except: continue
-        return None
+        return best
 
     # --- Loop Principal ---
     all_in, all_out = [], []
@@ -1498,65 +1538,61 @@ def generate_rgm_transport_report(
                 ])
 
             # --- OUTBOUND ---
+            # Generamos salida si el día siguiente es OFF o si hay una ruptura forzada (imán)
             if (not _is_working(st_next)) or force_next:
                 
-                # standard_next_day = d + timedelta(days=1)
                 standard_out_time_str = _get_transport_time_str(st_d, "OUT", cmt_d, custom_map, "RGM")
-                # [NUEVA LÃ“GICA CONDICIONAL 1+D]
-                # Solo aplicamos "DÃ­a siguiente" si es ON o ON NS.
-                # Cualquier otro turno creado manualmente sale el MISMO dÃ­a (como Newmont).
-                
-                if st_d in ["ON", "ON NS"]:
-                    standard_exit_date = d + timedelta(days=1)
+
+                if force_next:
+                    # ─── SEPARACIÓN FORZADA (Nuevo Viaje) ───
+                    # El viaje termina HOY (mismo día d), NO d+1.
+                    # "Separar" guardó la hora real de salida en op.exit_date.
+                    standard_exit_date = d  # Sin 1+D
+                    final_outbound_date = d
+                    final_outbound_time = standard_out_time_str
+
+                    # Buscar el override de "Separar" en la BD
+                    if op and op.get("exit_date"):
+                        try:
+                            dt = datetime.strptime(op["exit_date"], "%Y-%m-%d %H:%M")
+                            db_date = dt.date()
+                            db_time_str = dt.strftime("%H:%M:%S")
+                            # Aceptar solo si la fecha es razonable (mismo día o d+1)
+                            if db_date == d or db_date == d + timedelta(days=1):
+                                final_outbound_date = db_date
+                                final_outbound_time = db_time_str
+                        except (ValueError, TypeError):
+                            pass
                 else:
-                    standard_exit_date = d  # Salida el mismo dÃ­a del turno
-                    
-                standard_next_day = standard_exit_date
-                
-                # [FIN DE NUEVA LÃ“GICA]
-                
-                
-                
-                final_outbound_date = standard_next_day
-                final_outbound_time = standard_out_time_str
+                    # ─── FIN DE TURNO NATURAL ───
+                    # Salida estándar = d + 1 (regla 1+D para ON/ON NS)
+                    standard_exit_date = d + timedelta(days=1)
+                    final_outbound_date = standard_exit_date
+                    final_outbound_time = standard_out_time_str
 
-                # 2. Verificamos la BD (HeurÃ­stica Inteligente)
-                if op and op.get("exit_date"):
-                    try:
-                        dt = datetime.strptime(op["exit_date"], "%Y-%m-%d %H:%M")
-                        db_date = dt.date()
-                        db_time_str = dt.strftime("%H:%M:%S")
-                        
-                        # --- ANÃLISIS DE CASO ---
-                        # A) Caso Manual (Ej. 28 de Enero a las 16:00)
-                        #    - La hora (16:00) es DIFERENTE a la hora estÃ¡ndar (07:00).
-                        #    - O la fecha es DIFERENTE a la del turno 'd'.
-                        #    -> RESPETAMOS LA BD.
-                        
-                        # B) Caso Sucio/AutomÃ¡tico (Ej. 19 de Enero a las 07:00)
-                        #    - La fecha es IGUAL a 'd' (19 == 19).
-                        #    - Y la hora es IGUAL a la estÃ¡ndar (07:00 == 07:00).
-                        #    -> LO IGNORAMOS (Usamos standard_next_day).
-
-                        is_manual_override = False
-                        
-                        # Si la fecha es distinta a 'd', seguro es manual.
-                        if db_date != d:
-                            is_manual_override = True
-                        else:
-                            # Si la fecha es igual a 'd', solo es manual si CAMBIÃ“ LA HORA.
-                            # Comparamos solo HH:MM para evitar problemas de segundos.
-                            std_hm = standard_out_time_str[:5] # "07:00"
-                            db_hm = db_time_str[:5]            # "16:00" o "07:00"
-                            if db_hm != std_hm:
-                                is_manual_override = True
-                        
-                        if is_manual_override:
-                            final_outbound_date = db_date
-                            final_outbound_time = db_time_str
+                    # Buscar override manual en la BD
+                    if op and op.get("exit_date"):
+                        try:
+                            dt = datetime.strptime(op["exit_date"], "%Y-%m-%d %H:%M")
+                            db_date = dt.date()
+                            db_time_str = dt.strftime("%H:%M:%S")
                             
-                    except: pass
+                            is_manual_override = False
+                            if db_date != standard_exit_date:
+                                is_manual_override = True
+                            else:
+                                std_hm = standard_out_time_str[:5]
+                                db_hm = db_time_str[:5]
+                                if db_hm != std_hm:
+                                    is_manual_override = True
+                            
+                            if is_manual_override:
+                                final_outbound_date = db_date
+                                final_outbound_time = db_time_str
+                        except (ValueError, TypeError):
+                            pass
 
+                # Obtener ubicación de salida
                 _, do = get_user_location_for_date(badge, d)
                 
                 all_out.append([

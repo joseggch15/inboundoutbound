@@ -1101,6 +1101,47 @@ def add_operation(
             cursor.connection.close()
 
 
+# EN database_logic.py (Agregar al final o en la sección de Operations)
+
+def update_operation_exit_time_by_date(badge: str, target_date: date, new_exit_time: datetime.time):
+    """
+    Actualiza la hora de salida (exit_date) de la operación que cubre 'target_date'.
+    Se usa cuando se rompe un imán (Separar Viaje) para definir la hora real de salida del viaje previo.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        iso_date = target_date.isoformat()
+        
+        # 1. Buscar la operación activa en esa fecha
+        cursor.execute(
+            "SELECT id, exit_date FROM operations "
+            "WHERE badge = ? AND start_date <= ? AND end_date >= ? "
+            "ORDER BY id DESC LIMIT 1",
+            (badge, iso_date, iso_date)
+        )
+        row = cursor.fetchone()
+        
+        if row:
+            op_id = row[0]
+            # Combinamos la fecha del target (que es la fecha de ruptura) con la nueva hora
+            # NOTA: Si la regla de negocio implica que la fecha es target_date (mismo día), usamos target_date.
+            new_dt = datetime.combine(target_date, new_exit_time)
+            
+            cursor.execute(
+                "UPDATE operations SET exit_date = ? WHERE id = ?",
+                (new_dt.strftime('%Y-%m-%d %H:%M'), op_id)
+            )
+            conn.commit()
+            return True, f"Updated exit time for OP #{op_id}"
+            
+        return False, "No active operation found for this date."
+        
+    except Exception as e:
+        return False, f"DB Error: {e}"
+    finally:
+        conn.close()
+
 def upsert_schedule_day(
     badge: str,
     d: date,
@@ -1177,8 +1218,7 @@ def upsert_schedule_range(
 ) -> int:
     """
     Marca por rango [start_d, end_d]. Devuelve cuantos dias se escribieron.
-    force_new_entry_start: solo se aplica al start_d; para los demas dias se pasa None
-    (preserva flag existente; si el row no existe, inserta 0).
+    CORREGIDO: Propagación correcta de force_new_entry para limpiar residuos.
     """
     total = 0
     d = start_d
@@ -1193,9 +1233,20 @@ def upsert_schedule_range(
 
     try:
         while d <= end_d:
-            # force_new_entry solo aplica al primer dia del rango
-            fne = force_new_entry_start if d == start_d else None
-            # Pass the cursor to the day function so it doesn't open new connections
+            # ────────────────────────────────────────────────────────
+            # CORRECCIÓN: Lógica estricta para Unir/Separar
+            # ────────────────────────────────────────────────────────
+            if force_new_entry_start is None:
+                # No se pidió cambio explícito → preservar lo que haya en DB (None)
+                fne = None
+            elif force_new_entry_start == 0:
+                # "Unir" → limpiar forzosamente TODOS los días del rango a 0
+                fne = 0
+            else:
+                # "Separar" (1) → marcar solo el primer día como 1, limpiar el resto a 0
+                fne = 1 if d == start_d else 0
+
+            # Pass the cursor to the day function
             upsert_schedule_day(
                 badge, d, status, shift_type, source, 
                 in_time, out_time, remark,
@@ -1234,31 +1285,50 @@ def clear_schedule_range(badge: str, start_d: date, end_d: date, source: str) ->
 
 
 def get_schedule_map_for_range(
-    badge: str, start_d: date, end_d: date, source: str, cursor: Optional[sqlite3.Cursor] = None # <--- NUEVO ARGUMENTO
+    badge: str, start_d: date, end_d: date, source: str, 
+    cursor: Optional[sqlite3.Cursor] = None
 ) -> Dict[str, Dict]:
-    """Devuelve { 'YYYY-MM-DD': {'status':..., 'shift_type':..., 'in_time':..., 'out_time':..., 'remark':...} } para el rango."""
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT date, status, shift_type, in_time, out_time, remark, force_new_entry "  # <--- AGREGADO
-        "FROM schedules WHERE badge = ? AND source = ? AND date >= ? AND date <= ?",
-        (badge, source, start_d.isoformat(), end_d.isoformat()),
-    )
-    res = {
-        row["date"]: {
-            "status": row["status"],
-            "shift_type": row["shift_type"],
-            "in_time": row["in_time"],
-            "out_time": row["out_time"],
-            "remark": row["remark"],
-            "force_new_entry": row["force_new_entry"]
-        }
-        for row in cursor.fetchall()
-    }
-    conn.close()
-    return res
+    """Devuelve mapa de schedules para el rango. Soporta cursor externo."""
+    should_close = False
+    if cursor is None:
+        conn = sqlite3.connect(DB_FILE)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        should_close = True
 
+    try:
+        cursor.execute(
+            "SELECT date, status, shift_type, in_time, out_time, remark, force_new_entry "
+            "FROM schedules WHERE badge = ? AND source = ? AND date >= ? AND date <= ?",
+            (badge, source, start_d.isoformat(), end_d.isoformat()),
+        )
+        res = {}
+        for row in cursor.fetchall():
+            # Cuando usamos cursor externo, row puede ser tuple (no Row)
+            # Necesitamos manejar ambos formatos
+            if isinstance(row, dict):
+                res[row["date"]] = {
+                    "status": row["status"],
+                    "shift_type": row["shift_type"],
+                    "in_time": row["in_time"],
+                    "out_time": row["out_time"],
+                    "remark": row["remark"],
+                    "force_new_entry": row["force_new_entry"],
+                }
+            else:
+                # sqlite3.Row soporta indexado por nombre
+                res[row["date"]] = {
+                    "status": row["status"],
+                    "shift_type": row["shift_type"],
+                    "in_time": row["in_time"],
+                    "out_time": row["out_time"],
+                    "remark": row["remark"],
+                    "force_new_entry": row["force_new_entry"],
+                }
+        return res
+    finally:
+        if should_close:
+            cursor.connection.close()
 
 def get_schedules_for_source(source: str) -> List[Dict]:
     """Lista completa de schedules para un source."""
@@ -1555,7 +1625,8 @@ def get_operation_overlapping(badge: str, check_date: date, cursor: Optional[sql
         iso = check_date.isoformat()
         # Buscamos una operaciÃ³n donde start <= date <= end
         cursor.execute(
-            "SELECT * FROM operations WHERE badge = ? AND start_date <= ? AND end_date >= ?",
+            "SELECT * FROM operations WHERE badge = ? AND start_date <= ? AND end_date >= ? "
+            "ORDER BY id DESC LIMIT 1",
             (badge, iso, iso)
         )
         row = cursor.fetchone()
