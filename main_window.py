@@ -2020,91 +2020,188 @@ class PlanStaffWidget(QWidget):
     
     def _consolidate_and_record_logistics(self, badge, role, username, op_start, op_end, status, cursor=None):
         """
-        EL MOTOR DE CONSOLIDACIÓN (PATCHED):
-        Respeta force_new_entry para evitar fusiones no deseadas.
+        MOTOR DE CONSOLIDACIÓN v3 — SCAN-BASED.
+        
+        En lugar de merge incremental (que fusionaba ON con ONH),
+        este motor:
+        1. Determina la "zona afectada" (todas las ops que tocan nuestro rango)
+        2. Borra TODAS las operaciones de esa zona
+        3. Escanea el schedule día a día en esa zona
+        4. Crea UNA operación por cada bloque contiguo de MISMO status
+        
+        Esto garantiza que:
+        - ON nunca se fusiona con ONH
+        - Los días huérfanos se reconstruyen
+        - Los force_new_entry se respetan como boundaries
         """
-        # A. Si es un día libre (OFF), NO consolidamos operaciones, solo limpiamos.
+        # A. Si es día libre, solo limpiar
         if not db.is_working_status(status, self.source):
             db.delete_operations_in_range(badge, op_start, op_end, cursor=cursor)
             return
 
-        final_start = op_start
-        final_end = op_end
+        # ---------------------------------------------------------------
+        # 1. DETERMINAR LA ZONA AFECTADA
+        #    = nuestro rango + cualquier operación existente que lo toque
+        # ---------------------------------------------------------------
+        zone_start = op_start
+        zone_end = op_end
 
-        # --- [CAMBIO 1] Detectar flags de ruptura ---
-        # Consultamos el mapa de hoy para ver si ESTE día es un inicio forzado
-        curr_map = db.get_schedule_map_for_range(badge, op_start, op_end, self.source, cursor=cursor)
-        
-        # Flag: ¿Hoy es un inicio forzado?
-        is_force_start_today = (curr_map.get(op_start.isoformat(), {}).get("force_new_entry", 0) == 1)
+        # Extender zona para cubrir operaciones existentes que se solapan
+        for check_date in [op_start, op_end]:
+            existing_op = db.get_operation_overlapping(badge, check_date, cursor=cursor)
+            if existing_op:
+                try:
+                    es = datetime.strptime(existing_op['start_date'], "%Y-%m-%d").date()
+                    ee = datetime.strptime(existing_op['end_date'], "%Y-%m-%d").date()
+                    if es < zone_start: zone_start = es
+                    if ee > zone_end:   zone_end = ee
+                except (ValueError, KeyError):
+                    pass
 
-        # B. Fusión Izquierda (Looking Back - Ayer)
-        # SOLO entramos si HOY NO es un inicio forzado
-        if not is_force_start_today:  # <--- CONDICIÓN DE BLOQUEO AGREGADA
-            prev_day = final_start - timedelta(days=1)
-            prev_op = db.get_operation_overlapping(badge, prev_day, cursor=cursor)
-            
-            if prev_op:
-                prev_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source, cursor=cursor)
-                prev_st = prev_map.get(prev_day.isoformat(), {}).get("status")
-                
-                if db.is_working_status(prev_st, self.source):
-                    prev_op_start = datetime.strptime(prev_op['start_date'], "%Y-%m-%d").date()
-                    if prev_op_start < final_start:
-                        final_start = prev_op_start
+        # Extender un paso más si el vecino tiene MISMO status (merge natural)
+        # — Izquierda
+        curr_start_map = db.get_schedule_map_for_range(badge, zone_start, zone_start, self.source, cursor=cursor)
+        zone_start_info = curr_start_map.get(zone_start.isoformat(), {})
+        zone_start_st = (zone_start_info.get("status") or "").strip().upper()
+        is_force_zone_start = (zone_start_info.get("force_new_entry", 0) == 1)
 
-        # C. Fusión Derecha (Looking Forward - Mañana)
-        next_day = final_end + timedelta(days=1)
-        
-        # --- [CAMBIO 2] Verificar si MAÑANA es un inicio forzado ---
-        # Consultamos el mapa de mañana ANTES de decidir fusionar
+        if not is_force_zone_start:
+            prev_day = zone_start - timedelta(days=1)
+            prev_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source, cursor=cursor)
+            prev_info = prev_map.get(prev_day.isoformat(), {})
+            prev_st = (prev_info.get("status") or "").strip().upper()
+            if prev_st and prev_st == zone_start_st and db.is_working_status(prev_st, self.source):
+                prev_op = db.get_operation_overlapping(badge, prev_day, cursor=cursor)
+                if prev_op:
+                    try:
+                        ps = datetime.strptime(prev_op['start_date'], "%Y-%m-%d").date()
+                        if ps < zone_start: zone_start = ps
+                    except (ValueError, KeyError):
+                        pass
+
+        # — Derecha
+        curr_end_map = db.get_schedule_map_for_range(badge, zone_end, zone_end, self.source, cursor=cursor)
+        zone_end_info = curr_end_map.get(zone_end.isoformat(), {})
+        zone_end_st = (zone_end_info.get("status") or "").strip().upper()
+
+        next_day = zone_end + timedelta(days=1)
         next_map = db.get_schedule_map_for_range(badge, next_day, next_day, self.source, cursor=cursor)
         next_info = next_map.get(next_day.isoformat(), {})
-        next_st = next_info.get("status")
-        
-        # Flag: ¿Mañana fuerza una nueva entrada?
-        is_force_start_tomorrow = (next_info.get("force_new_entry", 0) == 1)
+        next_st = (next_info.get("status") or "").strip().upper()
+        is_force_next = (next_info.get("force_new_entry", 0) == 1)
 
-        # SOLO fusionamos si mañana NO fuerza una ruptura
-        if not is_force_start_tomorrow: # <--- CONDICIÓN DE BLOQUEO AGREGADA
+        if not is_force_next and next_st and next_st == zone_end_st and db.is_working_status(next_st, self.source):
             next_op = db.get_operation_overlapping(badge, next_day, cursor=cursor)
-            
             if next_op:
-                if db.is_working_status(next_st, self.source):
-                    next_op_end = datetime.strptime(next_op['end_date'], "%Y-%m-%d").date()
-                    if next_op_end > final_end:
-                        final_end = next_op_end
+                try:
+                    ne = datetime.strptime(next_op['end_date'], "%Y-%m-%d").date()
+                    if ne > zone_end: zone_end = ne
+                except (ValueError, KeyError):
+                    pass
 
-        # D. Limpieza (Igual que antes)
-        db.delete_operations_in_range(badge, final_start, final_end, cursor=cursor)
+        # ---------------------------------------------------------------
+        # 2. PRESERVAR exit_date overrides de operaciones existentes
+        # ---------------------------------------------------------------
+        _saved_exits = {}  # {(start_iso, end_iso): exit_date_str}
+        for check_d in [zone_start, zone_end]:
+            eop = db.get_operation_overlapping(badge, check_d, cursor=cursor)
+            if eop and eop.get('exit_date'):
+                key = (eop.get('start_date', ''), eop.get('end_date', ''))
+                _saved_exits[key] = eop['exit_date']
 
-        # E. Recálculo (Igual que antes)
-        map_start = db.get_schedule_map_for_range(badge, final_start, final_start, self.source, cursor=cursor)
-        st_start = map_start.get(final_start.isoformat(), {}).get("status") or status
-        t_in = self._calculate_time_logic(st_start, "IN")
+        # ---------------------------------------------------------------
+        # 3. BORRAR todas las operaciones en la zona
+        # ---------------------------------------------------------------
+        db.delete_operations_in_range(badge, zone_start, zone_end, cursor=cursor)
 
-        map_end = db.get_schedule_map_for_range(badge, final_end, final_end, self.source, cursor=cursor)
-        st_end = map_end.get(final_end.isoformat(), {}).get("status") or status
-        t_out = self._calculate_time_logic(st_end, "OUT")
-        
-        # E.2  Calcular fecha real de salida (regla 1+D para RGM)
-        real_exit_date = self._calculate_rgm_exit_date(st_end, final_end)
-        if is_force_start_tomorrow:
-            # "Separar" → la salida es el mismo día final, sin +1
-            real_exit_date = final_end
-        
-        
-        # F. Inserción (Igual que antes)
+        # ---------------------------------------------------------------
+        # 4. ESCANEAR schedule y agrupar en bloques contiguos por status
+        # ---------------------------------------------------------------
+        full_map = db.get_schedule_map_for_range(badge, zone_start, zone_end, self.source, cursor=cursor)
+
+        blocks = []  # [(block_start, block_end, block_status), ...]
+        blk_start = None
+        blk_st = None
+        current = zone_start
+
+        while current <= zone_end:
+            iso = current.isoformat()
+            info = full_map.get(iso, {})
+            st = (info.get("status") or "").strip().upper()
+            is_w = db.is_working_status(st, self.source) if st else False
+            is_f = (info.get("force_new_entry", 0) == 1)
+
+            # ¿Este día CONTINÚA el bloque actual?
+            continues = (is_w and st == blk_st and not is_f)
+
+            if not continues:
+                # Cerrar bloque anterior si existe
+                if blk_start is not None:
+                    blocks.append((blk_start, current - timedelta(days=1), blk_st))
+                # ¿Iniciar nuevo bloque?
+                if is_w:
+                    blk_start = current
+                    blk_st = st
+                else:
+                    blk_start = None
+                    blk_st = None
+
+            current += timedelta(days=1)
+
+        # Cerrar último bloque
+        if blk_start is not None:
+            blocks.append((blk_start, zone_end, blk_st))
+
+        # ---------------------------------------------------------------
+        # 5. CREAR una operación por cada bloque
+        # ---------------------------------------------------------------
+        for (b_start, b_end, b_status) in blocks:
+            self._create_single_operation(
+                badge, role, username, b_start, b_end, b_status,
+                _saved_exits, cursor
+            )
+
+    def _create_single_operation(self, badge, role, username, start, end, status, saved_exits=None, cursor=None):
+        """
+        Crea UNA operación para un bloque contiguo de mismo status.
+        Preserva exit_date overrides si los boundaries coinciden.
+        """
+        t_in = self._calculate_time_logic(status, "IN")
+        t_out = self._calculate_time_logic(status, "OUT")
+        real_exit_date = self._calculate_rgm_exit_date(status, end)
+
+        # Verificar si mañana es force_start → suprimir +1D
+        next_day = end + timedelta(days=1)
+        next_map = db.get_schedule_map_for_range(badge, next_day, next_day, self.source, cursor=cursor)
+        if next_map.get(next_day.isoformat(), {}).get("force_new_entry", 0) == 1:
+            real_exit_date = end
+
+        computed_exit_dt = datetime.combine(real_exit_date, t_out)
+
+        # Intentar restaurar exit_date override (si había uno con mismos boundaries)
+        if saved_exits:
+            key = (start.isoformat(), end.isoformat())
+            old_exit_str = saved_exits.get(key)
+            if old_exit_str:
+                try:
+                    old_exit_dt = datetime.strptime(old_exit_str, '%Y-%m-%d %H:%M')
+                    # Solo restaurar si la hora es distinta (= era un override manual)
+                    if old_exit_dt != computed_exit_dt:
+                        computed_exit_dt = old_exit_dt
+                        print(f"[CONSOL] Restored exit override: {old_exit_str} for {badge} {start}-{end}")
+                except (ValueError, TypeError):
+                    pass
+
         db.add_operation(
-            username=username, 
-            role=role, 
+            username=username,
+            role=role,
             badge=badge,
-            start_date=final_start, 
-            end_date=final_end,
+            start_date=start,
+            end_date=end,
             created_by=self.logged_username,
-            entry_date=datetime.combine(final_start, t_in),
-            exit_date=datetime.combine(real_exit_date, t_out), # Usar fecha calculada
-            cursor=cursor 
+            entry_date=datetime.combine(start, t_in),
+            exit_date=computed_exit_dt,
+            cursor=cursor
         )
 
     
@@ -2969,11 +3066,14 @@ class PlanStaffWidget(QWidget):
     # --------------------------------------------------------------------------
     # HELPER: Detección de Colisiones con UI Avanzada
     # --------------------------------------------------------------------------
-    def _resolve_force_new_entry_start(self, badge, start_date, new_status):
+    def _resolve_force_new_entry_start(self, badge, start_date, new_status, cursor=None):
         """
         Detecta colisiones (Working -> Working) y gestiona la ruptura de viajes.
         Si el usuario elige SEPARAR, actualiza inmediatamente la hora de salida del viaje ANTERIOR.
         
+        Args:
+          cursor: Si se pasa (ej: desde paste), las lecturas usan ESA misma
+                  conexión/transacción para ver datos recién escritos.
         Retorna:
           1 -> Separar (force_new_entry_start=1 para hoy)
           0 -> Unir (force_new_entry_start=0 para hoy)
@@ -2985,7 +3085,7 @@ class PlanStaffWidget(QWidget):
             return 0 
 
         prev_day = start_date - timedelta(days=1)
-        prev_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source)
+        prev_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source, cursor=cursor)
         prev_info = prev_map.get(prev_day.isoformat(), {})
         p_code = str(prev_info.get("status") or "").strip().upper()
 
@@ -3091,7 +3191,7 @@ class PlanStaffWidget(QWidget):
             if ask_prev_exit_time and time_edit is not None:
                 try:
                     custom_exit_time = time_edit.time().toPyTime()
-                    success, msg = db.update_operation_exit_time_by_date(badge, prev_day, custom_exit_time)
+                    success, msg = db.update_operation_exit_time_by_date(badge, prev_day, custom_exit_time, cursor=cursor)
                     
                     if success:
                         print(f"[SCD] ✅ Previous exit time updated: {msg}")
@@ -3877,7 +3977,7 @@ class PlanStaffWidget(QWidget):
                         out_str = final_out.strftime("%H:%M") if final_out else None
                         # [PATCH COLISIÓN] --------------------------------
                         # Validamos colisión celda por celda al pegar
-                        force_flag = self._resolve_force_new_entry_start(badge, target_date, raw_text)
+                        force_flag = self._resolve_force_new_entry_start(badge, target_date, raw_text, cursor=cursor)
                         
                         if force_flag is None:
                             # Si cancela, saltamos esta celda (o podrías hacer 'break' para cancelar todo)

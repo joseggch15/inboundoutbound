@@ -1103,13 +1103,18 @@ def add_operation(
 
 # EN database_logic.py (Agregar al final o en la sección de Operations)
 
-def update_operation_exit_time_by_date(badge: str, target_date: date, new_exit_time: datetime.time):
+def update_operation_exit_time_by_date(badge: str, target_date: date, new_exit_time: datetime.time, cursor=None):
     """
     Actualiza la hora de salida (exit_date) de la operación que cubre 'target_date'.
     Se usa cuando se rompe un imán (Separar Viaje) para definir la hora real de salida del viaje previo.
+    Soporta cursor externo para uso dentro de transacciones activas (ej: paste).
     """
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    should_close = False
+    if cursor is None:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        should_close = True
+
     try:
         iso_date = target_date.isoformat()
         
@@ -1124,15 +1129,14 @@ def update_operation_exit_time_by_date(badge: str, target_date: date, new_exit_t
         
         if row:
             op_id = row[0]
-            # Combinamos la fecha del target (que es la fecha de ruptura) con la nueva hora
-            # NOTA: Si la regla de negocio implica que la fecha es target_date (mismo día), usamos target_date.
             new_dt = datetime.combine(target_date, new_exit_time)
             
             cursor.execute(
                 "UPDATE operations SET exit_date = ? WHERE id = ?",
                 (new_dt.strftime('%Y-%m-%d %H:%M'), op_id)
             )
-            conn.commit()
+            if should_close:
+                cursor.connection.commit()
             return True, f"Updated exit time for OP #{op_id}"
             
         return False, "No active operation found for this date."
@@ -1140,7 +1144,8 @@ def update_operation_exit_time_by_date(badge: str, target_date: date, new_exit_t
     except Exception as e:
         return False, f"DB Error: {e}"
     finally:
-        conn.close()
+        if should_close:
+            cursor.connection.close()
 
 def upsert_schedule_day(
     badge: str,
