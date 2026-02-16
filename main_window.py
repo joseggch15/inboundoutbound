@@ -2353,6 +2353,17 @@ class PlanStaffWidget(QWidget):
                             end_fill_date,
                             new_status
                         )
+                        
+                         # 4. RIGHT BOUNDARY CHECK — Borde final del rango arrastrado
+                        end_result = self._resolve_force_new_entry_end(
+                            badge, end_fill_date, new_status
+                        )
+                        if end_result == 1:
+                            # Re-consolidar para recoger el nuevo force_new_entry
+                            self._consolidate_and_record_logistics(
+                                badge, role, username,
+                                end_fill_date, end_fill_date, new_status
+                            )
 
                     except Exception as e:
                         print(f"Error saving drag-fill for {badge}: {e}")
@@ -2642,6 +2653,23 @@ class PlanStaffWidget(QWidget):
                     remark,
                     force_new_entry_start=force_flag
                 )
+                
+                # [RIGHT BOUNDARY CHECK] — Borde final del bloque editado
+                end_result = self._resolve_force_new_entry_end(
+                    badge, end_date_block, schedule_status
+                )
+                if end_result is None:
+                    # Usuario canceló → revertir
+                    with QSignalBlocker(self.schedule_table):
+                        item.setText(old_text)
+                    self._apply_base_background(item, old_text)
+                    return
+                if end_result == 1:
+                    # Re-consolidar para recalcular la operación con el nuevo boundary
+                    self._consolidate_and_record_logistics(
+                        badge, role, username,
+                        start_date_block, end_date_block, schedule_status
+                    )
 
                 if pickup or dropoff:
                     db.assign_user_location_range(
@@ -3194,9 +3222,9 @@ class PlanStaffWidget(QWidget):
                     success, msg = db.update_operation_exit_time_by_date(badge, prev_day, custom_exit_time, cursor=cursor)
                     
                     if success:
-                        print(f"[SCD] ✅ Previous exit time updated: {msg}")
+                        print(f"[SCD] Previous exit time updated: {msg}")
                     else:
-                        print(f"[SCD] ❌ Failed to update previous exit time: {msg}")
+                        print(f"[SCD] Failed to update previous exit time: {msg}")
                         QMessageBox.warning(self, "Database Warning", f"Could not update previous trip exit time:\n{msg}")
                 except Exception as e:
                     print(f"[SCD] Error processing split: {e}")
@@ -3209,6 +3237,175 @@ class PlanStaffWidget(QWidget):
             return None
    
    
+    def _resolve_force_new_entry_end(self, badge, end_date, end_status, cursor=None):
+        """
+        Detecta colisiones en el BORDE DERECHO del bloque pegado/arrastrado.
+        
+        Escenario: pegaste ON en 16-17, pero el día 18 ya tiene WH.
+        Sin esta validación, el ON aplica 1+D (exit=18 07:00) y se cruza con WH (04:00).
+        
+        Retorna:
+          1 -> Separar (se marcó force_new_entry en next_day + exit override aplicado)
+          0 -> Unir / No hay conflicto
+          None -> Cancelar
+        """
+        e_code = str(end_status or "").strip().upper()
+        if not e_code or not db.is_working_status(e_code, self.source):
+            return 0
+
+        next_day = end_date + timedelta(days=1)
+        next_map = db.get_schedule_map_for_range(badge, next_day, next_day, self.source, cursor=cursor)
+        next_info = next_map.get(next_day.isoformat(), {})
+        n_code = str(next_info.get("status") or "").strip().upper()
+
+        if not n_code or not db.is_working_status(n_code, self.source):
+            return 0
+
+        # Mismo código = continuidad, no hay conflicto
+        if e_code == n_code:
+            return 0
+
+        # Si mañana YA tiene force_new_entry, no necesitamos preguntar de nuevo
+        if next_info.get("force_new_entry", 0) == 1:
+            return 0
+
+        # ---------------------------------------------------------
+        # REGLA DE NEGOCIO: ¿Mostrar editor de hora de salida?
+        # SOLO para RGM + el bloque que TERMINA es ON o ON NS.
+        # ---------------------------------------------------------
+        ask_exit_time = (
+            self.source == "RGM"
+            and e_code in ("ON", "ON NS")
+        )
+
+        # ---------------------------------------------------------
+        # DIÁLOGO PERSONALIZADO (Borde Derecho)
+        # ---------------------------------------------------------
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Gestión de Turnos Consecutivos (Borde Final)")
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+        dialog.setFixedWidth(440)
+
+        layout = QVBoxLayout(dialog)
+
+        # A) Panel de Información
+        info_frame = QFrame()
+        info_frame.setStyleSheet(
+            "background-color: #FFF3E0; border: 1px solid #FFE0B2; "
+            "border-radius: 4px; padding: 6px;"
+        )
+        info_layout = QVBoxLayout(info_frame)
+
+        lbl_info = QLabel(
+            f"<h3 style='color:#E65100; margin:0;'>⚠️ Cambio de Turno Detectado (Borde Final)</h3>"
+            f"<div style='margin-top:5px;'>"
+            f"El usuario <b>{badge}</b> tiene turnos consecutivos diferentes:<br>"
+            f"• Último día marcado ({end_date.strftime('%d/%m')}): <b>{e_code}</b><br>"
+            f"• Día siguiente ({next_day.strftime('%d/%m')}): <b>{n_code}</b>"
+            f"</div>"
+        )
+        lbl_info.setTextFormat(Qt.TextFormat.RichText)
+        info_layout.addWidget(lbl_info)
+        layout.addWidget(info_frame)
+
+        # Nota sobre 1+D
+        if ask_exit_time:
+            warn_lbl = QLabel(
+                f"<div style='color:#C62828; margin-top:6px;'>"
+                f"⛔ El turno <b>{e_code}</b> aplica la regla 1+D: su salida estándar sería "
+                f"<b>{next_day.strftime('%d/%m')} 07:00</b>, lo que se cruza con el turno "
+                f"<b>{n_code}</b> del mismo día."
+                f"</div>"
+            )
+            warn_lbl.setTextFormat(Qt.TextFormat.RichText)
+            warn_lbl.setWordWrap(True)
+            layout.addWidget(warn_lbl)
+
+        layout.addSpacing(10)
+
+        # B) Grupo de hora de salida (solo RGM + ON/ON NS)
+        time_edit = None
+        if ask_exit_time:
+            grp_split = QGroupBox("Si elige 'Separar (Nuevo Viaje)':")
+            grp_split.setStyleSheet("QGroupBox { font-weight: bold; color: #374151; }")
+            grp_layout = QVBoxLayout(grp_split)
+
+            grp_layout.addWidget(QLabel(
+                f"Defina la hora real de SALIDA del bloque {e_code} "
+                f"(último día: {end_date.strftime('%d/%m')}):"
+            ))
+
+            default_hour = 6 if ("NS" in e_code or "NIGHT" in e_code) else 18
+            time_edit = QTimeEdit(QTime(default_hour, 0))
+            time_edit.setDisplayFormat("HH:mm")
+            time_edit.setStyleSheet("font-size: 13px; padding: 4px;")
+            grp_layout.addWidget(time_edit)
+
+            layout.addWidget(grp_split)
+            layout.addSpacing(10)
+
+        # C) Botonera
+        btn_box = QDialogButtonBox()
+        btn_join = btn_box.addButton("Unir (Mismo Viaje)", QDialogButtonBox.ButtonRole.AcceptRole)
+        btn_join.setStyleSheet("padding: 6px 15px;")
+        btn_split = btn_box.addButton("Separar (Nuevo Viaje)", QDialogButtonBox.ButtonRole.ActionRole)
+        btn_split.setStyleSheet(
+            "background-color: #D32F2F; color: white; padding: 6px 15px; font-weight: bold;"
+        )
+        btn_cancel = btn_box.addButton("Cancelar", QDialogButtonBox.ButtonRole.RejectRole)
+
+        layout.addWidget(btn_box)
+
+        btn_join.clicked.connect(lambda: dialog.done(10))
+        btn_split.clicked.connect(lambda: dialog.done(20))
+        btn_cancel.clicked.connect(dialog.reject)
+
+        # ---------------------------------------------------------
+        # EJECUCIÓN Y PROCESAMIENTO
+        # ---------------------------------------------------------
+        result = dialog.exec()
+
+        if result == 10:  # UNIR
+            print(f"[SCD-END] User chose: JOIN for {badge} {end_date}->{next_day}")
+            return 0
+
+        elif result == 20:  # SEPARAR
+            print(f"[SCD-END] User chose: SEPARATE for {badge} {end_date}->{next_day}")
+
+            # 1. Marcar force_new_entry=1 en el día siguiente (SIN cambiar su status)
+            try:
+                cursor.execute(
+                    "UPDATE schedules SET force_new_entry = 1 "
+                    "WHERE badge = ? AND date = ? AND source = ?",
+                    (badge, next_day.isoformat(), self.source)
+                )
+                rows_updated = cursor.rowcount
+                if rows_updated == 0:
+                    print(f"[SCD-END] WARNING: No schedule row found for {badge} on {next_day}")
+                else:
+                    print(f"[SCD-END]  force_new_entry=1 set on {next_day}")
+            except Exception as e:
+                print(f"[SCD-END] Error setting force_new_entry: {e}")
+
+            # 2. Si aplica, actualizar exit time del bloque que termina
+            if ask_exit_time and time_edit is not None:
+                try:
+                    custom_exit_time = time_edit.time().toPyTime()
+                    success, msg = db.update_operation_exit_time_by_date(
+                        badge, end_date, custom_exit_time, cursor=cursor
+                    )
+                    if success:
+                        print(f"[SCD-END]  Exit time updated: {msg}")
+                    else:
+                        print(f"[SCD-END]  Failed: {msg}")
+                except Exception as e:
+                    print(f"[SCD-END] Error updating exit time: {e}")
+
+            return 1
+
+        else:  # Cancelar
+            return None
+        
     # ---------- actions ----------
     def save_plan_changes(self):
         # 1. Limpiar estados de error visuales
@@ -3390,7 +3587,7 @@ class PlanStaffWidget(QWidget):
             # (Non-working statuses like 'OFF' usually imply a simple overwrite or update, handled elsewhere)
             if schedule_status and db.is_working_status(schedule_status, self.source):
                 
-                # ✅ ARCHITECTURAL FIX: Use the unified resolution logic.
+                #  ARCHITECTURAL FIX: Use the unified resolution logic.
                 # prevent duplication of logic by reusing _resolve_force_new_entry_start.
                 # This method handles the UI dialog AND the database update for the PREVIOUS shift.
                 force_result = self._resolve_force_new_entry_start(badge, start_date, schedule_status)
@@ -3458,6 +3655,18 @@ class PlanStaffWidget(QWidget):
                 remark,
                 force_new_entry_start=force_new_entry_flag,
             )
+               # [RIGHT BOUNDARY CHECK] — Borde final del rango registrado
+            end_result = self._resolve_force_new_entry_end(
+                badge, end_date, schedule_status
+            )
+            if end_result is None:
+                print("[SCD-END] User cancelled right boundary. Aborting.")
+                return
+            if end_result == 1:
+                self._consolidate_and_record_logistics(
+                    badge, role, username,
+                    start_date, end_date, schedule_status
+                )
         else:  # Limpiar rango ("Do Not Mark Days")
             db.clear_schedule_range(badge, start_date, end_date, self.source)
 
@@ -3692,7 +3901,7 @@ class PlanStaffWidget(QWidget):
             exists = os.path.exists(self.excel_file)
             if not exists:
                 self.excel_health_label.setText(
-                    "Excel status: ❌ Not found (it may have been moved, deleted, or renamed)."
+                    "Excel status:  Not found (it may have been moved, deleted, or renamed)."
                 )
                 self.excel_health_label.setStyleSheet(
                     "color: #B00020; font-weight: bold;"
@@ -3708,9 +3917,9 @@ class PlanStaffWidget(QWidget):
             mtime = os.path.getmtime(self.excel_file)
             structure_ok, errors, meta = excel.validate_excel_structure(self.excel_file)
             if structure_ok:
-                # ✅ Show the signed-in site (RGM/Newmont), not the structural variant
+                #  Show the signed-in site (RGM/Newmont), not the structural variant
                 self.excel_health_label.setText(
-                    f"Excel status: ✅ OK ({self.source}) — {os.path.basename(self.excel_file)}"
+                    f"Excel status:  OK ({self.source}) — {os.path.basename(self.excel_file)}"
                 )
                 self.excel_health_label.setStyleSheet(
                     "color: #1B5E20; font-weight: bold;"
@@ -3937,6 +4146,7 @@ class PlanStaffWidget(QWidget):
             cursor.execute("BEGIN TRANSACTION")
 
             try:
+                last_pasted_per_badge = {}  # badge -> (date, status, role, username)
                 for r in range(target_rows):
                     for c in range(target_cols):
                         # --- Coordenadas ---
@@ -4026,7 +4236,33 @@ class PlanStaffWidget(QWidget):
                             "out": out_str,
                             "color": color_hex
                         })
+                        
+                        # Track last pasted per badge (for RIGHT boundary check)
+                        prev_entry = last_pasted_per_badge.get(badge)
+                        if prev_entry is None or target_date > prev_entry[0]:
+                            last_pasted_per_badge[badge] = (target_date, raw_text, role, username)
 
+                # =============================================================
+                # RIGHT BOUNDARY CHECK — Borde Final de cada badge pegado
+                # =============================================================
+                for b_badge, (b_end_date, b_end_status, b_role, b_username) in last_pasted_per_badge.items():
+                    end_result = self._resolve_force_new_entry_end(
+                        b_badge, b_end_date, b_end_status, cursor=cursor
+                    )
+                    if end_result is None:
+                        # Usuario canceló → rollback
+                        cursor.execute("ROLLBACK")
+                        return
+                    if end_result == 1:
+                        # force_new_entry ya fue seteado dentro de _resolve_force_new_entry_end.
+                        # Re-consolidar para que la operación recoja el nuevo boundary.
+                        self._consolidate_and_record_logistics(
+                            b_badge, b_role, b_username,
+                            b_end_date, b_end_date, b_end_status,
+                            cursor=cursor
+                        )
+
+                
                 cursor.execute("COMMIT")
 
             except Exception as e:
