@@ -2070,7 +2070,7 @@ class PlanStaffWidget(QWidget):
             prev_map = db.get_schedule_map_for_range(badge, prev_day, prev_day, self.source, cursor=cursor)
             prev_info = prev_map.get(prev_day.isoformat(), {})
             prev_st = (prev_info.get("status") or "").strip().upper()
-            if prev_st and prev_st == zone_start_st and db.is_working_status(prev_st, self.source):
+            if prev_st and db.is_working_status(prev_st, self.source):
                 prev_op = db.get_operation_overlapping(badge, prev_day, cursor=cursor)
                 if prev_op:
                     try:
@@ -2090,7 +2090,7 @@ class PlanStaffWidget(QWidget):
         next_st = (next_info.get("status") or "").strip().upper()
         is_force_next = (next_info.get("force_new_entry", 0) == 1)
 
-        if not is_force_next and next_st and next_st == zone_end_st and db.is_working_status(next_st, self.source):
+        if not is_force_next and next_st and db.is_working_status(next_st, self.source):
             next_op = db.get_operation_overlapping(badge, next_day, cursor=cursor)
             if next_op:
                 try:
@@ -2119,9 +2119,10 @@ class PlanStaffWidget(QWidget):
         # ---------------------------------------------------------------
         full_map = db.get_schedule_map_for_range(badge, zone_start, zone_end, self.source, cursor=cursor)
 
-        blocks = []  # [(block_start, block_end, block_status), ...]
+        blocks = []  # [(block_start, block_end, first_status, last_status), ...]
         blk_start = None
-        blk_st = None
+        blk_st_first = None  # Status del primer día (para entry time)
+        blk_st_last = None   # Status del último día (para exit time/date)
         current = zone_start
 
         while current <= zone_end:
@@ -2131,44 +2132,63 @@ class PlanStaffWidget(QWidget):
             is_w = db.is_working_status(st, self.source) if st else False
             is_f = (info.get("force_new_entry", 0) == 1)
 
-            # ¿Este día CONTINÚA el bloque actual?
-            continues = (is_w and st == blk_st and not is_f)
+            # Â¿Este dÃ­a CONTINÃšA el bloque actual?
+            # REGLA CLAVE (replica el comportamiento del motor OLD):
+            #   - Un dÃ­a CONTINÃšA el bloque si es working y NO tiene force_new_entry=1
+            #   - El cambio de status (ej: ON â†’ ON NS) NO rompe el bloque
+            #   - SOLO force_new_entry=1 (usuario eligiÃ³ "Separar") rompe el bloque
+            #   - Esto es lo que hace que "Unir (Mismo Viaje)" funcione correctamente
+            continues = (is_w and not is_f and blk_start is not None)
 
             if not continues:
                 # Cerrar bloque anterior si existe
                 if blk_start is not None:
-                    blocks.append((blk_start, current - timedelta(days=1), blk_st))
-                # ¿Iniciar nuevo bloque?
+                    blocks.append((blk_start, current - timedelta(days=1), blk_st_first, blk_st_last))
+                # Â¿Iniciar nuevo bloque?
                 if is_w:
                     blk_start = current
-                    blk_st = st
+                    blk_st_first = st  # Primer status del bloque (para entry time)
+                    blk_st_last = st   # Ãšltimo status (se actualiza dÃ­a a dÃ­a)
                 else:
                     blk_start = None
-                    blk_st = None
+                    blk_st_first = None
+                    blk_st_last = None
+            else:
+                # Actualizar el Ãºltimo status del bloque al dÃ­a actual
+                # Esto asegura que exit time/date se calculen con el turno final
+                blk_st_last = st
 
             current += timedelta(days=1)
 
-        # Cerrar último bloque
+        # Cerrar Ãºltimo bloque
         if blk_start is not None:
-            blocks.append((blk_start, zone_end, blk_st))
-
-        # ---------------------------------------------------------------
+            blocks.append((blk_start, zone_end, blk_st_first, blk_st_last))
+         # ---------------------------------------------------------------
         # 5. CREAR una operación por cada bloque
         # ---------------------------------------------------------------
-        for (b_start, b_end, b_status) in blocks:
+        for (b_start, b_end, b_first_st, b_last_st) in blocks:
             self._create_single_operation(
-                badge, role, username, b_start, b_end, b_status,
+                badge, role, username, b_start, b_end, b_first_st, b_last_st,
                 _saved_exits, cursor
             )
-
-    def _create_single_operation(self, badge, role, username, start, end, status, saved_exits=None, cursor=None):
+            
+    def _create_single_operation(self, badge, role, username, start, end, first_status, last_status=None, saved_exits=None, cursor=None):
         """
-        Crea UNA operación para un bloque contiguo de mismo status.
-        Preserva exit_date overrides si los boundaries coinciden.
+        Crea UNA operación para un bloque contiguo.
+        
+        Replica el comportamiento del motor OLD:
+        - Entry time se calcula con el status del PRIMER día (first_status)
+        - Exit time/date se calcula con el status del ÚLTIMO día (last_status)
+        
+        Esto permite que bloques mixtos (ON + ON NS) se unan correctamente
+        cuando el usuario elige "Unir (Mismo Viaje)".
         """
-        t_in = self._calculate_time_logic(status, "IN")
-        t_out = self._calculate_time_logic(status, "OUT")
-        real_exit_date = self._calculate_rgm_exit_date(status, end)
+        if last_status is None:
+            last_status = first_status
+        
+        t_in = self._calculate_time_logic(first_status, "IN")
+        t_out = self._calculate_time_logic(last_status, "OUT")
+        real_exit_date = self._calculate_rgm_exit_date(last_status, end)
 
         # Verificar si mañana es force_start → suprimir +1D
         next_day = end + timedelta(days=1)
@@ -2416,7 +2436,7 @@ class PlanStaffWidget(QWidget):
                 else:
                     # Mantener el nuevo valor, marcar warn suave
                     with QSignalBlocker(self.schedule_table):
-                        item.setText(new_text)  # normalizar mayúsculas
+                        item.setText(new_text)  # normalizar mayÃºsculas
                     item.setBackground(QColor(WARN_BG_HEX))
                     self._warn_highlight_keys.add(self._warn_key_for(r, c))
             else:
@@ -2453,14 +2473,14 @@ class PlanStaffWidget(QWidget):
                     right = sel.rightColumn()
                     col_range = list(range(left, right + 1))
 
-            # ---------------- Valores iniciales para el diálogo ----------------
-            # Leemos info actual de BD (status, remark, pickup/dropoff) para el día base
+            # ---------------- Valores iniciales para el diÃ¡logo ----------------
+            # Leemos info actual de BD (status, remark, pickup/dropoff) para el dÃ­a base
             schedule_map = db.get_schedule_map_for_range(
                 badge, base_date, base_date, self.source
             )
             day_info = schedule_map.get(base_date.isoformat(), {}) or {}
 
-            # --- Lógica de resolución de código (MANTENER TU ARREGLO PREVIO) ---
+            # --- LÃ³gica de resoluciÃ³n de cÃ³digo (MANTENER TU ARREGLO PREVIO) ---
             raw_cell_text = new_text if new_text else ""
             resolved_status_code = raw_cell_text
 
@@ -2470,7 +2490,7 @@ class PlanStaffWidget(QWidget):
                 if not isinstance(data, dict):
                     continue
 
-                # 1. ¿Coincide con la etiqueta visual?
+                # 1. Â¿Coincide con la etiqueta visual?
                 if label.strip().upper() == raw_cell_text:
                     if data.get("kind") == "base":
                         resolved_status_code = data.get("status")
@@ -2478,7 +2498,7 @@ class PlanStaffWidget(QWidget):
                         resolved_status_code = data.get("code")
                     break
 
-                # 2. ¿Coincide con el código interno?
+                # 2. Â¿Coincide con el cÃ³digo interno?
                 internal_code = (
                     data.get("status")
                     if data.get("kind") == "base"
@@ -2510,11 +2530,11 @@ class PlanStaffWidget(QWidget):
                 initial=initial,
             )
 
-            # --- AQUÍ OCURRÍA EL DOBLE TRIGGER ---
+            # --- AQUÃ OCURRÃA EL DOBLE TRIGGER ---
             # Al ejecutarse editor.exec(), se pierde foco, se dispara itemChanged de nuevo.
             # Pero como _is_handling_change es True, la segunda llamada entra al 'if' inicial y retorna.
             if editor.exec() != QDialog.DialogCode.Accepted:
-                # Usuario canceló: revertimos el cambio visual y salimos
+                # Usuario cancelÃ³: revertimos el cambio visual y salimos
                 with QSignalBlocker(self.schedule_table):
                     item.setText(old_text)
                 self._apply_base_background(item, old_text)
@@ -2530,7 +2550,7 @@ class PlanStaffWidget(QWidget):
             entry_datetime = payload.get("entry_datetime")
             exit_datetime = payload.get("exit_datetime")
 
-            # Validación simple
+            # ValidaciÃ³n simple
             if entry_datetime and exit_datetime and entry_datetime > exit_datetime:
                 QMessageBox.warning(
                     self,
@@ -2542,7 +2562,7 @@ class PlanStaffWidget(QWidget):
                 self._apply_base_background(item, old_text)
                 return
 
-            # Interpretar selección
+            # Interpretar selecciÃ³n
             if not sel or sel.get("kind") in ("none", "separator"):
                 schedule_status = None
                 shift_type = None
@@ -2618,29 +2638,18 @@ class PlanStaffWidget(QWidget):
 
             # Actualizar Base de Datos
             try:
-                # [PATCH COLISIÓN] ----------------------------------------
+                # [PATCH COLISIÃ“N] ----------------------------------------
                 # start_date_block es la fecha donde inicia el cambio
                 force_flag = self._resolve_force_new_entry_start(badge, start_date_block, schedule_status)
                 
                 if force_flag is None:
-                    # Usuario canceló -> Revertir visualmente y salir
+                    # Usuario cancelÃ³ -> Revertir visualmente y salir
                     with QSignalBlocker(self.schedule_table):
                         item.setText(old_text)
                     self._apply_base_background(item, old_text)
                     return
                 # ---------------------------------------------------------
-                db.delete_operations_in_range(badge, start_date_block, end_date_block)
-                db.add_operation(
-                    username=username,
-                    role=role,
-                    badge=badge,
-                    start_date=start_date_block,
-                    end_date=end_date_block,
-                    created_by=self.logged_username,
-                    entry_date=entry_dt_for_save,
-                    exit_date=exit_dt_for_save,
-                )
-
+                # 1. Guardar Schedule (SSoT) con force_new_entry_start
                 db.upsert_schedule_range(
                     badge,
                     start_date_block,
@@ -2654,22 +2663,23 @@ class PlanStaffWidget(QWidget):
                     force_new_entry_start=force_flag
                 )
                 
-                # [RIGHT BOUNDARY CHECK] — Borde final del bloque editado
+                # [RIGHT BOUNDARY CHECK] â€” Borde final del bloque editado
                 end_result = self._resolve_force_new_entry_end(
                     badge, end_date_block, schedule_status
                 )
                 if end_result is None:
-                    # Usuario canceló → revertir
+                    # Usuario cancelÃ³ â†’ revertir
                     with QSignalBlocker(self.schedule_table):
                         item.setText(old_text)
                     self._apply_base_background(item, old_text)
                     return
-                if end_result == 1:
-                    # Re-consolidar para recalcular la operación con el nuevo boundary
-                    self._consolidate_and_record_logistics(
-                        badge, role, username,
-                        start_date_block, end_date_block, schedule_status
-                    )
+                # 2. SIEMPRE consolidar (maneja JOIN y SEPARATE correctamente)
+                #    FIX: Antes solo se llamaba cuando end_result==1 (SEPARATE),
+                #    lo que dejaba "Unir (Mismo Viaje)" sin efecto real.
+                self._consolidate_and_record_logistics(
+                    badge, role, username,
+                    start_date_block, end_date_block, schedule_status
+                )
 
                 if pickup or dropoff:
                     db.assign_user_location_range(
@@ -2718,12 +2728,12 @@ class PlanStaffWidget(QWidget):
                 self.refresh_ui_data()
                 return
 
-            # Finalización
+            # FinalizaciÃ³n
             self.check_excel_health()
             self.rotation_changed.emit()
 
         finally:
-            # 3. LIBERAR BANDERA (CRÍTICO)
+            # 3. LIBERAR BANDERA (CRÃTICO)
             self._is_handling_change = False
 
     # ---------- MODIFIED: hover card logic ----------
