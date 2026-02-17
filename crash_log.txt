@@ -1,5 +1,5 @@
 Traceback (most recent call last):
-  File "e:\1+D CRUD\inboundoutbound\main_window.py", line 3037, in save_plan_changes
-    real_exit_date = self._calculate_rgm_exit_date(schedule_status, end_date)
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-AttributeError: 'PlanStaffWidget' object has no attribute '_calculate_rgm_exit_date'
+  File "e:\1+D CRUD\inboundoutbound\main_window.py", line 2605, in _on_schedule_cell_changed
+    self._safe_revert_item(item, old_text)
+    ^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'PlanStaffWidget' object has no attribute '_safe_revert_item'

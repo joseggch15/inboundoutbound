@@ -2459,6 +2459,31 @@ class PlanStaffWidget(QWidget):
             self.schedule_table.viewport().update()
     
     
+    
+     # ---------- SAFE REVERT HELPER (protects against zombie QTableWidgetItem) ----------
+    def _safe_revert_item(self, item, text):
+        """
+        Safely revert a QTableWidgetItem's text and background.
+        Returns True if the item was still alive, False if it was already destroyed.
+        
+        WHY: During modal dialogs (editor.exec(), QMessageBox, _resolve_force_new_entry_*),
+        the Qt event loop keeps processing events. If any signal triggers refresh_ui_data(),
+        the table is cleared/rebuilt — destroying the C++ object behind 'item'.
+        Accessing it after that causes: RuntimeError: wrapped C/C++ object has been deleted.
+        """
+        try:
+            if item is None or item.row() < 0 or item.column() < 0:
+                return False
+            item.setText(text)
+            self._apply_base_background(item, text)
+            return True
+        except RuntimeError:
+            print(f"\u26a0\ufe0f [Recovery] QTableWidgetItem destroyed by concurrent UI refresh. Revert skipped safely.")
+            return False
+    
+    
+    
+    
     # ---------- REQ-001: inline OFF→ON/ON NS guard ----------
     def _on_schedule_cell_changed(self, item: QTableWidgetItem):
         # 1. AGREGAR: Chequeo de la bandera _is_handling_change
@@ -2494,15 +2519,17 @@ class PlanStaffWidget(QWidget):
                 if box.clickedButton() != accept_btn:
                     # Revertir a valor original y color base
                     with QSignalBlocker(self.schedule_table):
-                        item.setText(old_text)
-                    self._apply_base_background(item, old_text)
+                        self._safe_revert_item(item, old_text)
                     return
                 else:
                     # Mantener el nuevo valor, marcar warn suave
                     with QSignalBlocker(self.schedule_table):
-                        item.setText(new_text)  # normalizar mayúsculas
-                    item.setBackground(QColor(WARN_BG_HEX))
-                    self._warn_highlight_keys.add(self._warn_key_for(r, c))
+                        try:
+                            item.setText(new_text)  # normalizar
+                            item.setBackground(QColor(WARN_BG_HEX))
+                            self._warn_highlight_keys.add(self._warn_key_for(r, c))
+                        except RuntimeError:
+                            pass  # Item destroyed by concurrent refresh
             else:
                 # Sin guard especial; color base y limpiar warn si aplica
                 self._apply_base_background(item, new_text)
@@ -2537,14 +2564,14 @@ class PlanStaffWidget(QWidget):
                     right = sel.rightColumn()
                     col_range = list(range(left, right + 1))
 
-            # ---------------- Valores iniciales para el diálogo ----------------
-            # Leemos info actual de BD (status, remark, pickup/dropoff) para el día base
+            # ---------------- Valores iniciales para el diÃ¡logo ----------------
+            # Leemos info actual de BD (status, remark, pickup/dropoff) para el dÃ­a base
             schedule_map = db.get_schedule_map_for_range(
                 badge, base_date, base_date, self.source
             )
             day_info = schedule_map.get(base_date.isoformat(), {}) or {}
 
-            # --- Lógica de resolución de código (MANTENER TU ARREGLO PREVIO) ---
+            # --- LÃ³gica de resoluciÃ³n de cÃ³digo (MANTENER TU ARREGLO PREVIO) ---
             raw_cell_text = new_text if new_text else ""
             resolved_status_code = raw_cell_text
 
@@ -2554,7 +2581,7 @@ class PlanStaffWidget(QWidget):
                 if not isinstance(data, dict):
                     continue
 
-                # 1. ¿Coincide con la etiqueta visual?
+                # 1. Â¿Coincide con la etiqueta visual?
                 if label.strip().upper() == raw_cell_text:
                     if data.get("kind") == "base":
                         resolved_status_code = data.get("status")
@@ -2562,7 +2589,7 @@ class PlanStaffWidget(QWidget):
                         resolved_status_code = data.get("code")
                     break
 
-                # 2. ¿Coincide con el código interno?
+                # 2. Â¿Coincide con el cÃ³digo interno?
                 internal_code = (
                     data.get("status")
                     if data.get("kind") == "base"
@@ -2594,14 +2621,13 @@ class PlanStaffWidget(QWidget):
                 initial=initial,
             )
 
-            # --- AQUÍ OCURRÍA EL DOBLE TRIGGER ---
+            # --- AQUÃ OCURRÃA EL DOBLE TRIGGER ---
             # Al ejecutarse editor.exec(), se pierde foco, se dispara itemChanged de nuevo.
             # Pero como _is_handling_change es True, la segunda llamada entra al 'if' inicial y retorna.
             if editor.exec() != QDialog.DialogCode.Accepted:
-                # Usuario canceló: revertimos el cambio visual y salimos
+                # Usuario cancelÃ³: revertimos el cambio visual y salimos
                 with QSignalBlocker(self.schedule_table):
-                    item.setText(old_text)
-                self._apply_base_background(item, old_text)
+                    self._safe_revert_item(item, old_text)
                 return
 
             payload = editor.result_payload()
@@ -2614,7 +2640,7 @@ class PlanStaffWidget(QWidget):
             entry_datetime = payload.get("entry_datetime")
             exit_datetime = payload.get("exit_datetime")
 
-            # Validación simple
+            # ValidaciÃ³n simple
             if entry_datetime and exit_datetime and entry_datetime > exit_datetime:
                 QMessageBox.warning(
                     self,
@@ -2622,11 +2648,10 @@ class PlanStaffWidget(QWidget):
                     "Entry date/time cannot be after Exit date/time.",
                 )
                 with QSignalBlocker(self.schedule_table):
-                    item.setText(old_text)
-                self._apply_base_background(item, old_text)
+                    self._safe_revert_item(item, old_text)
                 return
 
-            # Interpretar selección
+            # Interpretar selecciÃ³n
             if not sel or sel.get("kind") in ("none", "separator"):
                 schedule_status = None
                 shift_type = None
@@ -2702,15 +2727,14 @@ class PlanStaffWidget(QWidget):
 
             # Actualizar Base de Datos
             try:
-                # [PATCH COLISIÓN] ----------------------------------------
+                # [PATCH COLISIÃ“N] ----------------------------------------
                 # start_date_block es la fecha donde inicia el cambio
                 force_flag = self._resolve_force_new_entry_start(badge, start_date_block, schedule_status)
                 
                 if force_flag is None:
-                    # Usuario canceló -> Revertir visualmente y salir
+                    # Usuario cancelÃ³ -> Revertir visualmente y salir
                     with QSignalBlocker(self.schedule_table):
-                        item.setText(old_text)
-                    self._apply_base_background(item, old_text)
+                        self._safe_revert_item(item, old_text)
                     return
                 # ---------------------------------------------------------
                 # 1. Guardar Schedule (SSoT) con force_new_entry_start
@@ -2727,21 +2751,20 @@ class PlanStaffWidget(QWidget):
                     force_new_entry_start=force_flag
                 )
                 
-                # [RIGHT BOUNDARY CHECK] — Borde final del bloque editado
+                # [RIGHT BOUNDARY CHECK] â€” Borde final del bloque editado
                 end_result = self._resolve_force_new_entry_end(
                     badge, end_date_block, schedule_status
                 )
                 if end_result is None:
-                    # Usuario canceló → revertir
+                    # Usuario cancelÃ³ â†’ revertir
                     with QSignalBlocker(self.schedule_table):
-                        item.setText(old_text)
-                    self._apply_base_background(item, old_text)
+                        self._safe_revert_item(item, old_text)
                     return
                 # 2. SIEMPRE consolidar (maneja JOIN y SEPARATE correctamente)
                 #    FIX: Antes solo se llamaba cuando end_result==1 (SEPARATE),
                 #    lo que dejaba "Unir (Mismo Viaje)" sin efecto real.
                 
-                # Recuperar config manual del diálogo (si existe)
+                # Recuperar config manual del diÃ¡logo (si existe)
                 manual_cfg = getattr(self, '_last_manual_exit_config', None)
                 self._last_manual_exit_config = None  # Consumir
 
@@ -2798,12 +2821,12 @@ class PlanStaffWidget(QWidget):
                 self.refresh_ui_data()
                 return
 
-            # Finalización
+            # FinalizaciÃ³n
             self.check_excel_health()
             self.rotation_changed.emit()
 
         finally:
-            # 3. LIBERAR BANDERA (CRÍTICO)
+            # 3. LIBERAR BANDERA (CRÃTICO)
             self._is_handling_change = False
 
     # ---------- MODIFIED: hover card logic ----------
