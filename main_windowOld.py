@@ -1039,9 +1039,6 @@ class PlanStaffWidget(QWidget):
         # --- NUEVO: Bandera para evitar doble apertura de diálogo ---
         self._is_handling_change = False
         
-        # --- FIX: Puente de datos para hora manual del diálogo Separar ---
-        self._last_manual_exit_config = None
-        
         self._is_first_load = True
         
         # ---------- root layout ----------
@@ -2103,6 +2100,9 @@ class PlanStaffWidget(QWidget):
                     pass
 
         # ---------------------------------------------------------------
+        # 2. PRESERVAR exit_date overrides de operaciones existentes
+        # ---------------------------------------------------------------
+        # ---------------------------------------------------------------
         # 2. PRESERVAR exit_date overrides de TODAS las operaciones en la zona
         # ---------------------------------------------------------------
         # FIX BUG 2: Antes solo capturaba bordes (zone_start, zone_end).
@@ -2110,7 +2110,9 @@ class PlanStaffWidget(QWidget):
         # para no perder ningún override manual (ej: hora 18:00).
         _saved_exits = {}  # {(start_iso, end_iso): exit_date_str}
 
+        # Necesitamos un cursor que soporte row_factory para dict
         if cursor is not None:
+            # Usar el cursor externo directamente
             cursor.execute(
                 """
                 SELECT start_date, end_date, exit_date
@@ -2121,6 +2123,7 @@ class PlanStaffWidget(QWidget):
                 (badge, zone_start.isoformat(), zone_end.isoformat())
             )
             for row in cursor.fetchall():
+                # cursor externo puede devolver tuple o Row
                 if isinstance(row, dict) or hasattr(row, 'keys'):
                     st, en, ex = row['start_date'], row['end_date'], row['exit_date']
                 else:
@@ -2129,6 +2132,7 @@ class PlanStaffWidget(QWidget):
                     _saved_exits[(st, en)] = ex
                     print(f"[CONSOL] Preserved exit override: ({st},{en}) -> {ex}")
         else:
+            # Sin cursor externo → abrir conexión temporal
             _temp_conn = db.sqlite3.connect(db.DB_FILE)
             _temp_conn.row_factory = db.sqlite3.Row
             _temp_cur = _temp_conn.cursor()
@@ -2171,11 +2175,11 @@ class PlanStaffWidget(QWidget):
             is_w = db.is_working_status(st, self.source) if st else False
             is_f = (info.get("force_new_entry", 0) == 1)
 
-            # ¿Este día CONTINÚA el bloque actual?
+            # Â¿Este dÃ­a CONTINÃšA el bloque actual?
             # REGLA CLAVE (replica el comportamiento del motor OLD):
-            #   - Un día CONTINÚA el bloque si es working y NO tiene force_new_entry=1
-            #   - El cambio de status (ej: ON → ON NS) NO rompe el bloque
-            #   - SOLO force_new_entry=1 (usuario eligió "Separar") rompe el bloque
+            #   - Un dÃ­a CONTINÃšA el bloque si es working y NO tiene force_new_entry=1
+            #   - El cambio de status (ej: ON â†’ ON NS) NO rompe el bloque
+            #   - SOLO force_new_entry=1 (usuario eligiÃ³ "Separar") rompe el bloque
             #   - Esto es lo que hace que "Unir (Mismo Viaje)" funcione correctamente
             continues = (is_w and not is_f and blk_start is not None)
 
@@ -2183,23 +2187,23 @@ class PlanStaffWidget(QWidget):
                 # Cerrar bloque anterior si existe
                 if blk_start is not None:
                     blocks.append((blk_start, current - timedelta(days=1), blk_st_first, blk_st_last))
-                # ¿Iniciar nuevo bloque?
+                # Â¿Iniciar nuevo bloque?
                 if is_w:
                     blk_start = current
                     blk_st_first = st  # Primer status del bloque (para entry time)
-                    blk_st_last = st   # Último status (se actualiza día a día)
+                    blk_st_last = st   # Ãšltimo status (se actualiza dÃ­a a dÃ­a)
                 else:
                     blk_start = None
                     blk_st_first = None
                     blk_st_last = None
             else:
-                # Actualizar el último status del bloque al día actual
+                # Actualizar el Ãºltimo status del bloque al dÃ­a actual
                 # Esto asegura que exit time/date se calculen con el turno final
                 blk_st_last = st
 
             current += timedelta(days=1)
 
-        # Cerrar último bloque
+        # Cerrar Ãºltimo bloque
         if blk_start is not None:
             blocks.append((blk_start, zone_end, blk_st_first, blk_st_last))
          # ---------------------------------------------------------------
@@ -2211,6 +2215,7 @@ class PlanStaffWidget(QWidget):
             if manual_split_config:
                 target_date = manual_split_config.get('date')
                 target_time = manual_split_config.get('time')
+                # Si el bloque termina en la fecha donde el usuario cortó manualmente
                 if target_date and b_end == target_date:
                     current_manual_exit = target_time
                     print(f"[CONSOL] Injecting manual exit time {target_time} for block ending {b_end}")
@@ -2248,7 +2253,10 @@ class PlanStaffWidget(QWidget):
         computed_exit_dt = datetime.combine(real_exit_date, t_out)
 
         # --- FIX BUG 3: PRIORIDAD 1 — Hora manual directa del diálogo ---
+        # Si el usuario acaba de elegir una hora en el popup de "Separar",
+        # esa hora tiene la máxima prioridad sobre cualquier cálculo.
         if manual_exit_time is not None:
+            # manual_exit_time es un objeto datetime.time (ej: time(18,0))
             computed_exit_dt = datetime.combine(end, manual_exit_time)
             print(f"[CONSOL] Applied MANUAL exit time: {computed_exit_dt} for {badge} {start}-{end}")
 
@@ -2259,7 +2267,6 @@ class PlanStaffWidget(QWidget):
             if old_exit_str:
                 try:
                     old_exit_dt = datetime.strptime(old_exit_str, '%Y-%m-%d %H:%M')
-                    # Solo restaurar si la hora es distinta (= era un override manual)
                     if old_exit_dt != computed_exit_dt:
                         computed_exit_dt = old_exit_dt
                         print(f"[CONSOL] Restored exit override: {old_exit_str} for {badge} {start}-{end}")
@@ -2419,21 +2426,16 @@ class PlanStaffWidget(QWidget):
                         # En lugar de guardar ciegamente, llamamos al consolidador.
                         # Le pasamos operation_start_date (el día 21) y end_fill_date (el día 25).
                         # Él se encargará de ver si hay que fusionar con el 20 o el 26.
-                        # Recuperar config de _resolve_force_new_entry_start (si hubo Separar)
-                        start_manual_cfg = getattr(self, '_last_manual_exit_config', None)
-                        self._last_manual_exit_config = None  # Consumir
-
                         self._consolidate_and_record_logistics(
                             badge, 
                             role, 
                             username,
-                            operation_start_date,
+                            operation_start_date, # INCLUYE EL ANCLA
                             end_fill_date,
-                            new_status,
-                            manual_split_config=start_manual_cfg
+                            new_status
                         )
                         
-                         # 4. RIGHT BOUNDARY CHECK — Borde final del rango arrastrado
+                        # 4. RIGHT BOUNDARY CHECK — Borde final del rango arrastrado
                         end_result = self._resolve_force_new_entry_end(
                             badge, end_fill_date, new_status
                         )
@@ -2500,7 +2502,7 @@ class PlanStaffWidget(QWidget):
                 else:
                     # Mantener el nuevo valor, marcar warn suave
                     with QSignalBlocker(self.schedule_table):
-                        item.setText(new_text)  # normalizar mayúsculas
+                        item.setText(new_text)  # normalizar mayÃºsculas
                     item.setBackground(QColor(WARN_BG_HEX))
                     self._warn_highlight_keys.add(self._warn_key_for(r, c))
             else:
@@ -2537,14 +2539,14 @@ class PlanStaffWidget(QWidget):
                     right = sel.rightColumn()
                     col_range = list(range(left, right + 1))
 
-            # ---------------- Valores iniciales para el diálogo ----------------
-            # Leemos info actual de BD (status, remark, pickup/dropoff) para el día base
+            # ---------------- Valores iniciales para el diÃ¡logo ----------------
+            # Leemos info actual de BD (status, remark, pickup/dropoff) para el dÃ­a base
             schedule_map = db.get_schedule_map_for_range(
                 badge, base_date, base_date, self.source
             )
             day_info = schedule_map.get(base_date.isoformat(), {}) or {}
 
-            # --- Lógica de resolución de código (MANTENER TU ARREGLO PREVIO) ---
+            # --- LÃ³gica de resoluciÃ³n de cÃ³digo (MANTENER TU ARREGLO PREVIO) ---
             raw_cell_text = new_text if new_text else ""
             resolved_status_code = raw_cell_text
 
@@ -2554,7 +2556,7 @@ class PlanStaffWidget(QWidget):
                 if not isinstance(data, dict):
                     continue
 
-                # 1. ¿Coincide con la etiqueta visual?
+                # 1. Â¿Coincide con la etiqueta visual?
                 if label.strip().upper() == raw_cell_text:
                     if data.get("kind") == "base":
                         resolved_status_code = data.get("status")
@@ -2562,7 +2564,7 @@ class PlanStaffWidget(QWidget):
                         resolved_status_code = data.get("code")
                     break
 
-                # 2. ¿Coincide con el código interno?
+                # 2. Â¿Coincide con el cÃ³digo interno?
                 internal_code = (
                     data.get("status")
                     if data.get("kind") == "base"
@@ -2594,11 +2596,11 @@ class PlanStaffWidget(QWidget):
                 initial=initial,
             )
 
-            # --- AQUÍ OCURRÍA EL DOBLE TRIGGER ---
+            # --- AQUÃ OCURRÃA EL DOBLE TRIGGER ---
             # Al ejecutarse editor.exec(), se pierde foco, se dispara itemChanged de nuevo.
             # Pero como _is_handling_change es True, la segunda llamada entra al 'if' inicial y retorna.
             if editor.exec() != QDialog.DialogCode.Accepted:
-                # Usuario canceló: revertimos el cambio visual y salimos
+                # Usuario cancelÃ³: revertimos el cambio visual y salimos
                 with QSignalBlocker(self.schedule_table):
                     item.setText(old_text)
                 self._apply_base_background(item, old_text)
@@ -2614,7 +2616,7 @@ class PlanStaffWidget(QWidget):
             entry_datetime = payload.get("entry_datetime")
             exit_datetime = payload.get("exit_datetime")
 
-            # Validación simple
+            # ValidaciÃ³n simple
             if entry_datetime and exit_datetime and entry_datetime > exit_datetime:
                 QMessageBox.warning(
                     self,
@@ -2626,7 +2628,7 @@ class PlanStaffWidget(QWidget):
                 self._apply_base_background(item, old_text)
                 return
 
-            # Interpretar selección
+            # Interpretar selecciÃ³n
             if not sel or sel.get("kind") in ("none", "separator"):
                 schedule_status = None
                 shift_type = None
@@ -2702,12 +2704,12 @@ class PlanStaffWidget(QWidget):
 
             # Actualizar Base de Datos
             try:
-                # [PATCH COLISIÓN] ----------------------------------------
+                # [PATCH COLISIÃ“N] ----------------------------------------
                 # start_date_block es la fecha donde inicia el cambio
                 force_flag = self._resolve_force_new_entry_start(badge, start_date_block, schedule_status)
                 
                 if force_flag is None:
-                    # Usuario canceló -> Revertir visualmente y salir
+                    # Usuario cancelÃ³ -> Revertir visualmente y salir
                     with QSignalBlocker(self.schedule_table):
                         item.setText(old_text)
                     self._apply_base_background(item, old_text)
@@ -2727,12 +2729,12 @@ class PlanStaffWidget(QWidget):
                     force_new_entry_start=force_flag
                 )
                 
-                # [RIGHT BOUNDARY CHECK] — Borde final del bloque editado
+                # [RIGHT BOUNDARY CHECK] â€” Borde final del bloque editado
                 end_result = self._resolve_force_new_entry_end(
                     badge, end_date_block, schedule_status
                 )
                 if end_result is None:
-                    # Usuario canceló → revertir
+                    # Usuario cancelÃ³ â†’ revertir
                     with QSignalBlocker(self.schedule_table):
                         item.setText(old_text)
                     self._apply_base_background(item, old_text)
@@ -2740,15 +2742,9 @@ class PlanStaffWidget(QWidget):
                 # 2. SIEMPRE consolidar (maneja JOIN y SEPARATE correctamente)
                 #    FIX: Antes solo se llamaba cuando end_result==1 (SEPARATE),
                 #    lo que dejaba "Unir (Mismo Viaje)" sin efecto real.
-                
-                # Recuperar config manual del diálogo (si existe)
-                manual_cfg = getattr(self, '_last_manual_exit_config', None)
-                self._last_manual_exit_config = None  # Consumir
-
                 self._consolidate_and_record_logistics(
                     badge, role, username,
-                    start_date_block, end_date_block, schedule_status,
-                    manual_split_config=manual_cfg
+                    start_date_block, end_date_block, schedule_status
                 )
 
                 if pickup or dropoff:
@@ -2798,12 +2794,12 @@ class PlanStaffWidget(QWidget):
                 self.refresh_ui_data()
                 return
 
-            # Finalización
+            # FinalizaciÃ³n
             self.check_excel_health()
             self.rotation_changed.emit()
 
         finally:
-            # 3. LIBERAR BANDERA (CRÍTICO)
+            # 3. LIBERAR BANDERA (CRÃTICO)
             self._is_handling_change = False
 
     # ---------- MODIFIED: hover card logic ----------
@@ -3306,18 +3302,10 @@ class PlanStaffWidget(QWidget):
                     else:
                         print(f"[SCD] Failed to update previous exit time: {msg}")
                         QMessageBox.warning(self, "Database Warning", f"Could not update previous trip exit time:\n{msg}")
-
-                    # Almacenar config para que el consolidador use la hora manual
-                    self._last_manual_exit_config = {
-                        'date': prev_day,
-                        'time': custom_exit_time
-                    }
                 except Exception as e:
                     print(f"[SCD] Error processing split: {e}")
-                    import traceback; traceback.print_exc()
             else:
                 print(f"[SCD] Skip exit time update (source={self.source}, prev={p_code})")
-                self._last_manual_exit_config = None
             
             return 1 # Force split flag
             
@@ -3409,13 +3397,6 @@ class PlanStaffWidget(QWidget):
             warn_lbl.setWordWrap(True)
             layout.addWidget(warn_lbl)
 
-            # FIX BUG 5: Label dinámico que refleja la hora seleccionada
-            selected_preview_lbl = QLabel()
-            selected_preview_lbl.setStyleSheet(
-                "color: #1B5E20; font-weight: bold; font-size: 12px; margin-top: 4px;"
-            )
-            layout.addWidget(selected_preview_lbl)
-
         layout.addSpacing(10)
 
         # B) Grupo de hora de salida (solo RGM + ON/ON NS)
@@ -3435,18 +3416,6 @@ class PlanStaffWidget(QWidget):
             time_edit.setDisplayFormat("HH:mm")
             time_edit.setStyleSheet("font-size: 13px; padding: 4px;")
             grp_layout.addWidget(time_edit)
-
-            # FIX BUG 5: Conectar cambio de hora a actualización visual
-            def _update_preview():
-                if selected_preview_lbl is not None:
-                    chosen = time_edit.time().toPyTime()
-                    chosen_dt = datetime.combine(end_date, chosen)
-                    selected_preview_lbl.setText(
-                        f"✅ Salida real seleccionada: {chosen_dt.strftime('%d/%m %H:%M')}"
-                    )
-            
-            time_edit.timeChanged.connect(lambda _: _update_preview())
-            _update_preview()  # Mostrar valor inicial
 
             layout.addWidget(grp_split)
             layout.addSpacing(10)
@@ -3524,6 +3493,8 @@ class PlanStaffWidget(QWidget):
                     own_conn.close()
 
             # --- Capturar la hora elegida para pasarla al caller ---
+            # Almacenamos en atributo temporal para que el flujo que llama
+            # pueda pasarlo a _consolidate_and_record_logistics
             self._last_manual_exit_config = None
             if ask_exit_time and time_edit is not None:
                 chosen_time = time_edit.time().toPyTime()
@@ -3547,7 +3518,7 @@ class PlanStaffWidget(QWidget):
         mark_error(self.entry_date_edit, False)
         mark_error(self.exit_date_edit, False)
 
-        # 2. Leer datos básicos del formulario
+        # 2. Leer datos bÃ¡sicos del formulario
         username = self.user_selector_combo.currentText()
         badge = self.badge_display.text()
         role = self.role_display.text()
@@ -3558,7 +3529,7 @@ class PlanStaffWidget(QWidget):
         dropoff = self.dropoff_combo.currentData() or None
         remark = self.remarks_input.text().strip() or None
 
-        # 3. Validaciones básicas
+        # 3. Validaciones bÃ¡sicas
         if not username or username == "-- Select a user --":
             mark_error(self.user_selector_combo, True)
             QMessageBox.warning(self, "Incomplete Data", "Please select an employee.")
@@ -3579,7 +3550,7 @@ class PlanStaffWidget(QWidget):
             )
             return
 
-        # 4. Interpretar selección del turno (Status/Shift)
+        # 4. Interpretar selecciÃ³n del turno (Status/Shift)
         sel = self.status_selector.currentData()
         if not sel or sel.get("kind") in ("none", "separator"):
             schedule_status = None
@@ -3593,13 +3564,13 @@ class PlanStaffWidget(QWidget):
             in_time_raw, out_time_raw = sel.get("in_time"), sel.get("out_time")
 
         # ---------------------------------------------------------------------
-        # 5. CÁLCULO DE FECHAS Y HORAS DE VIAJE (CORRECCIÓN PUNTUAL)
+        # 5. CÃLCULO DE FECHAS Y HORAS DE VIAJE (CORRECCIÃ“N PUNTUAL)
         # ---------------------------------------------------------------------
         entry_datetime = None
         exit_datetime = None
 
         if self.travel_dates_check.isChecked():
-            # OPCIÓN A: El usuario define fechas específicas manualmente
+            # OPCIÃ“N A: El usuario define fechas especÃ­ficas manualmente
             entry_date = self.entry_date_edit.date().toPyDate()
             entry_time = self.entry_time_edit.time().toPyTime()
             entry_datetime = datetime.combine(entry_date, entry_time)
@@ -3608,7 +3579,7 @@ class PlanStaffWidget(QWidget):
             exit_time = self.exit_time_edit.time().toPyTime()
             exit_datetime = datetime.combine(exit_date, exit_time)
 
-            # Validación lógica de viaje
+            # ValidaciÃ³n lÃ³gica de viaje
             if entry_datetime > exit_datetime:
                 mark_error(self.entry_date_edit, True)
                 mark_error(self.exit_date_edit, True)
@@ -3631,15 +3602,15 @@ class PlanStaffWidget(QWidget):
                     return
 
         elif schedule_status is not None:
-            # OPCIÓN B: Automático (Check desmarcado) -> Calcular Defaults
+            # OPCIÃ“N B: AutomÃ¡tico (Check desmarcado) -> Calcular Defaults
             # Se usa la fecha de inicio del periodo para Entry y fin para Exit.
-            # Se inyectan las horas según el tipo de turno o reglas de negocio.
+            # Se inyectan las horas segÃºn el tipo de turno o reglas de negocio.
 
             # Hora por defecto base (07:00 / 07:00) Para RGM
             t_in = datetime.strptime("07:00", "%H:%M").time()
             t_out = datetime.strptime("07:00", "%H:%M").time()
 
-            # Lógica de Horas
+            # LÃ³gica de Horas
             if in_time_raw and out_time_raw:
                 # Si el turno (custom) ya trae horas definidas en DB
                 try: 
@@ -3651,7 +3622,7 @@ class PlanStaffWidget(QWidget):
                 is_newmont = (self.source == "Newmont")
                 
                 if is_newmont:
-                    if schedule_status == "ON": # Día Newmont
+                    if schedule_status == "ON": # DÃ­a Newmont
                         t_in = datetime.strptime("06:00", "%H:%M").time()
                         t_out = datetime.strptime("12:00", "%H:%M").time()
                     elif schedule_status == "ON NS": # Noche Newmont
@@ -3667,9 +3638,9 @@ class PlanStaffWidget(QWidget):
             # --- INICIO DEL CAMBIO 1+D ---
             
             # 1. Calculamos la fecha de salida real
-            # Si es RGM y es ON/ON NS -> Salida es Mañana (end_date + 1)
+            # Si es RGM y es ON/ON NS -> Salida es MaÃ±ana (end_date + 1)
             # Si es RGM y es Otro (Capacitacion) -> Salida es Hoy (end_date)
-            # El método _calculate_rgm_exit_date encapsula esta lógica para no repetir if/else aquí.
+            # El mÃ©todo _calculate_rgm_exit_date encapsula esta lÃ³gica para no repetir if/else aquÃ­.
             real_exit_date = self._calculate_rgm_exit_date(schedule_status, end_date)
 
             # 2. Combinamos con las horas (t_in / t_out) que ya calculaste arriba
@@ -3679,10 +3650,10 @@ class PlanStaffWidget(QWidget):
             # --- FIN DEL CAMBIO 1+D ---
 
         # ---------------------------------------------------------------------
-        # FIN DE LA CORRECCIÓN
+        # FIN DE LA CORRECCIÃ“N
         # ---------------------------------------------------------------------
 
-        # 6. Detección de Conflictos (Overwrite check)
+        # 6. DetecciÃ³n de Conflictos (Overwrite check)
         conflicts_excel = excel.find_conflicts(
             self.excel_file, username, badge, start_date, end_date
         )
@@ -3700,7 +3671,7 @@ class PlanStaffWidget(QWidget):
             if box.clickedButton() != accept_btn:
                 return
 
-        # Para auditoría
+        # Para auditorÃ­a
         prev_map = db.get_schedule_map_for_range(
             badge, start_date, end_date, self.source
         )
@@ -3762,7 +3733,7 @@ class PlanStaffWidget(QWidget):
 
         # 7. Guardar en BD (SSoT)
         if schedule_status is not None:
-            # Aquí es donde se guardan los datetimes calculados (entry_datetime/exit_datetime)
+            # AquÃ­ es donde se guardan los datetimes calculados (entry_datetime/exit_datetime)
             db.delete_operations_in_range(badge, start_date, end_date)
             db.add_operation(
                 username=username,
@@ -3771,8 +3742,8 @@ class PlanStaffWidget(QWidget):
                 start_date=start_date,
                 end_date=end_date,
                 created_by=self.logged_username,
-                entry_date=entry_datetime,  # Ahora siempre tendrá valor si hay turno
-                exit_date=exit_datetime,  # Ahora siempre tendrá valor si hay turno
+                entry_date=entry_datetime,  # Ahora siempre tendrÃ¡ valor si hay turno
+                exit_date=exit_datetime,  # Ahora siempre tendrÃ¡ valor si hay turno
             )
             db.upsert_schedule_range(
                 badge,
@@ -3794,13 +3765,9 @@ class PlanStaffWidget(QWidget):
                 print("[SCD-END] User cancelled right boundary. Aborting.")
                 return
             if end_result == 1:
-                manual_cfg = getattr(self, '_last_manual_exit_config', None)
-                self._last_manual_exit_config = None
-
                 self._consolidate_and_record_logistics(
                     badge, role, username,
-                    start_date, end_date, schedule_status,
-                    manual_split_config=manual_cfg
+                    start_date, end_date, schedule_status
                 )
         else:  # Limpiar rango ("Do Not Mark Days")
             db.clear_schedule_range(badge, start_date, end_date, self.source)
@@ -3817,7 +3784,7 @@ class PlanStaffWidget(QWidget):
             elif sel.get("status") == "OFF":
                 is_off_day_guard = True
         else:
-            # Si no hay selección (sel is None), asumimos que no se marca (OFF-like)
+            # Si no hay selecciÃ³n (sel is None), asumimos que no se marca (OFF-like)
             is_off_day_guard = True
 
         if is_off_day_guard:
@@ -3825,7 +3792,7 @@ class PlanStaffWidget(QWidget):
             dropoff = None
 
 
-        # Guardar ubicación si aplica
+        # Guardar ubicaciÃ³n si aplica
         if pickup or dropoff:
             db.assign_user_location_range(badge, start_date, end_date, pickup, dropoff)
             db.log_event(
@@ -3852,7 +3819,7 @@ class PlanStaffWidget(QWidget):
         )
         QTimer.singleShot(2000, lambda: setattr(self, "_is_internal_update", False))
 
-        # 9. Auditoría y Finalización
+        # 9. AuditorÃ­a y FinalizaciÃ³n
         new_map = db.get_schedule_map_for_range(
             badge, start_date, end_date, self.source
         )
@@ -4346,10 +4313,8 @@ class PlanStaffWidget(QWidget):
                         self._consolidate_and_record_logistics(
                             badge, role, username, 
                             target_date, target_date, raw_text,
-                            cursor=cursor,
-                            manual_split_config=getattr(self, '_last_manual_exit_config', None)
+                            cursor=cursor
                         )
-                        self._last_manual_exit_config = None  # Consumir
 
                         # --- Actualización Visual ---
                         item = self.schedule_table.item(abs_row, abs_col)
@@ -4391,15 +4356,12 @@ class PlanStaffWidget(QWidget):
                         cursor.execute("ROLLBACK")
                         return
                     if end_result == 1:
-                        # Recuperar config manual del diálogo
-                        manual_cfg = getattr(self, '_last_manual_exit_config', None)
-                        self._last_manual_exit_config = None  # Consumir
-
+                        # force_new_entry ya fue seteado dentro de _resolve_force_new_entry_end.
+                        # Re-consolidar para que la operación recoja el nuevo boundary.
                         self._consolidate_and_record_logistics(
                             b_badge, b_role, b_username,
                             b_end_date, b_end_date, b_end_status,
-                            cursor=cursor,
-                            manual_split_config=manual_cfg
+                            cursor=cursor
                         )
 
                 
