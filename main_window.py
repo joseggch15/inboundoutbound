@@ -4,8 +4,8 @@
 #  - REQ-002 (auto-center today in Schedule Preview)
 #  - REQ-003 (date headers with weekday)
 #  - Locations module (CRUD) and dropdowns for Pick Up / Drop Off in the register form
-#  - Restores the blue “Save Changes to DB Excel” button (centered action bar)
-#  - Hides the “User Pick Up / Drop Off (inline, saves immediately)” panel
+#  - Restores the blue “Save Changes to DB Excelâ€ button (centered action bar)
+#  - Hides the “User Pick Up / Drop Off (inline, saves immediately)â€ panel
 #  - Minor UX refinements (responsive form layout, headers alignment)
 #
 # UI content is in English end-to-end.
@@ -2621,7 +2621,7 @@ class PlanStaffWidget(QWidget):
                 initial=initial,
             )
 
-            # --- AQUÃ OCURRÃA EL DOBLE TRIGGER ---
+            # --- AQUÃƒÂ OCURRÃƒÂA EL DOBLE TRIGGER ---
             # Al ejecutarse editor.exec(), se pierde foco, se dispara itemChanged de nuevo.
             # Pero como _is_handling_change es True, la segunda llamada entra al 'if' inicial y retorna.
             if editor.exec() != QDialog.DialogCode.Accepted:
@@ -2751,7 +2751,7 @@ class PlanStaffWidget(QWidget):
                     force_new_entry_start=force_flag
                 )
                 
-                # [RIGHT BOUNDARY CHECK] â€” Borde final del bloque editado
+                # [RIGHT BOUNDARY CHECK] Ã¢â‚¬â€ Borde final del bloque editado
                 end_result = self._resolve_force_new_entry_end(
                     badge, end_date_block, schedule_status
                 )
@@ -2826,7 +2826,7 @@ class PlanStaffWidget(QWidget):
             self.rotation_changed.emit()
 
         finally:
-            # 3. LIBERAR BANDERA (CRÃTICO)
+            # 3. LIBERAR BANDERA (CRÃƒÂTICO)
             self._is_handling_change = False
 
     # ---------- MODIFIED: hover card logic ----------
@@ -5196,6 +5196,17 @@ class ShiftTypeAdminWidget(QWidget):
         )
         form_layout.addWidget(QLabel("Behavior:"), 5, 0)
         form_layout.addWidget(self.is_off_check, 5, 1)
+
+        # --- NUEVO: Checkbox 'No Transport Required' ---
+        self.no_transport_check = QCheckBox("No Transport Required (working, but off-site)")
+        self.no_transport_check.setToolTip(
+            "Check this if the person is WORKING but does NOT need site transport.\n"
+            "Example: Office day, Local Training, Fusecon Office.\n"
+            "Will NOT appear in Inbound/Outbound reports.\n"
+            "Will NOT extend the Onsite Stay period.\n"
+            "Person is still considered active/working in the system."
+        )
+        form_layout.addWidget(self.no_transport_check, 6, 1)
         # --------------------------------------
 
         actions = QHBoxLayout()
@@ -5203,8 +5214,8 @@ class ShiftTypeAdminWidget(QWidget):
         actions.addWidget(self.save_btn)
         actions.addWidget(self.delete_btn)
         
-        # NOTA: Cambiamos el row de 5 a 6 para hacer espacio
-        form_layout.addLayout(actions, 6, 0, 1, 2)
+        # NOTA: Row 7 para dejar espacio al nuevo checkbox no_transport (row 6)
+        form_layout.addLayout(actions, 7, 0, 1, 2)
 
         form_group = create_group_box("Shift Type", form_layout)
         form_group.setFixedWidth(420)
@@ -5254,7 +5265,10 @@ class ShiftTypeAdminWidget(QWidget):
         layout.addWidget(form_group)
         layout.addWidget(table_group)
         # --- MODIFICACIÓN: Conectar Checkbox a la visibilidad ---
+        # Conectar checkboxes: visibilidad de tiempos + exclusividad mutua
         self.is_off_check.toggled.connect(self.toggle_time_inputs)
+        self.is_off_check.toggled.connect(self._on_is_off_toggled)
+        self.no_transport_check.toggled.connect(self._on_no_transport_toggled)
         self.reset_filters()
 
     def _request_refresh(self):
@@ -5292,7 +5306,28 @@ class ShiftTypeAdminWidget(QWidget):
             if self.in_time_edit.time().toString("HH:mm") == "00:00":
                 self.in_time_edit.setTime(QTime(8, 0))
                 self.out_time_edit.setTime(QTime(17, 0))
-    
+
+    def _on_is_off_toggled(self, checked: bool):
+        """
+        Exclusividad mutua: si se marca 'Treat as OFF', desmarcar 'No Transport'.
+        Un turno no puede ser OFF y No-Transport al mismo tiempo.
+        """
+        if checked and self.no_transport_check.isChecked():
+            with QSignalBlocker(self.no_transport_check):
+                self.no_transport_check.setChecked(False)
+
+    def _on_no_transport_toggled(self, checked: bool):
+        """
+        Exclusividad mutua: si se marca 'No Transport', desmarcar 'Treat as OFF'.
+        Además, con no_transport los campos de horario SÍ son visibles
+        (la persona trabaja, solo que no necesita transporte al site).
+        """
+        if checked and self.is_off_check.isChecked():
+            with QSignalBlocker(self.is_off_check):
+                self.is_off_check.setChecked(False)
+            # Asegurar que los tiempos sean visibles (trabaja)
+            self.toggle_time_inputs(False)
+
     def pick_color(self):
         color = QColorDialog.getColor(
             QColor(self.color_display.text() or "#FFC000"), self, "Pick a Color"
@@ -5318,19 +5353,23 @@ class ShiftTypeAdminWidget(QWidget):
         self.out_time_edit.setTime(QTime.fromString(out_time, "HH:mm"))
         self.current_old_code = code
 
-        # --- NUEVO: Cargar estado 'is_off' desde la BD ---
-        # Obtenemos todos los tipos para buscar el atributo 'is_off' del actual
+        # --- Cargar flags 'is_off' y 'no_transport' desde la BD ---
+        # QSignalBlocker evita disparar exclusividad mutua mientras seteamos ambos valores.
         all_types = db.get_shift_types(self.source)
         record = next((t for t in all_types if t['id'] == self.current_type_id), None)
         
         if record:
-            # Convertimos 1/0 a True/False
-            val = bool(record.get('is_off', 0))
-            self.is_off_check.setChecked(val)
+            is_off_val = bool(record.get('is_off', 0))
+            no_transport_val = bool(record.get('no_transport', 0))
+            with QSignalBlocker(self.is_off_check), QSignalBlocker(self.no_transport_check):
+                self.is_off_check.setChecked(is_off_val)
+                self.no_transport_check.setChecked(no_transport_val)
         else:
-            self.is_off_check.setChecked(False)
+            with QSignalBlocker(self.is_off_check), QSignalBlocker(self.no_transport_check):
+                self.is_off_check.setChecked(False)
+                self.no_transport_check.setChecked(False)
             
-        # --- MODIFICACIÓN: Forzar actualización visual ---
+        # Forzar actualización visual de los campos de tiempo
         self.toggle_time_inputs(self.is_off_check.isChecked())
 
     def clear_form(self):
@@ -5342,11 +5381,13 @@ class ShiftTypeAdminWidget(QWidget):
         self.in_time_edit.setTime(QTime(8, 0))
         self.out_time_edit.setTime(QTime(17, 0))
         
-       # --- NUEVO ---
-        self.is_off_check.setChecked(False) 
+        # Resetear ambos flags sin disparar señales de exclusividad
+        with QSignalBlocker(self.is_off_check), QSignalBlocker(self.no_transport_check):
+            self.is_off_check.setChecked(False)
+            self.no_transport_check.setChecked(False)
         
-        # --- MODIFICACIÓN: Asegurar que los tiempos sean visibles al limpiar ---
-        self.toggle_time_inputs(False) 
+        # Asegurar que los tiempos sean visibles al limpiar
+        self.toggle_time_inputs(False)
         
         self.types_table.clearSelection()
 
@@ -5357,8 +5398,9 @@ class ShiftTypeAdminWidget(QWidget):
         in_time = self.in_time_edit.time().toString("HH:mm")
         out_time = self.out_time_edit.time().toString("HH:mm")
         
-        # --- NUEVO: Leer valor del checkbox ---
+        # Leer ambos flags del formulario
         is_off_val = self.is_off_check.isChecked()
+        no_transport_val = self.no_transport_check.isChecked()
 
         if not name or not code:
             box = QMessageBox(self)
@@ -5379,7 +5421,8 @@ class ShiftTypeAdminWidget(QWidget):
                 color_hex,
                 in_time,
                 out_time,
-                is_off=is_off_val  # <--- Pasamos el nuevo parámetro
+                is_off=is_off_val,
+                no_transport=no_transport_val,
             )
             if ok:
                 if old_code and new_code and old_code != new_code:
@@ -5390,7 +5433,7 @@ class ShiftTypeAdminWidget(QWidget):
                     self.logged_username,
                     self.source,
                     "SHIFT_TYPE_UPDATE",
-                    f"{old_code} -> {new_code} | Off={is_off_val}"
+                    f"{old_code} -> {new_code} | Off={is_off_val} | NoTransport={no_transport_val}"
                 )
                 self.types_changed.emit(self.source)
             
@@ -5403,15 +5446,16 @@ class ShiftTypeAdminWidget(QWidget):
         else:
             # CREAR
             ok, msg = db.create_shift_type(
-                self.source, name, code, color_hex, in_time, out_time, 
-                is_off=is_off_val # <--- Pasamos el nuevo parámetro
+                self.source, name, code, color_hex, in_time, out_time,
+                is_off=is_off_val,
+                no_transport=no_transport_val,
             )
             if ok:
                 db.log_event(
                     self.logged_username,
                     self.source,
                     "SHIFT_TYPE_CREATE",
-                    f"{code} | Off={is_off_val}"
+                    f"{code} | Off={is_off_val} | NoTransport={no_transport_val}"
                 )
                 self.types_changed.emit(self.source)
             
@@ -5816,7 +5860,7 @@ class MainWindow(QMainWindow):
         )
 
         self.setWindowTitle(
-            f"👨‍✈️ Operations Manager - Profile: {self.user_role} | User: {self.logged_username}"
+            f"👨â€✈️ Operations Manager - Profile: {self.user_role} | User: {self.logged_username}"
         )
         self.setGeometry(100, 100, 1200, 800)
 
@@ -5868,7 +5912,7 @@ class MainWindow(QMainWindow):
         # 2) Rotation History (new tab, no ID column)
         self.rotation_widget = RotationHistoryWidget(
             created_by=self.logged_username
-        )  # ← NUEVO: solo mis registros
+        )  # â† NUEVO: solo mis registros
         tabs.addTab(self.rotation_widget, "🔁 Rotation History")
         # Refresh rotation history whenever plan saves a rotation
         self.plan_widget.rotation_changed.connect(self.rotation_widget.refresh_data)
