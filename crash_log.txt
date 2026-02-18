@@ -1,5 +1,5 @@
 Traceback (most recent call last):
-  File "e:\1+D CRUD\inboundoutbound\main_window.py", line 2605, in _on_schedule_cell_changed
-    self._safe_revert_item(item, old_text)
-    ^^^^^^^^^^^^^^^^^^^^^^
-AttributeError: 'PlanStaffWidget' object has no attribute '_safe_revert_item'
+  File "e:\1+D CRUD\inboundoutbound\main_window.py", line 5505, in save_type
+    ok, msg = db.create_shift_type(
+              ^^^^^^^^^^^^^^^^^^^^^
+TypeError: create_shift_type() got an unexpected keyword argument 'apply_1d'

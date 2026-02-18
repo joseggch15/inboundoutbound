@@ -194,6 +194,9 @@ def setup_database():
     # Migración: columna para turnos laborales que no generan transporte ni estadía
     try: cursor.execute("ALTER TABLE shift_types ADD COLUMN no_transport INTEGER DEFAULT 0")
     except sqlite3.OperationalError: pass
+    # Migración: columna para turnos con lógica 1+D (salida = end_date + 1)
+    try: cursor.execute("ALTER TABLE shift_types ADD COLUMN apply_1d INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
 
     # 10. Report Settings
     cursor.execute("""
@@ -1413,7 +1416,7 @@ def get_shift_types(source: str) -> List[Dict]:
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, source, name, code, color_hex, in_time, out_time, is_off, no_transport "
+        "SELECT id, source, name, code, color_hex, in_time, out_time, is_off, no_transport, apply_1d "
         "FROM shift_types WHERE source = ? ORDER BY name",
         (source,),
     )
@@ -1466,6 +1469,8 @@ def get_shift_type_map(source: str) -> Dict[str, Dict]:
             "is_off": bool(t.get("is_off", 0)),
             # True = la persona trabaja pero no necesita transporte al site
             "no_transport": bool(t.get("no_transport", 0)),
+            # True = la salida se calcula como end_date + 1 (regla 1+D)
+            "apply_1d": bool(t.get("apply_1d", 0)),
         }
         for t in types
     }
@@ -1474,13 +1479,13 @@ def get_shift_type_map(source: str) -> Dict[str, Dict]:
 # ACTUALIZAR create_shift_type
 def create_shift_type(
     source: str, name: str, code: str, color_hex: str, in_time: str, out_time: str,
-    is_off: bool = False, no_transport: bool = False
+    is_off: bool = False, no_transport: bool = False, apply_1d: bool = False
 ) -> Tuple[bool, str]:
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     try:
         cur.execute(
-            "INSERT INTO shift_types (source, name, code, color_hex, in_time, out_time, is_off, no_transport) VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO shift_types (source, name, code, color_hex, in_time, out_time, is_off, no_transport, apply_1d) VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 source,
                 name.strip(),
@@ -1490,6 +1495,7 @@ def create_shift_type(
                 out_time.strip(),
                 1 if is_off else 0,
                 1 if no_transport else 0,
+                1 if apply_1d else 0,
             ),
         )
         conn.commit()
@@ -1512,6 +1518,7 @@ def update_shift_type(
     out_time: str,
     is_off: bool,
     no_transport: bool = False,
+    apply_1d: bool = False,
 ) -> Tuple[bool, str, Optional[str], Optional[str]]:
     """
     Actualiza un tipo de turno. Si el cÃƒÂ³digo cambia, actualiza TODAS las asignaciones en schedules
@@ -1555,7 +1562,7 @@ def update_shift_type(
 
         # Update shift_types
         cur.execute(
-            "UPDATE shift_types SET name=?, code=?, color_hex=?, in_time=?, out_time=?, is_off=?, no_transport=? WHERE id=? AND source=?",
+            "UPDATE shift_types SET name=?, code=?, color_hex=?, in_time=?, out_time=?, is_off=?, no_transport=?, apply_1d=? WHERE id=? AND source=?",
             (
                 name.strip(),
                 new_code,
@@ -1564,6 +1571,7 @@ def update_shift_type(
                 out_time.strip(),
                 1 if is_off else 0,
                 1 if no_transport else 0,
+                1 if apply_1d else 0,
                 type_id,
                 source,
             ),
