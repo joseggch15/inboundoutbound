@@ -1,4 +1,4 @@
-# Basado y extendido a partir del mÃƒÂ³dulo original. Referencia: :contentReference[oaicite:0]{index=0}
+# Basado y extendido a partir del mÃƒÆ’Ã‚Â³dulo original. Referencia: :contentReference[oaicite:0]{index=0}
 import sqlite3
 import json
 from datetime import date, timedelta, datetime
@@ -44,7 +44,7 @@ def setup_database():
             UNIQUE (source, name)
         )""")
     
-    # MigraciÃ³n automÃ¡tica de roles existentes en usuarios
+    # MigraciÃƒÂ³n automÃƒÂ¡tica de roles existentes en usuarios
     try:
         cursor.execute(
             "INSERT OR IGNORE INTO roles (source, name) "
@@ -65,7 +65,7 @@ def setup_database():
         )""")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_registry_source ON file_registry(source)")
 
-    # 4. Tabla Locations (Corregida y consolidada aquÃ­)
+    # 4. Tabla Locations (Corregida y consolidada aquÃƒÂ­)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS location (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,7 +74,7 @@ def setup_database():
             UNIQUE (source, pickup_location)
         )""")
     
-    # MigraciÃ³n de esquema antiguo de location
+    # MigraciÃƒÂ³n de esquema antiguo de location
     try:
         cols = [r[1] for r in cursor.execute("PRAGMA table_info(location)").fetchall()]
         if "source" not in cols:
@@ -191,11 +191,14 @@ def setup_database():
         )""")
     try: cursor.execute("ALTER TABLE shift_types ADD COLUMN is_off INTEGER DEFAULT 0")
     except sqlite3.OperationalError: pass
-    # Migración: columna para turnos laborales que no generan transporte ni estadía
+    # MigraciÃ³n: columna para turnos laborales que no generan transporte ni estadÃ­a
     try: cursor.execute("ALTER TABLE shift_types ADD COLUMN no_transport INTEGER DEFAULT 0")
     except sqlite3.OperationalError: pass
-    # Migración: columna para turnos con lógica 1+D (salida = end_date + 1)
+    # MigraciÃ³n: columna para turnos con lÃ³gica 1+D (salida = end_date + 1)
     try: cursor.execute("ALTER TABLE shift_types ADD COLUMN apply_1d INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
+    # Migracion: columna para tipos de sistema (ON, ON NS, OFF)
+    try: cursor.execute("ALTER TABLE shift_types ADD COLUMN is_system INTEGER DEFAULT 0")
     except sqlite3.OperationalError: pass
 
     # 10. Report Settings
@@ -213,6 +216,10 @@ def setup_database():
 
     conn.commit()
     conn.close()
+
+    # Sembrar System Shift Types (ON, ON NS, OFF) para cada source
+    for _src in ("RGM", "Newmont"):
+        ensure_system_shift_types(_src)
 # --- Add these new CRUD functions at the end of database_logic.py ---
 
 def get_roles(source: Optional[str] = None) -> List[Dict]:
@@ -321,7 +328,7 @@ def delete_role(role_id: int, source: str) -> Tuple[bool, str]:
     
     
 
-    # --- MigraciÃƒÂ³n desde esquema antiguo (sin 'source') ---
+    # --- MigraciÃƒÆ’Ã‚Â³n desde esquema antiguo (sin 'source') ---
     try:
         cols = [r[1] for r in cursor.execute("PRAGMA table_info(location)").fetchall()]
         # Si encontramos una tabla 'location' sin 'source', la migramos:
@@ -337,20 +344,20 @@ def delete_role(role_id: int, source: str) -> Tuple[bool, str]:
                 )
                 """
             )
-            # Duplicamos el catÃƒÂ¡logo previo para ambas empresas para no perder nada:
+            # Duplicamos el catÃƒÆ’Ã‚Â¡logo previo para ambas empresas para no perder nada:
             cursor.execute("INSERT INTO location (source, pickup_location) SELECT 'RGM', pickup_location FROM location_old")
             cursor.execute("INSERT OR IGNORE INTO location (source, pickup_location) SELECT 'Newmont', pickup_location FROM location_old")
             cursor.execute("DROP TABLE location_old")
     except sqlite3.OperationalError:
         pass
 
-    # ÃƒÂndices ÃƒÂºtiles
+    # ÃƒÆ’Ã‚Ândices ÃƒÆ’Ã‚Âºtiles
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_location_source ON location(source)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_location_src_name ON location(source, pickup_location)")
 
 
     # -------------------------
-    # AsignaciÃƒÂ³n de ubicaciones por usuario y rango
+    # AsignaciÃƒÆ’Ã‚Â³n de ubicaciones por usuario y rango
     # -------------------------
     cursor.execute(
         """
@@ -377,7 +384,7 @@ def delete_role(role_id: int, source: str) -> Tuple[bool, str]:
     except sqlite3.OperationalError:
         pass
 
-    # ÃƒÂndices ÃƒÂºtiles
+    # ÃƒÆ’Ã‚Ândices ÃƒÆ’Ã‚Âºtiles
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ul_badge ON user_locations(badge)")
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_ul_range ON user_locations(start_date, end_date)"
@@ -417,7 +424,7 @@ def delete_role(role_id: int, source: str) -> Tuple[bool, str]:
 
 
     # -------------------------
-    # schedules (estado dÃƒÂ­a a dÃƒÂ­a)
+    # schedules (estado dÃƒÆ’Ã‚Â­a a dÃƒÆ’Ã‚Â­a)
     # -------------------------
     cursor.execute(
         """
@@ -435,7 +442,7 @@ def delete_role(role_id: int, source: str) -> Tuple[bool, str]:
         )"""
     )
 
-    # --- migraciÃƒÂ³n blanda: agregar columnas si faltan (SQLite acepta ADD COLUMN mÃƒÂºltiples veces con try/except) ---
+    # --- migraciÃƒÆ’Ã‚Â³n blanda: agregar columnas si faltan (SQLite acepta ADD COLUMN mÃƒÆ’Ã‚Âºltiples veces con try/except) ---
     try:
         cursor.execute("ALTER TABLE schedules ADD COLUMN in_time TEXT")
     except sqlite3.OperationalError:
@@ -456,7 +463,7 @@ def delete_role(role_id: int, source: str) -> Tuple[bool, str]:
         """
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,              -- quien realizÃƒÂ³ la acciÃƒÂ³n
+            username TEXT NOT NULL,              -- quien realizÃƒÆ’Ã‚Â³ la acciÃƒÆ’Ã‚Â³n
             source TEXT NOT NULL,                -- RGM | Newmont | Administrator
             action_type TEXT NOT NULL,           -- USER_LOGIN | SHIFT_MODIFICATION | DATA_EXPORT | DATA_IMPORT | SHIFT_TYPE_* ...
             detail TEXT,
@@ -471,9 +478,9 @@ def delete_role(role_id: int, source: str) -> Tuple[bool, str]:
         """
         CREATE TABLE IF NOT EXISTS shift_types (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT NOT NULL,                -- RGM | Newmont (ÃƒÂ¡mbito del tipo)
-            name TEXT NOT NULL,                  -- ÃƒÂºnico por source
-            code TEXT NOT NULL,                  -- ÃƒÂºnico por source (p.ej. 'SOP')
+            source TEXT NOT NULL,                -- RGM | Newmont (ÃƒÆ’Ã‚Â¡mbito del tipo)
+            name TEXT NOT NULL,                  -- ÃƒÆ’Ã‚Âºnico por source
+            code TEXT NOT NULL,                  -- ÃƒÆ’Ã‚Âºnico por source (p.ej. 'SOP')
             color_hex TEXT NOT NULL,             -- '#RRGGBB'
             in_time TEXT NOT NULL,               -- 'HH:MM' 24h
             out_time TEXT NOT NULL,
@@ -485,7 +492,7 @@ def delete_role(role_id: int, source: str) -> Tuple[bool, str]:
     
     try:
         cursor.execute("ALTER TABLE shift_types ADD COLUMN is_off INTEGER DEFAULT 0")
-        print("MigraciÃƒÂ³n: Columna 'is_off' agregada a 'shift_types'.")
+        print("MigraciÃƒÆ’Ã‚Â³n: Columna 'is_off' agregada a 'shift_types'.")
     except sqlite3.OperationalError:
         pass # La columna ya existe
 
@@ -509,7 +516,7 @@ def delete_role(role_id: int, source: str) -> Tuple[bool, str]:
             raise e
 
 
-    # Indexes ÃƒÂºtiles
+    # Indexes ÃƒÆ’Ã‚Âºtiles
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_source ON users(source)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_schedules_source ON schedules(source)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_schedules_badge ON schedules(badge)")
@@ -787,7 +794,7 @@ def delete_user(user_id: int) -> Tuple[bool, str]:
         conn.close()
 
 # -------------------------
-# Locations (CRUD) Ã¢â‚¬â€ con ÃƒÂ¡mbito por 'source'
+# Locations (CRUD) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â con ÃƒÆ’Ã‚Â¡mbito por 'source'
 # -------------------------
 def get_locations(source: Optional[str] = None) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
@@ -858,7 +865,7 @@ def update_location(loc_id: int, pickup_location: str, source: str) -> Tuple[boo
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     try:
-        # Solo actualiza si el registro pertenece al 'source' (seguridad por ÃƒÂ¡mbito)
+        # Solo actualiza si el registro pertenece al 'source' (seguridad por ÃƒÆ’Ã‚Â¡mbito)
         cur.execute("UPDATE location SET pickup_location=? WHERE id=? AND source=?", (pickup_location, loc_id, source))
         conn.commit()
         if cur.rowcount:
@@ -900,7 +907,7 @@ def delete_location(loc_id: int, source: str) -> Tuple[bool, str]:
     finally:
         conn.close()
 
-# --- Variantes para Administrador (pueden cambiar 'source' o operar sin ÃƒÂ¡mbito) ---
+# --- Variantes para Administrador (pueden cambiar 'source' o operar sin ÃƒÆ’Ã‚Â¡mbito) ---
 def update_location_admin(loc_id: int, pickup_location: str, new_source: str) -> Tuple[bool, str]:
     pickup_location = (pickup_location or "").strip()
     if not pickup_location:
@@ -954,7 +961,7 @@ def delete_location_admin(loc_id: int) -> Tuple[bool, str]:
 def assign_user_location_range(badge: str, start_date: date, end_date: date,
                                pickup: Optional[str], dropoff: Optional[str],
                                is_default: int = 0) -> None:
-    """Inserta una asignaciÃƒÂ³n de pickup/dropoff para un rango de fechas."""
+    """Inserta una asignaciÃƒÆ’Ã‚Â³n de pickup/dropoff para un rango de fechas."""
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     cur.execute(
@@ -976,7 +983,7 @@ def get_users_with_defaults(source: str) -> list:
     cursor = conn.cursor()
     
     # Realizamos un LEFT JOIN con user_locations filtrando por is_default=1
-    # Esto nos da el usuario Y su configuraciÃƒÂ³n por defecto en una sola fila.
+    # Esto nos da el usuario Y su configuraciÃƒÆ’Ã‚Â³n por defecto en una sola fila.
     query = """
         SELECT 
             u.id, u.name, u.role, u.badge,
@@ -1012,13 +1019,13 @@ def set_user_default_locations(badge: str, pickup: Optional[str], dropoff: Optio
     conn.close()
 
 def get_user_location_for_date(badge: str, d: date) -> Tuple[Optional[str], Optional[str]]:
-    """Busca primero una asignaciÃƒÂ³n de rango que cubra la fecha; si no existe, cae al default."""
+    """Busca primero una asignaciÃƒÆ’Ã‚Â³n de rango que cubra la fecha; si no existe, cae al default."""
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     iso = d.isoformat()
 
-    # rango especÃƒÂ­fico
+    # rango especÃƒÆ’Ã‚Â­fico
     cur.execute(
         "SELECT pickup_location, dropoff_location FROM user_locations "
         "WHERE badge=? AND is_default=0 AND start_date<=? AND end_date>=? "
@@ -1107,12 +1114,12 @@ def add_operation(
             cursor.connection.close()
 
 
-# EN database_logic.py (Agregar al final o en la secciÃ³n de Operations)
+# EN database_logic.py (Agregar al final o en la secciÃƒÂ³n de Operations)
 
 def update_operation_exit_time_by_date(badge: str, target_date: date, new_exit_time: datetime.time, cursor=None):
     """
-    Actualiza la hora de salida (exit_date) de la operaciÃ³n que cubre 'target_date'.
-    Se usa cuando se rompe un imÃ¡n (Separar Viaje) para definir la hora real de salida del viaje previo.
+    Actualiza la hora de salida (exit_date) de la operaciÃƒÂ³n que cubre 'target_date'.
+    Se usa cuando se rompe un imÃƒÂ¡n (Separar Viaje) para definir la hora real de salida del viaje previo.
     Soporta cursor externo para uso dentro de transacciones activas (ej: paste).
     """
     should_close = False
@@ -1124,7 +1131,7 @@ def update_operation_exit_time_by_date(badge: str, target_date: date, new_exit_t
     try:
         iso_date = target_date.isoformat()
         
-        # 1. Buscar la operaciÃ³n activa en esa fecha
+        # 1. Buscar la operaciÃƒÂ³n activa en esa fecha
         cursor.execute(
             "SELECT id, exit_date FROM operations "
             "WHERE badge = ? AND start_date <= ? AND end_date >= ? "
@@ -1186,7 +1193,7 @@ def upsert_schedule_day(
         should_close = True
 
     try:
-        # UPDATE first â€” COALESCE(?, force_new_entry) preserva si fne_db es None
+        # UPDATE first Ã¢â‚¬â€ COALESCE(?, force_new_entry) preserva si fne_db es None
         cursor.execute(
             "UPDATE schedules SET status = ?, shift_type = ?, in_time = ?, out_time = ?, remark = ?, "
             "    force_new_entry = COALESCE(?, force_new_entry) "
@@ -1229,7 +1236,7 @@ def upsert_schedule_range(
 ) -> int:
     """
     Marca por rango [start_d, end_d]. Devuelve cuantos dias se escribieron.
-    CORREGIDO: PropagaciÃ³n correcta de force_new_entry para limpiar residuos.
+    CORREGIDO: PropagaciÃƒÂ³n correcta de force_new_entry para limpiar residuos.
     """
     total = 0
     d = start_d
@@ -1244,17 +1251,17 @@ def upsert_schedule_range(
 
     try:
         while d <= end_d:
-            # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-            # CORRECCIÃ“N: LÃ³gica estricta para Unir/Separar
-            # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            # Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+            # CORRECCIÃƒâ€œN: LÃƒÂ³gica estricta para Unir/Separar
+            # Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
             if force_new_entry_start is None:
-                # No se pidiÃ³ cambio explÃ­cito â†’ preservar lo que haya en DB (None)
+                # No se pidiÃƒÂ³ cambio explÃƒÂ­cito Ã¢â€ â€™ preservar lo que haya en DB (None)
                 fne = None
             elif force_new_entry_start == 0:
-                # "Unir" â†’ limpiar forzosamente TODOS los dÃ­as del rango a 0
+                # "Unir" Ã¢â€ â€™ limpiar forzosamente TODOS los dÃƒÂ­as del rango a 0
                 fne = 0
             else:
-                # "Separar" (1) â†’ marcar solo el primer dÃ­a como 1, limpiar el resto a 0
+                # "Separar" (1) Ã¢â€ â€™ marcar solo el primer dÃƒÂ­a como 1, limpiar el resto a 0
                 fne = 1 if d == start_d else 0
 
             # Pass the cursor to the day function
@@ -1282,7 +1289,7 @@ def upsert_schedule_range(
 
 
 def clear_schedule_range(badge: str, start_d: date, end_d: date, source: str) -> int:
-    """Elimina (limpia) estado dÃƒÂ­a-a-dÃƒÂ­a en rango."""
+    """Elimina (limpia) estado dÃƒÆ’Ã‚Â­a-a-dÃƒÆ’Ã‚Â­a en rango."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
@@ -1430,7 +1437,7 @@ def get_shift_types_filtered(source: str, text: Optional[str], in_from: Optional
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    query = "SELECT id, source, name, code, color_hex, in_time, out_time FROM shift_types st WHERE source = ?"
+    query = "SELECT id, source, name, code, color_hex, in_time, out_time, COALESCE(is_system,0) AS is_system FROM shift_types st WHERE source = ?"
     params: List = [source]
 
     if text:
@@ -1457,7 +1464,7 @@ def get_shift_types_filtered(source: str, text: Optional[str], in_from: Optional
 def get_shift_type_map(source: str) -> Dict[str, Dict]:
     """
     Retorna un diccionario mapeando CODE -> {name, color, times, is_off, no_transport}.
-    Crucial para que los reportes de Excel sepan distinguir días libres y días sin transporte.
+    Crucial para que los reportes de Excel sepan distinguir dÃ­as libres y dÃ­as sin transporte.
     """
     types = get_shift_types(source)
     return {
@@ -1521,20 +1528,31 @@ def update_shift_type(
     apply_1d: bool = False,
 ) -> Tuple[bool, str, Optional[str], Optional[str]]:
     """
-    Actualiza un tipo de turno. Si el cÃƒÂ³digo cambia, actualiza TODAS las asignaciones en schedules
+    Actualiza un tipo de turno. Si el cÃƒÆ’Ã‚Â³digo cambia, actualiza TODAS las asignaciones en schedules
     (status viejo -> status nuevo) para el mismo source. Devuelve (ok, msg, old_code, new_code).
     """
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT code FROM shift_types WHERE id = ? AND source = ?", (type_id, source)
+            "SELECT code, COALESCE(is_system,0) FROM shift_types WHERE id = ? AND source = ?", (type_id, source)
         )
         row = cur.fetchone()
         if not row:
             return False, "Shift type not found.", None, None
         old_code = row[0]
+        is_system_type = bool(row[1])
         new_code = code.strip().upper()
+
+        # GUARDRAIL: System types no pueden cambiar de codigo
+        if is_system_type and new_code != old_code:
+            return (
+                False,
+                f"El codigo '{old_code}' es un tipo de sistema y no puede ser renombrado. "
+                f"Puedes editar el nombre, color y horarios libremente.",
+                None,
+                None,
+            )
 
         # Verificar unicidad (name/code) excepto el propio registro
         cur.execute(
@@ -1577,7 +1595,7 @@ def update_shift_type(
             ),
         )
 
-        # Si cambiÃƒÂ³ el cÃƒÂ³digo, propagar a schedules
+        # Si cambiÃƒÆ’Ã‚Â³ el cÃƒÆ’Ã‚Â³digo, propagar a schedules
         if old_code != new_code:
             cur.execute(
                 "UPDATE schedules SET status=? WHERE status=? AND source=?",
@@ -1594,19 +1612,33 @@ def update_shift_type(
 
 def delete_shift_type(type_id: int) -> Tuple[bool, str, Optional[str], Optional[str]]:
     """
-    Intenta eliminar; si estÃƒÂ¡ en uso, lo impide.
+    Intenta eliminar; si estÃƒÆ’Ã‚Â¡ en uso, lo impide.
     Devuelve (ok, msg, source, code) para facilitar mensajes y acciones.
     """
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
     try:
-        cur.execute("SELECT source, code, name FROM shift_types WHERE id=?", (type_id,))
+        cur.execute(
+            "SELECT source, code, name, COALESCE(is_system,0) FROM shift_types WHERE id=?",
+            (type_id,)
+        )
         row = cur.fetchone()
         if not row:
             return False, "Shift type not found.", None, None
         source, code, name = row[0], row[1], row[2]
+        is_system_type = bool(row[3])
 
-        # Regla crÃƒÂ­tica: impedir eliminaciÃƒÂ³n si estÃƒÂ¡ asignado
+        # GUARDRAIL: System types no se pueden eliminar
+        if is_system_type:
+            return (
+                False,
+                f"'{name}' es un tipo de turno del sistema (ON/ON NS/OFF) y no puede "
+                f"ser eliminado. Puedes editar su nombre, color y horarios.",
+                source,
+                code,
+            )
+
+        # Regla crÃƒÆ’Ã‚Â­tica: impedir eliminaciÃƒÆ’Ã‚Â³n si estÃƒÆ’Ã‚Â¡ asignado
         cur.execute(
             "SELECT COUNT(1) FROM schedules WHERE source=? AND status=?", (source, code)
         )
@@ -1614,7 +1646,7 @@ def delete_shift_type(type_id: int) -> Tuple[bool, str, Optional[str], Optional[
         if cnt and int(cnt) > 0:
             return (
                 False,
-                f"No se puede eliminar el tipo de turno '{name}' porque estÃƒÂ¡ asignado a uno o mÃƒÂ¡s empleados. "
+                f"No se puede eliminar el tipo de turno '{name}' porque estÃƒÆ’Ã‚Â¡ asignado a uno o mÃƒÆ’Ã‚Â¡s empleados. "
                 f"Reasigne primero esos turnos.",
                 source,
                 code,
@@ -1630,21 +1662,21 @@ def delete_shift_type(type_id: int) -> Tuple[bool, str, Optional[str], Optional[
         
 def get_operation_overlapping(badge: str, check_date: date, cursor: Optional[sqlite3.Cursor] = None) -> Optional[Dict]:
     """
-    Busca si existe una operaciÃƒÂ³n activa que cubra una fecha especÃƒÂ­fica.
+    Busca si existe una operaciÃƒÆ’Ã‚Â³n activa que cubra una fecha especÃƒÆ’Ã‚Â­fica.
     Soporta cursor externo para evitar bloqueos (database is locked).
     """
     should_close = False
     
-    # Si no nos pasan un cursor, abrimos una conexiÃƒÂ³n propia (comportamiento original)
+    # Si no nos pasan un cursor, abrimos una conexiÃƒÆ’Ã‚Â³n propia (comportamiento original)
     if cursor is None:
         conn = sqlite3.connect(DB_FILE)
-        conn.row_factory = sqlite3.Row  # Importante para poder convertir a dict despuÃƒÂ©s
+        conn.row_factory = sqlite3.Row  # Importante para poder convertir a dict despuÃƒÆ’Ã‚Â©s
         cursor = conn.cursor()
         should_close = True
 
     try:
         iso = check_date.isoformat()
-        # Buscamos una operaciÃƒÂ³n donde start <= date <= end
+        # Buscamos una operaciÃƒÆ’Ã‚Â³n donde start <= date <= end
         cursor.execute(
             "SELECT * FROM operations WHERE badge = ? AND start_date <= ? AND end_date >= ? "
             "ORDER BY id DESC LIMIT 1",
@@ -1656,8 +1688,8 @@ def get_operation_overlapping(badge: str, check_date: date, cursor: Optional[sql
         return dict(row) if row else None
         
     finally:
-        # Solo cerramos la conexiÃƒÂ³n si NOSOTROS la abrimos.
-        # Si vino de fuera (transacciÃƒÂ³n), la dejamos abierta.
+        # Solo cerramos la conexiÃƒÆ’Ã‚Â³n si NOSOTROS la abrimos.
+        # Si vino de fuera (transacciÃƒÆ’Ã‚Â³n), la dejamos abierta.
         if should_close:
             cursor.connection.close()
 
@@ -1668,7 +1700,7 @@ def delete_operations_in_range(
     cursor: Optional[sqlite3.Cursor] = None # <--- NEW ARGUMENT
 ):
     """
-    Elimina cualquier operaciÃƒÂ³n que estÃƒÂ© TOTAL o PARCIALMENTE contenida en el rango.
+    Elimina cualquier operaciÃƒÆ’Ã‚Â³n que estÃƒÆ’Ã‚Â© TOTAL o PARCIALMENTE contenida en el rango.
     Supports external cursor.
     """
     should_close = False
@@ -1704,7 +1736,7 @@ def delete_operations_in_range(
 
 
 # ---------------------------------------------------------------------
-# Shift Collision Detector â€” query para reportes
+# Shift Collision Detector Ã¢â‚¬â€ query para reportes
 # ---------------------------------------------------------------------
 def get_force_new_entry_map(source: str, start_d: date, end_d: date) -> Dict[str, Set[str]]:
     """
@@ -1743,20 +1775,27 @@ def get_force_new_entry_map(source: str, start_d: date, end_d: date) -> Dict[str
 
 
 def is_working_status(status: str, source: str) -> bool:
-    """Helper rÃ¡pido para saber si un status cuenta como dÃ­a de trabajo (para fusionar)."""
+    """
+    Determina si un status cuenta como dia laboral (para consolidacion de operaciones).
+    PRIORIDAD 1: Consultar shift_types en DB (incluye ON/ON NS/OFF como system types).
+    FALLBACK: Hardcode legacy si DB no tiene el type aun.
+    """
     if not status:
         return False
     su = status.strip().upper()
-    if su in ("OFF", "BREAK", "KO", "LEAVE", ""):
-        return False
-    
-    # Chequear si es un custom type marcado como 'is_off'
+
+    # PRIORIDAD 1: Consultar DB (system types + custom types)
     types = get_shift_types(source)
     for t in types:
-        if str(t.get("code", "")).strip().upper() == su and t.get("is_off"):
-            return False
-            
-    return True
+        if str(t.get("code", "")).strip().upper() == su:
+            # is_off=1 -> dia libre; is_off=0 -> dia laboral
+            return not bool(t.get("is_off", 0))
+
+    # FALLBACK LEGACY: si no esta en DB
+    if su in ("OFF", "BREAK", "KO", "LEAVE", ""):
+        return False
+
+    return True  # Desconocido y no es OFF -> asumir laboral
 
 def get_file_path(source: str, file_key: str) -> Optional[str]:
     """Recupera la ruta guardada de un archivo."""
@@ -1780,3 +1819,72 @@ def set_file_path(source: str, file_key: str, path: str, updated_by: Optional[st
     )
     conn.commit()
     conn.close()
+
+# ==============================================================================
+# SYSTEM SHIFT TYPES - Gestion de ON / ON NS / OFF como registros en DB (SSoT)
+# ==============================================================================
+
+_SYSTEM_SHIFT_DEFAULTS: Dict[str, List[Dict]] = {
+    "RGM": [
+        {"code": "OFF",   "name": "OFF",                "color_hex": "#FFC7CE", "in_time": "00:00", "out_time": "00:00", "is_off": 1, "no_transport": 0, "apply_1d": 0},
+        {"code": "ON",    "name": "ON (Day Shift)",     "color_hex": "#C6EFCE", "in_time": "07:00", "out_time": "07:00", "is_off": 0, "no_transport": 0, "apply_1d": 1},
+        {"code": "ON NS", "name": "ON NS (Night Shift)","color_hex": "#FFFF99", "in_time": "07:00", "out_time": "07:00", "is_off": 0, "no_transport": 0, "apply_1d": 1},
+    ],
+    "Newmont": [
+        {"code": "OFF",   "name": "OFF",                "color_hex": "#FFC7CE", "in_time": "00:00", "out_time": "00:00", "is_off": 1, "no_transport": 0, "apply_1d": 0},
+        {"code": "ON",    "name": "ON (Day Shift)",     "color_hex": "#C6EFCE", "in_time": "06:00", "out_time": "12:00", "is_off": 0, "no_transport": 0, "apply_1d": 0},
+        {"code": "ON NS", "name": "ON NS (Night Shift)","color_hex": "#FFFF99", "in_time": "12:00", "out_time": "06:00", "is_off": 0, "no_transport": 0, "apply_1d": 0},
+    ],
+}
+
+
+def ensure_system_shift_types(source: str) -> None:
+    """
+    Crea o actualiza los System Shift Types (ON, ON NS, OFF) para un source dado.
+
+    COMPORTAMIENTO:
+    - Si el registro NO existe: lo inserta con valores default del source.
+    - Si el registro YA existe: solo marca is_system=1 sin tocar los valores
+      que el usuario pudo haber personalizado (color, horarios, nombre).
+    - Idempotente: es seguro llamar multiples veces.
+    """
+    defaults = _SYSTEM_SHIFT_DEFAULTS.get(source, [])
+    if not defaults:
+        return  # Source desconocido (Administrator u otro)
+
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    try:
+        for st in defaults:
+            cur.execute(
+                "SELECT id FROM shift_types WHERE source=? AND code=?",
+                (source, st["code"])
+            )
+            row = cur.fetchone()
+            if row:
+                # YA EXISTE: solo garantizar is_system=1
+                cur.execute(
+                    "UPDATE shift_types SET is_system=1 WHERE source=? AND code=?",
+                    (source, st["code"])
+                )
+            else:
+                # NO EXISTE: insertar con valores default
+                cur.execute(
+                    """
+                    INSERT INTO shift_types
+                        (source, name, code, color_hex, in_time, out_time,
+                         is_off, no_transport, apply_1d, is_system)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                    """,
+                    (
+                        source, st["name"], st["code"], st["color_hex"],
+                        st["in_time"], st["out_time"],
+                        st["is_off"], st["no_transport"], st["apply_1d"],
+                    )
+                )
+        conn.commit()
+    except sqlite3.Error as e:
+        conn.rollback()
+        print(f"[ensure_system_shift_types] Error para source={source}: {e}")
+    finally:
+        conn.close()

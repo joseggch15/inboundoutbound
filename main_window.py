@@ -4,8 +4,8 @@
 #  - REQ-002 (auto-center today in Schedule Preview)
 #  - REQ-003 (date headers with weekday)
 #  - Locations module (CRUD) and dropdowns for Pick Up / Drop Off in the register form
-#  - Restores the blue “Save Changes to DB Excel” button (centered action bar)
-#  - Hides the “User Pick Up / Drop Off (inline, saves immediately)” panel
+#  - Restores the blue “Save Changes to DB Excelâ€ button (centered action bar)
+#  - Hides the “User Pick Up / Drop Off (inline, saves immediately)â€ panel
 #  - Minor UX refinements (responsive form layout, headers alignment)
 #
 # UI content is in English end-to-end.
@@ -18,7 +18,7 @@
 # --- MODIFIED: Added 'created_by' tracking for rotation history, filtering the view based on the logged-in user.
 # --- NEW: Added separate entry/exit date feature in registration form, with UI toggle and updated hover card info.
 # --- MODIFICATION: Added time inputs for Entry/Exit dates and updated Hover Card to display them.
-# --- IntegraciÃ³n Final: Se aÃ±ade el botÃ³n y la lÃ³gica para "Generate Onsite Stay Report" en el PlanStaffWidget.
+# --- Integración Final: Se añade el botón y la lógica para "Generate Onsite Stay Report" en el PlanStaffWidget.
 
 import openpyxl
 from openpyxl.styles import PatternFill
@@ -118,7 +118,7 @@ WEEKEND_HEADER_YELLOW = "#FFEB3B"  # Amarillo vibrante para cabeceras
 def _is_off_like_payload(payload: dict) -> bool:
     """
     Determina si un turno representa un estado NO laborable.
-    Es la Fuente Ãšnica de Verdad (SSoT) para:
+    Es la Fuente Única de Verdad (SSoT) para:
       1. 'Do Not Mark Days' (kind='none')
       2. Turnos Base 'OFF'
       3. Turnos Custom con la bandera is_off=1 (ej. SICK, VACATION)
@@ -132,7 +132,7 @@ def _is_off_like_payload(payload: dict) -> bool:
         return True
 
     # 2. Chequear Turnos Custom marcados como 'Treat as OFF' (flag is_off)
-    # SQLite a veces retorna 1/0, forzamos conversiÃ³n a bool
+    # SQLite a veces retorna 1/0, forzamos conversión a bool
     if bool(payload.get('is_off', False)):
         return True
 
@@ -150,7 +150,7 @@ class ShiftCellDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):
         combo = QComboBox(parent)
 
-        # Reusar la funciÃ³n self._status_options_for_dialog()
+        # Reusar la función self._status_options_for_dialog()
         options = self.get_options_callback()
         for icon, text, data in options:
             combo.addItem(icon, text, data)
@@ -299,7 +299,7 @@ class RoleAdminWidget(QWidget):
              if current_row >= 0:
                  src = self.role_table.item(current_row, 1).text()
 
-        # 1. ConfirmaciÃ³n de seguridad (UI)
+        # 1. Confirmación de seguridad (UI)
         confirm = QMessageBox.question(
             self, 
             "Confirm", 
@@ -307,8 +307,8 @@ class RoleAdminWidget(QWidget):
         )
         
         if confirm == QMessageBox.StandardButton.Yes:
-            # 2. LÃ³gica de Base de Datos
-            # Llamamos a la nueva funciÃ³n protegida en db
+            # 2. Lógica de Base de Datos
+            # Llamamos a la nueva función protegida en db
             ok, msg = db.delete_role(self.role_id, src)
             
             # 3. Feedback
@@ -318,7 +318,7 @@ class RoleAdminWidget(QWidget):
                 self.roles_changed.emit()
                 self._new_role()
             else:
-                # AquÃ­ mostramos el aviso si hay usuarios con este rol
+                # Aquí mostramos el aviso si hay usuarios con este rol
                 QMessageBox.warning(self, "Cannot Delete", msg)
 
     def _load_to_form(self, item):
@@ -352,7 +352,7 @@ class ShiftInfoCard(QLabel):
             QLabel {
                 background-color: #374151; /* Gris oscuro */
                 color: #FFFFFF;             /* LETRA BLANCA PARA EL TEXTO */
-                border: 1px solid #4B5563;  /* Borde ligeramente mÃ¡s claro */
+                border: 1px solid #4B5563;  /* Borde ligeramente más claro */
                 border-radius: 8px;
                 padding: 12px;
                 font-size: 13px;
@@ -497,8 +497,8 @@ def _parse_hhmm_to_time(value, default: dtime) -> dtime:
     """
     Convierte 'HH:MM' o 'HH:MM:SS' a datetime.time.
     - Si ya es datetime.time, lo devuelve tal cual.
-    - Si es None o cadena vacÃ­a, devuelve 'default'.
-    - Si falla el parseo, tambiÃ©n devuelve 'default'.
+    - Si es None o cadena vacía, devuelve 'default'.
+    - Si falla el parseo, también devuelve 'default'.
     """
     if isinstance(value, dtime):
         return value
@@ -777,7 +777,7 @@ class ReportSettingsWidget(QWidget):
 
 class DayScheduleEditor(QDialog):
     """
-    DiÃ¡logo para editar un dÃ­a: Status/Shift + Pick Up + Drop Off + Remark.
+    Diálogo para editar un día: Status/Shift + Pick Up + Drop Off + Remark.
     Opcionalmente permite aplicar el cambio a varias celdas hacia la derecha.
     """
 
@@ -842,8 +842,8 @@ class DayScheduleEditor(QDialog):
         self.remark_edit.setPlaceholderText("Optional: add a note for this day...")
 
         # ---------------------------------------------------------------------
-        # MODIFICACIÃ“N: Instanciamos los checkboxes pero NO los mostramos
-        # Mantenemos los objetos en memoria para no romper la lÃ³gica interna.
+        # MODIFICACIÓN: Instanciamos los checkboxes pero NO los mostramos
+        # Mantenemos los objetos en memoria para no romper la lógica interna.
         # ---------------------------------------------------------------------
         self.apply_to_range_chk = QCheckBox("Apply to all selected cells to the right")
         self.apply_to_range_chk.setVisible(False)  # Aseguramos que sea invisible
@@ -885,7 +885,7 @@ class DayScheduleEditor(QDialog):
         travel_layout.addWidget(self.exit_time_edit)
         travel_layout.addStretch()
 
-        # Ocultamos el bloque por defecto (y como el checkbox no es visible, nunca se mostrarÃ¡)
+        # Ocultamos el bloque por defecto (y como el checkbox no es visible, nunca se mostrará)
         self._travel_container.setVisible(False)
         self.travel_diff_chk.toggled.connect(self._travel_container.setVisible)
 
@@ -921,15 +921,15 @@ class DayScheduleEditor(QDialog):
         """
         data = self.status_combo.itemData(index)
         
-        # ValidaciÃ³n de seguridad
+        # Validación de seguridad
         if not isinstance(data, dict):
             return
 
-        # LÃ“GICA: Si el estatus es tipo OFF, limpiar logÃ­stica inmediatamente.
+        # LÓGICA: Si el estatus es tipo OFF, limpiar logística inmediatamente.
         if _is_off_like_payload(data):
-            # Bloquear seÃ±ales para evitar recursividad o loops de actualizaciÃ³n
+            # Bloquear señales para evitar recursividad o loops de actualización
             with QSignalBlocker(self.pickup_combo), QSignalBlocker(self.dropoff_combo):
-                self.pickup_combo.setCurrentIndex(0) # Asume que el Ã­ndice 0 es vacÃ­o/None
+                self.pickup_combo.setCurrentIndex(0) # Asume que el índice 0 es vacío/None
                 self.dropoff_combo.setCurrentIndex(0)
                 
                 # OPCIONAL: Feedback Visual - Deshabilitar campos
@@ -949,7 +949,7 @@ class DayScheduleEditor(QDialog):
         entry_dt = None
         exit_dt = None
 
-        # Esta condiciÃ³n siempre serÃ¡ False porque el checkbox estÃ¡ oculto y desmarcado,
+        # Esta condición siempre será False porque el checkbox está oculto y desmarcado,
         # lo cual es correcto para ocultar la funcionalidad.
         if self.travel_diff_chk.isChecked():
             entry_date = self.entry_date_edit.date().toPyDate()
@@ -965,9 +965,9 @@ class DayScheduleEditor(QDialog):
             "pickup": self.pickup_combo.currentData(),
             "dropoff": self.dropoff_combo.currentData(),
             "remark": self.remark_edit.text().strip(),
-            "apply_to_range": self.apply_to_range_chk.isChecked(),  # SerÃ¡ False
-            "entry_datetime": entry_dt,  # SerÃ¡ None (se calcularÃ¡ por defecto fuera)
-            "exit_datetime": exit_dt,  # SerÃ¡ None (se calcularÃ¡ por defecto fuera)
+            "apply_to_range": self.apply_to_range_chk.isChecked(),  # Será False
+            "entry_datetime": entry_dt,  # Será None (se calculará por defecto fuera)
+            "exit_datetime": exit_dt,  # Será None (se calculará por defecto fuera)
         }
     
     
@@ -988,7 +988,7 @@ class WeekendHeader(QHeaderView):
         self.viewport().update()
 
     def paintSection(self, painter, rect, logicalIndex):
-        # Verificamos si el Ã­ndice corresponde a un fin de semana
+        # Verificamos si el índice corresponde a un fin de semana
         is_weekend = False
         if 0 <= logicalIndex < len(self._date_list):
             d = self._date_list[logicalIndex]
@@ -999,7 +999,7 @@ class WeekendHeader(QHeaderView):
             # Pintamos el fondo amarillo
             painter.fillRect(rect, QColor(WEEKEND_HEADER_YELLOW))
             
-            # Dibujamos el borde (para mantener la estÃ©tica de la grilla)
+            # Dibujamos el borde (para mantener la estética de la grilla)
             painter.setPen(QPen(QColor("#CCCCCC")))
             painter.drawRect(rect.adjusted(0, 0, -1, -1))
             
@@ -1009,7 +1009,7 @@ class WeekendHeader(QHeaderView):
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
             painter.restore()
         else:
-            # Comportamiento normal para dÃ­as de semana
+            # Comportamiento normal para días de semana
             super().paintSection(painter, rect, logicalIndex)
             
 class PlanStaffWidget(QWidget):
@@ -1036,10 +1036,10 @@ class PlanStaffWidget(QWidget):
         self._warn_highlight_keys = set()  # {"<badge>|YYYY-MM-DD", ...}
         self._bulk_editing = False  # para detectar relleno masivo por arrastre
 
-        # --- NUEVO: Bandera para evitar doble apertura de diÃ¡logo ---
+        # --- NUEVO: Bandera para evitar doble apertura de diálogo ---
         self._is_handling_change = False
         
-        # --- FIX: Puente de datos para hora manual del diÃ¡logo Separar ---
+        # --- FIX: Puente de datos para hora manual del diálogo Separar ---
         self._last_manual_exit_config = None
         
         self._is_first_load = True
@@ -1184,7 +1184,7 @@ class PlanStaffWidget(QWidget):
         report_layout.addWidget(report_button)
 
         # =======================================================
-        # NUEVA FUNCIONALIDAD: BotÃ³n para reporte de estadÃ­as
+        # NUEVA FUNCIONALIDAD: Botón para reporte de estadías
         # =======================================================
         self.stay_report_btn = QPushButton("🏕️ Onsite Stay Report")
         self.stay_report_btn.clicked.connect(self._generate_stay_report)
@@ -1225,14 +1225,14 @@ class PlanStaffWidget(QWidget):
     def _smart_reflow(self, cursor, badge: str, center_date: datetime.date):
         """
         Recalcula y corrige los campos start_date y end_date para asegurar continuidad
-        alrededor de una fecha modificada. Soluciona la fragmentaciÃ³n de rangos.
+        alrededor de una fecha modificada. Soluciona la fragmentación de rangos.
         """
-        # 1. Definir zona de "reconstrucciÃ³n" (60 dÃ­as antes y despuÃ©s para seguridad)
+        # 1. Definir zona de "reconstrucción" (60 días antes y después para seguridad)
         margin = timedelta(days=60)
         search_start = center_date - margin
         search_end = center_date + margin
 
-        # 2. Obtener la verdad atÃ³mica (Fecha + Tipo de Turno) ordenados cronolÃ³gicamente
+        # 2. Obtener la verdad atómica (Fecha + Tipo de Turno) ordenados cronológicamente
         cursor.execute("""
             SELECT date, shift_type 
             FROM schedules 
@@ -1254,7 +1254,7 @@ class PlanStaffWidget(QWidget):
                 try:
                     d_obj = datetime.strptime(d_val, "%Y-%m-%d").date()
                 except ValueError:
-                    continue # Saltar fechas invÃ¡lidas
+                    continue # Saltar fechas inválidas
             else:
                 d_obj = d_val
             data_points.append({'date': d_obj, 'type': r[1]})
@@ -1262,8 +1262,8 @@ class PlanStaffWidget(QWidget):
         if not data_points:
             return
 
-        # 3. Algoritmo de AgrupaciÃ³n (Clustering)
-        # Recorre los dÃ­as y agrupa los que sean consecutivos Y tengan el mismo shift_type
+        # 3. Algoritmo de Agrupación (Clustering)
+        # Recorre los días y agrupa los que sean consecutivos Y tengan el mismo shift_type
         updates = []
         
         # Iniciamos el primer grupo
@@ -1282,7 +1282,7 @@ class PlanStaffWidget(QWidget):
                 # Continuar el bloque actual
                 block_members.append(curr['date'])
             else:
-                # El bloque se rompiÃ³. Cerrar el bloque anterior y guardar sus actualizaciones.
+                # El bloque se rompió. Cerrar el bloque anterior y guardar sus actualizaciones.
                 start_str = current_block_start.strftime("%Y-%m-%d")
                 end_str = block_members[-1].strftime("%Y-%m-%d")
                 
@@ -1293,7 +1293,7 @@ class PlanStaffWidget(QWidget):
                 current_block_start = curr['date']
                 block_members = [curr['date']]
 
-        # Cerrar el Ãºltimo bloque pendiente
+        # Cerrar el último bloque pendiente
         if block_members:
             start_str = current_block_start.strftime("%Y-%m-%d")
             end_str = block_members[-1].strftime("%Y-%m-%d")
@@ -1313,7 +1313,7 @@ class PlanStaffWidget(QWidget):
     def eventFilter(self, source, event):
         # Comportamiento extra para la tabla de horario:
         #  - Ocultar la tarjetita al salir
-        #  - Al soltar el mouse despuÃ©s de un arrastre, copiar el valor
+        #  - Al soltar el mouse después de un arrastre, copiar el valor
         #    de la celda actual al resto de celdas seleccionadas de esa fila.
         if source is self.schedule_table.viewport():
             if event.type() == QEvent.Type.Leave:
@@ -1330,11 +1330,11 @@ class PlanStaffWidget(QWidget):
         container = QWidget()
         self.main_form_layout = QVBoxLayout(container)
         
-        # 1. MODIFICACIÃ“N: MÃ¡rgenes mÃ­nimos y espaciado reducido
+        # 1. MODIFICACIÓN: Márgenes mínimos y espaciado reducido
         self.main_form_layout.setContentsMargins(2, 4, 2, 2)
         self.main_form_layout.setSpacing(4) 
 
-        # --- InicializaciÃ³n de controles (LÃ³gica original intacta) ---
+        # --- Inicialización de controles (Lógica original intacta) ---
         self.user_selector_combo = QComboBox()
         self.user_selector_combo.currentIndexChanged.connect(self.autofill_user_data)
         self.user_selector_combo.setFixedHeight(26) # Altura forzada compacta
@@ -1371,15 +1371,15 @@ class PlanStaffWidget(QWidget):
         self.remarks_input.setPlaceholderText("Optional remarks...")
         self.remarks_input.setFixedHeight(26)
 
-        # Checkbox auxiliar lÃ³gico (mantenido pero oculto)
+        # Checkbox auxiliar lógico (mantenido pero oculto)
         self.apply_to_range_chk = QCheckBox("Apply to all selected cells")
         self.apply_to_range_chk.setVisible(False)
 
-        # 2. MODIFICACIÃ“N: BotÃ³n mÃ¡s compacto
+        # 2. MODIFICACIÓN: Botón más compacto
         self.save_button = QPushButton("💾 Save Changes") 
         self.save_button.clicked.connect(self.save_plan_changes)
         self.save_button.setProperty("variant", "primary")
-        self.save_button.setFixedSize(120, 28) # TamaÃ±o fijo y pequeÃ±o
+        self.save_button.setFixedSize(120, 28) # Tamaño fijo y pequeño
 
         # Toggle de fechas de viaje
         self.travel_dates_check = QCheckBox("Travel dates ≠ Work period")
@@ -1405,7 +1405,7 @@ class PlanStaffWidget(QWidget):
         travel_layout.setContentsMargins(4, 2, 4, 2)
         travel_layout.setSpacing(6)
         
-        # Widgets de viaje en una sola lÃ­nea compacta
+        # Widgets de viaje en una sola línea compacta
         travel_layout.addWidget(QLabel("IN:"))
         travel_layout.addWidget(self.entry_date_edit)
         travel_layout.addWidget(self.entry_time_edit)
@@ -1417,7 +1417,7 @@ class PlanStaffWidget(QWidget):
         
         self._travel_dates_container.setVisible(False)
 
-        # 3. MODIFICACIÃ“N: Helper 'field' optimizado para altura mÃ­nima
+        # 3. MODIFICACIÓN: Helper 'field' optimizado para altura mínima
         def field(title: str, w: QWidget) -> QWidget:
             cont = QWidget()
             v = QVBoxLayout(cont)
@@ -1425,14 +1425,14 @@ class PlanStaffWidget(QWidget):
             v.setSpacing(0) # Pegar etiqueta al input
             
             lbl = QLabel(title)
-            # Fuente pequeÃ±a para ahorrar espacio vertical
+            # Fuente pequeña para ahorrar espacio vertical
             lbl.setStyleSheet("font-size: 10px; color: #4B5563; font-weight: 700; margin-bottom: 1px;")
             
             v.addWidget(lbl)
             v.addWidget(w)
             return cont
 
-        # Array de campos (CRÃTICO: Mantiene la lÃ³gica de redimensionado)
+        # Array de campos (CRÍTICO: Mantiene la lógica de redimensionado)
         self._fields = [
             field("Employee", self.user_selector_combo),
             field("Role / Dept", self.role_display),
@@ -1449,20 +1449,20 @@ class PlanStaffWidget(QWidget):
         self._register_grid = QGridLayout()
         self._register_grid.setContentsMargins(0, 0, 0, 0)
         self._register_grid.setHorizontalSpacing(8)
-        self._register_grid.setVerticalSpacing(2) # Espacio vertical mÃ­nimo entre filas
+        self._register_grid.setVerticalSpacing(2) # Espacio vertical mínimo entre filas
         
         self.main_form_layout.addLayout(self._register_grid)
 
-        # 4. MODIFICACIÃ“N: Fila inferior unificada (Checkbox + BotÃ³n en la misma lÃ­nea)
+        # 4. MODIFICACIÓN: Fila inferior unificada (Checkbox + Botón en la misma línea)
         bottom_row = QHBoxLayout()
         bottom_row.setContentsMargins(0, 4, 0, 0)
         bottom_row.setSpacing(10)
         
         bottom_row.addWidget(self.travel_dates_check)
         bottom_row.addStretch()
-        bottom_row.addWidget(self.save_button) # BotÃ³n a la derecha, misma fila
+        bottom_row.addWidget(self.save_button) # Botón a la derecha, misma fila
         
-        # El contenedor de viaje va ANTES de la fila inferior para no romper la alineaciÃ³n
+        # El contenedor de viaje va ANTES de la fila inferior para no romper la alineación
         self.main_form_layout.addWidget(self._travel_dates_container)
         self.main_form_layout.addLayout(bottom_row)
 
@@ -1519,57 +1519,72 @@ class PlanStaffWidget(QWidget):
     # ---------- data loaders ----------
 
     def load_shift_type_options(self):
-        """Load base statuses + custom shift types (from DB) into the combo."""
+        """
+        Carga todos los shift types desde DB en el combo de Status/Shift.
+
+        ORDEN EN EL COMBO:
+        1. Opcion vacia (Do Not Mark Days)
+        2. System types (OFF, ON, ON NS) leidos desde DB con sus colores
+        3. Separador visual
+        4. Custom types (is_system=0)
+
+        FALLBACK: Si los system types no estan en DB aun, muestra opciones
+        hardcoded como proteccion para que la UI siempre funcione.
+        """
         self.status_selector.blockSignals(True)
         self.status_selector.clear()
 
-        # Blank option
-        self.status_selector.addItem(QIcon(), "— Do Not Mark Days —", {"kind": "none"})
+        # Opcion vacia
+        self.status_selector.addItem(QIcon(), "\u2014 Do Not Mark Days \u2014", {"kind": "none"})
 
-        # Base statuses with color chips
-        self.status_selector.addItem(
-            _create_color_icon("#FFC7CE"),  # OFF color
-            "OFF",
-            {
-                "kind": "base",
-                "status": "OFF",
-                "shift_type": None,
-                "in_time": None,
-                "out_time": None,
-                "is_off": True,
-            },
-        )
-        self.status_selector.addItem(
-            _create_color_icon("#C6EFCE"),  # ON color
-            "ON (Day Shift)",
-            {
-                "kind": "base",
-                "status": "ON",
-                "shift_type": "Day Shift",
-                "in_time": None,
-                "out_time": None,
-            },
-        )
-        self.status_selector.addItem(
-            _create_color_icon("#FFFF99"),  # ON NS color
-            "ON NS (Night Shift)",
-            {
-                "kind": "base",
-                "status": "ON NS",
-                "shift_type": "Night Shift",
-                "in_time": None,
-                "out_time": None,
-            },
-        )
+        # Cargar TODOS los shift types desde DB (system + custom)
+        all_types = db.get_shift_types(self.source)
 
-        # Custom types
-        types = db.get_shift_types(self.source)
-        self._custom_shift_map = {t["code"]: t for t in types}  # refresh map
-        if types:
+        # Actualizar el mapa en memoria (ahora incluye ON/ON NS/OFF)
+        self._custom_shift_map = {t["code"].strip().upper(): t for t in all_types}
+
+        # Separar system types de custom types
+        system_types = [t for t in all_types if t.get("is_system")]
+        custom_types  = [t for t in all_types if not t.get("is_system")]
+
+        # Orden preferido para system types: OFF primero, luego ON, luego ON NS
+        _SYSTEM_ORDER = {"OFF": 0, "ON": 1, "ON NS": 2}
+        system_types.sort(key=lambda t: _SYSTEM_ORDER.get(t["code"].strip().upper(), 99))
+
+        for t in system_types:
+            code = t["code"].strip().upper()
+            label = t["name"]
+            data = {
+                "kind": "base",
+                "status": code,
+                "shift_type": t["name"],
+                "in_time": t.get("in_time"),
+                "out_time": t.get("out_time"),
+                "is_off": bool(t.get("is_off", 0)),
+                "color_hex": t.get("color_hex", "#FFFFFF"),
+            }
             self.status_selector.addItem(
-                QIcon(), "—— Custom Shift Types ——", {"kind": "separator"}
+                _create_color_icon(t["color_hex"]),
+                label,
+                data,
             )
-            for t in types:
+
+        # FALLBACK: si DB esta vacia / seed no ejecutado aun
+        if not system_types:
+            _fallback = [
+                ("#FFC7CE", "OFF",              {"kind":"base","status":"OFF","shift_type":None,"in_time":None,"out_time":None,"is_off":True}),
+                ("#C6EFCE", "ON (Day Shift)",   {"kind":"base","status":"ON","shift_type":"Day Shift","in_time":None,"out_time":None}),
+                ("#FFFF99", "ON NS (Night Shift)",{"kind":"base","status":"ON NS","shift_type":"Night Shift","in_time":None,"out_time":None}),
+            ]
+            for color, label, data in _fallback:
+                self.status_selector.addItem(_create_color_icon(color), label, data)
+
+        # Custom types: separador + lista
+        if custom_types:
+            self.status_selector.addItem(
+                QIcon(), "\u2014\u2014 Custom Shift Types \u2014\u2014", {"kind": "separator"}
+            )
+            for t in custom_types:
                 label = f"{t['name']} [{t['code']}]  {t['in_time']}-{t['out_time']}"
                 self.status_selector.addItem(
                     _create_color_icon(t["color_hex"]),
@@ -1580,9 +1595,10 @@ class PlanStaffWidget(QWidget):
                         "name": t["name"],
                         "in_time": t["in_time"],
                         "out_time": t["out_time"],
-                        "is_off": t.get("is_off", 0),
+                        "is_off": bool(t.get("is_off", 0)),
                     },
                 )
+
         self.status_selector.setCurrentIndex(0)
         self.status_selector.blockSignals(False)
 
@@ -1591,7 +1607,7 @@ class PlanStaffWidget(QWidget):
     def _status_options_for_dialog(self):
         """
         Devuelve la misma lista de opciones que el combo Status/Shift
-        para usarla en el editor de celda y en el diÃ¡logo DayScheduleEditor.
+        para usarla en el editor de celda y en el diálogo DayScheduleEditor.
         """
         options = []
         for i in range(self.status_selector.count()):
@@ -1627,26 +1643,26 @@ class PlanStaffWidget(QWidget):
         self.load_location_options()  # keep combos in sync with Location admin
         self.remarks_input.clear()  # Clear remarks on refresh
 
-    # [CAMBIO 5] LÃ³gica crÃ­tica para usar los datos en memoria
+    # [CAMBIO 5] Lógica crítica para usar los datos en memoria
     def load_schedule_data(self, use_preloaded=False):
         """
         Carga los datos del cronograma en la tabla, optimizado para evitar
         parpadeos (flickering) y saltos de scroll inesperados.
         """
         # -------------------------------------------------------------
-        # 1. OPTIMIZACIÃ“N: GUARDAR POSICIÃ“N DEL SCROLL (Evitar Salto)
+        # 1. OPTIMIZACIÓN: GUARDAR POSICIÓN DEL SCROLL (Evitar Salto)
         # -------------------------------------------------------------
         h_scroll_val = 0
         v_scroll_val = 0
         
-        # Guardamos dÃ³nde estÃ¡ mirando el usuario antes de tocar nada
+        # Guardamos dónde está mirando el usuario antes de tocar nada
         if self.schedule_table.horizontalScrollBar():
             h_scroll_val = self.schedule_table.horizontalScrollBar().value()
         if self.schedule_table.verticalScrollBar():
             v_scroll_val = self.schedule_table.verticalScrollBar().value()
 
         # -------------------------------------------------------------
-        # 2. OPTIMIZACIÃ“N: CONGELAR ACTUALIZACIONES DE UI (Evitar Parpadeo)
+        # 2. OPTIMIZACIÓN: CONGELAR ACTUALIZACIONES DE UI (Evitar Parpadeo)
         # -------------------------------------------------------------
         # Bloqueamos el repintado de los widgets principales.
         # Esto evita que el usuario vea la tabla "vaciarse" y volver a llenarse.
@@ -1656,7 +1672,7 @@ class PlanStaffWidget(QWidget):
         
         try:
             # -------------------------------------------------------------
-            # LÃ“GICA DE PRE-CARGA DE DATOS (Tu lÃ³gica original)
+            # LÓGICA DE PRE-CARGA DE DATOS (Tu lógica original)
             # -------------------------------------------------------------
             df = None
             if use_preloaded and hasattr(self, '_initial_preloaded_df') and self._initial_preloaded_df is not None:
@@ -1666,7 +1682,7 @@ class PlanStaffWidget(QWidget):
             else:
                 df = excel.get_schedule_preview(self.excel_file)
             
-            # --- Overlay de Usuarios desde BD (Tu lÃ³gica original) ---
+            # --- Overlay de Usuarios desde BD (Tu lógica original) ---
             try:
                 if df is not None and not df.empty:
                     users_db = db.get_all_users(self.source)
@@ -1693,17 +1709,17 @@ class PlanStaffWidget(QWidget):
             self._row_identities.clear()
             self._date_col_dates.clear()
 
-            # Caso tabla vacÃ­a
+            # Caso tabla vacía
             if df is None or df.empty:
                 self.frozen_table.clear()
                 self.schedule_table.clear()
                 self.frozen_table.setRowCount(0)
                 self.schedule_table.setRowCount(0)
                 self._loading_preview = False
-                # Aunque estÃ© vacÃ­a, debemos asegurar que el 'finally' se ejecute para restaurar UI
+                # Aunque esté vacía, debemos asegurar que el 'finally' se ejecute para restaurar UI
                 return 
 
-            # Auto-Horizon check (Tu lÃ³gica original)
+            # Auto-Horizon check (Tu lógica original)
             if not use_preloaded:
                 try:
                     ok_horizon, msg_horizon = excel.ensure_rolling_horizon_columns(self.excel_file)
@@ -1715,7 +1731,7 @@ class PlanStaffWidget(QWidget):
             custom_map = db.get_shift_type_map(self.source)
 
             # -----------------------------------------------------------
-            # ORDENAMIENTO Y ESTRUCTURA (Tu lÃ³gica original)
+            # ORDENAMIENTO Y ESTRUCTURA (Tu lógica original)
             # -----------------------------------------------------------
             all_cols = list(df.columns)
             actual_frozen_count = min(len(all_cols), FROZEN_COLUMN_COUNT)
@@ -1753,7 +1769,7 @@ class PlanStaffWidget(QWidget):
                 else:
                     pass
 
-            # ConfiguraciÃ³n de Cabeceras
+            # Configuración de Cabeceras
             actual_frozen_count = min(df.shape[1], FROZEN_COLUMN_COUNT)
             frozen_headers = [str(c) for c in cols[:actual_frozen_count]]
 
@@ -1803,7 +1819,7 @@ class PlanStaffWidget(QWidget):
 
                         self._apply_status_background(item, val_str)
 
-                        # ProtecciÃ³n Legacy: Si el Excel tiene "DAY" o nÃºmeros (1,2,3) y no es un turno custom
+                        # Protección Legacy: Si el Excel tiene "DAY" o números (1,2,3) y no es un turno custom
                         # forzamos el verde (ON) para que no se vea blanco.
                         if val_str and val_str not in ("ON", "ON NS", "NIGHT", "OFF", "BREAK", "KO", "LEAVE"):
                             if not (self._custom_shift_map or {}).get(val_str):
@@ -1846,20 +1862,20 @@ class PlanStaffWidget(QWidget):
             # -------------------------------------------------------------
             # 3. DESCONGELAR UI (Pintar todo de una sola vez)
             # -------------------------------------------------------------
-            # Pase lo que pase (Ã©xito o error), reactivamos la interfaz.
+            # Pase lo que pase (éxito o error), reactivamos la interfaz.
             self.schedule_table.setUpdatesEnabled(True)
             self.frozen_table.setUpdatesEnabled(True)
             self.setUpdatesEnabled(True)
 
         # -------------------------------------------------------------
-        # 4. RESTAURAR SCROLL O CENTRAR (LÃ³gica de "First Load")
+        # 4. RESTAURAR SCROLL O CENTRAR (Lógica de "First Load")
         # -------------------------------------------------------------
         if self._is_first_load:
             # Si es la PRIMERA VEZ, centramos en hoy.
             self._center_today_column()
             self._is_first_load = False # Marcamos como ya cargado.
         else:
-            # Si es un REFRESCO, restauramos la posiciÃ³n anterior.
+            # Si es un REFRESCO, restauramos la posición anterior.
             self.schedule_table.horizontalScrollBar().setValue(h_scroll_val)
             self.schedule_table.verticalScrollBar().setValue(v_scroll_val)
 
@@ -1908,10 +1924,10 @@ class PlanStaffWidget(QWidget):
         super().showEvent(event)
         
         # ARREGLO: Solo centrar si es la primera vez absoluta que se muestra
-        # Esto previene saltos si el usuario cambia de pestaÃ±a y regresa.
+        # Esto previene saltos si el usuario cambia de pestaña y regresa.
         if self._is_first_load:
             self._center_today_column()
-            # Nota: No ponemos False aquÃ­ inmediatamente, dejamos que load_schedule_data lo maneje
+            # Nota: No ponemos False aquí inmediatamente, dejamos que load_schedule_data lo maneje
         
         self._update_frozen_width()
 
@@ -1974,77 +1990,71 @@ class PlanStaffWidget(QWidget):
         
         
     # --------------------------------------------------------------------------
-    # MÃ‰TODOS AUXILIARES PARA SMART DRAG & CONSOLIDATION
+    # MÉTODOS AUXILIARES PARA SMART DRAG & CONSOLIDATION
     # --------------------------------------------------------------------------
 
     def _calculate_time_logic(self, status, kind, raw_time=None):
         """
-        CORREGIDO: Ahora busca primero en los Custom Shift Types cargados en memoria
-        (self._custom_shift_map), recuperando la funcionalidad original.
+        Resuelve el tiempo (IN o OUT) para un status dado.
+
+        ORDEN DE PRIORIDAD:
+        1. DB via self._custom_shift_map (incluye system types ON/ON NS/OFF)
+        2. Hardcode legacy Newmont/RGM (fallback si DB vacia / seed no ejecutado)
+        3. raw_time del arrastre/copia
+        4. dtime(0,0) como ultimo recurso
         """
         from datetime import time as dtime
-        
-        # ValidaciÃ³n de seguridad
+
         if not status:
             return dtime(0, 0)
-        
+
         status_key = status.strip().upper()
 
-        # ---------------------------------------------------------
-        # 1. PRIORIDAD: Reglas de Negocio Hardcoded (Newmont / RGM)
-        # ---------------------------------------------------------
+        # PRIORIDAD 1: Consultar DB (system types + custom types)
+        if status_key in (self._custom_shift_map or {}):
+            shift_info = self._custom_shift_map[status_key]
+            time_str = shift_info.get("in_time") if kind == "IN" else shift_info.get("out_time")
+            if time_str and time_str not in ("00:00", "0:00"):
+                return _parse_hhmm_to_time(time_str, dtime(0, 0))
+            # time_str es 00:00 (tipico de OFF) o vacio
+            return dtime(0, 0)
+
+        # PRIORIDAD 2: Hardcode legacy (solo si status no esta en DB)
         if self.source == "Newmont":
-            if status_key == "ON": 
+            if status_key == "ON":
                 return dtime(6, 0) if kind == "IN" else dtime(12, 0)
-            elif status_key == "ON NS": 
+            elif status_key == "ON NS":
                 return dtime(12, 0) if kind == "IN" else dtime(6, 0)
-        
         elif self.source == "RGM":
-            if status_key in ("ON", "ON NS"): 
+            if status_key in ("ON", "ON NS"):
                 return dtime(7, 0)
 
-        # ---------------------------------------------------------
-        # 2. PRIORIDAD: Turnos Personalizados (LA LÃ“GICA RESTAURADA)
-        # ---------------------------------------------------------
-        # AquÃ­ consultamos el mapa que ya cargaste al inicio en load_shift_types
-        if status_key in self._custom_shift_map:
-            shift_info = self._custom_shift_map[status_key]
-            # Extraer hora segÃºn sea Entrada o Salida
-            time_str = shift_info.get("in_time") if kind == "IN" else shift_info.get("out_time")
-            
-            # Usar tu helper existente para convertir string a objeto time
-            return _parse_hhmm_to_time(time_str, dtime(0, 0))
-
-        # ---------------------------------------------------------
-        # 3. FALLBACK: Datos Crudos del Arrastre
-        # ---------------------------------------------------------
-        # Si no estÃ¡ en el mapa, intentamos usar lo que venÃ­a de la celda origen
+        # PRIORIDAD 3: raw_time del origen (drag-fill/clipboard)
         return _parse_hhmm_to_time(raw_time, dtime(0, 0))
-    
     def _consolidate_and_record_logistics(self, badge, role, username, op_start, op_end, status, cursor=None, manual_split_config=None):
         """
-        MOTOR DE CONSOLIDACIÃ“N v3 — SCAN-BASED.
+        MOTOR DE CONSOLIDACIÓN v3 — SCAN-BASED.
         
         En lugar de merge incremental (que fusionaba ON con ONH),
         este motor:
         1. Determina la "zona afectada" (todas las ops que tocan nuestro rango)
         2. Borra TODAS las operaciones de esa zona
-        3. Escanea el schedule dÃ­a a dÃ­a en esa zona
-        4. Crea UNA operaciÃ³n por cada bloque contiguo de MISMO status
+        3. Escanea el schedule día a día en esa zona
+        4. Crea UNA operación por cada bloque contiguo de MISMO status
         
         Esto garantiza que:
         - ON nunca se fusiona con ONH
-        - Los dÃ­as huÃ©rfanos se reconstruyen
+        - Los días huérfanos se reconstruyen
         - Los force_new_entry se respetan como boundaries
         """
-        # A. Si es dÃ­a libre, solo limpiar
+        # A. Si es día libre, solo limpiar
         if not db.is_working_status(status, self.source):
             db.delete_operations_in_range(badge, op_start, op_end, cursor=cursor)
             return
 
         # ---------------------------------------------------------------
         # 1. DETERMINAR LA ZONA AFECTADA
-        #    = nuestro rango + cualquier operaciÃ³n existente que lo toque
+        #    = nuestro rango + cualquier operación existente que lo toque
         # ---------------------------------------------------------------
         zone_start = op_start
         zone_end = op_end
@@ -2061,7 +2071,7 @@ class PlanStaffWidget(QWidget):
                 except (ValueError, KeyError):
                     pass
 
-        # Extender un paso mÃ¡s si el vecino tiene MISMO status (merge natural)
+        # Extender un paso más si el vecino tiene MISMO status (merge natural)
         # — Izquierda
         curr_start_map = db.get_schedule_map_for_range(badge, zone_start, zone_start, self.source, cursor=cursor)
         zone_start_info = curr_start_map.get(zone_start.isoformat(), {})
@@ -2107,7 +2117,7 @@ class PlanStaffWidget(QWidget):
         # ---------------------------------------------------------------
         # FIX BUG 2: Antes solo capturaba bordes (zone_start, zone_end).
         # Ahora captura TODAS las operaciones que se solapan con la zona
-        # para no perder ningÃºn override manual (ej: hora 18:00).
+        # para no perder ningún override manual (ej: hora 18:00).
         _saved_exits = {}  # {(start_iso, end_iso): exit_date_str}
 
         if cursor is not None:
@@ -2160,8 +2170,8 @@ class PlanStaffWidget(QWidget):
 
         blocks = []  # [(block_start, block_end, first_status, last_status), ...]
         blk_start = None
-        blk_st_first = None  # Status del primer dÃ­a (para entry time)
-        blk_st_last = None   # Status del Ãºltimo dÃ­a (para exit time/date)
+        blk_st_first = None  # Status del primer día (para entry time)
+        blk_st_last = None   # Status del último día (para exit time/date)
         current = zone_start
 
         while current <= zone_end:
@@ -2171,11 +2181,11 @@ class PlanStaffWidget(QWidget):
             is_w = db.is_working_status(st, self.source) if st else False
             is_f = (info.get("force_new_entry", 0) == 1)
 
-            # Â¿Este dÃ­a CONTINÃšA el bloque actual?
+            # ¿Este día CONTINÚA el bloque actual?
             # REGLA CLAVE (replica el comportamiento del motor OLD):
-            #   - Un dÃ­a CONTINÃšA el bloque si es working y NO tiene force_new_entry=1
+            #   - Un día CONTINÚA el bloque si es working y NO tiene force_new_entry=1
             #   - El cambio de status (ej: ON → ON NS) NO rompe el bloque
-            #   - SOLO force_new_entry=1 (usuario eligiÃ³ "Separar") rompe el bloque
+            #   - SOLO force_new_entry=1 (usuario eligió "Separar") rompe el bloque
             #   - Esto es lo que hace que "Unir (Mismo Viaje)" funcione correctamente
             continues = (is_w and not is_f and blk_start is not None)
 
@@ -2183,27 +2193,27 @@ class PlanStaffWidget(QWidget):
                 # Cerrar bloque anterior si existe
                 if blk_start is not None:
                     blocks.append((blk_start, current - timedelta(days=1), blk_st_first, blk_st_last))
-                # Â¿Iniciar nuevo bloque?
+                # ¿Iniciar nuevo bloque?
                 if is_w:
                     blk_start = current
                     blk_st_first = st  # Primer status del bloque (para entry time)
-                    blk_st_last = st   # Ãšltimo status (se actualiza dÃ­a a dÃ­a)
+                    blk_st_last = st   # Último status (se actualiza día a día)
                 else:
                     blk_start = None
                     blk_st_first = None
                     blk_st_last = None
             else:
-                # Actualizar el Ãºltimo status del bloque al dÃ­a actual
+                # Actualizar el último status del bloque al día actual
                 # Esto asegura que exit time/date se calculen con el turno final
                 blk_st_last = st
 
             current += timedelta(days=1)
 
-        # Cerrar Ãºltimo bloque
+        # Cerrar último bloque
         if blk_start is not None:
             blocks.append((blk_start, zone_end, blk_st_first, blk_st_last))
          # ---------------------------------------------------------------
-        # 5. CREAR una operaciÃ³n por cada bloque
+        # 5. CREAR una operación por cada bloque
         # ---------------------------------------------------------------
         for (b_start, b_end, b_first_st, b_last_st) in blocks:
             # --- FIX BUG 3: Inyectar hora manual si este bloque coincide ---
@@ -2223,11 +2233,11 @@ class PlanStaffWidget(QWidget):
             
     def _create_single_operation(self, badge, role, username, start, end, first_status, last_status=None, saved_exits=None, cursor=None, manual_exit_time=None):
         """
-        Crea UNA operaciÃ³n para un bloque contiguo.
+        Crea UNA operación para un bloque contiguo.
         
         Replica el comportamiento del motor OLD:
-        - Entry time se calcula con el status del PRIMER dÃ­a (first_status)
-        - Exit time/date se calcula con el status del ÃšLTIMO dÃ­a (last_status)
+        - Entry time se calcula con el status del PRIMER día (first_status)
+        - Exit time/date se calcula con el status del ÚLTIMO día (last_status)
         
         Esto permite que bloques mixtos (ON + ON NS) se unan correctamente
         cuando el usuario elige "Unir (Mismo Viaje)".
@@ -2239,7 +2249,7 @@ class PlanStaffWidget(QWidget):
         t_out = self._calculate_time_logic(last_status, "OUT")
         real_exit_date = self._calculate_rgm_exit_date(last_status, end)
 
-        # Verificar si maÃ±ana es force_start → suprimir +1D
+        # Verificar si mañana es force_start → suprimir +1D
         next_day = end + timedelta(days=1)
         next_map = db.get_schedule_map_for_range(badge, next_day, next_day, self.source, cursor=cursor)
         if next_map.get(next_day.isoformat(), {}).get("force_new_entry", 0) == 1:
@@ -2247,7 +2257,7 @@ class PlanStaffWidget(QWidget):
 
         computed_exit_dt = datetime.combine(real_exit_date, t_out)
 
-        # --- FIX BUG 3: PRIORIDAD 1 — Hora manual directa del diÃ¡logo ---
+        # --- FIX BUG 3: PRIORIDAD 1 — Hora manual directa del diálogo ---
         if manual_exit_time is not None:
             computed_exit_dt = datetime.combine(end, manual_exit_time)
             print(f"[CONSOL] Applied MANUAL exit time: {computed_exit_dt} for {badge} {start}-{end}")
@@ -2283,8 +2293,8 @@ class PlanStaffWidget(QWidget):
         """
         Excel-style Fill Right: Copia la celda izquierda (ancla) hacia la derecha.
         
-        VERSIÃ“N MEJORADA: SMART DRAG & CONSOLIDATION
-        1. Mantiene tu lÃ³gica de selecciÃ³n y correcciÃ³n de fecha de inicio (Off-By-One).
+        VERSIÓN MEJORADA: SMART DRAG & CONSOLIDATION
+        1. Mantiene tu lógica de selección y corrección de fecha de inicio (Off-By-One).
         2. Usa _calculate_time_logic para estandarizar reglas Newmont/RGM.
         3. Invoca _consolidate_and_record_logistics para fusionar bloques adyacentes.
         """
@@ -2293,11 +2303,11 @@ class PlanStaffWidget(QWidget):
         if not selected_ranges:
             return
 
-        # Bloquear seÃ±ales para optimizar rendimiento visual
+        # Bloquear señales para optimizar rendimiento visual
         self._bulk_editing = True
         
         try:
-            # Iterar por cada bloque de selecciÃ³n
+            # Iterar por cada bloque de selección
             for r_range in selected_ranges:
                 top_row = r_range.topRow()
                 bottom_row = r_range.bottomRow()
@@ -2347,12 +2357,12 @@ class PlanStaffWidget(QWidget):
                     start_fill_date = self._date_col_dates[left_col + 1]
                     end_fill_date = self._date_col_dates[right_col]
                     
-                    # Rango LÃ³gico (OperaciÃ³n): INCLUYE el dÃ­a ancla (left_col)
-                    # Esto asegura que la operaciÃ³n logÃ­stica arranque el dÃ­a que seleccionaste, no el siguiente.
+                    # Rango Lógico (Operación): INCLUYE el día ancla (left_col)
+                    # Esto asegura que la operación logística arranque el día que seleccionaste, no el siguiente.
                     operation_start_date = self._date_col_dates[left_col]
 
-                    # --- C. REGLA DE NEGOCIO: DeterminaciÃ³n de Horarios (INTEGRADA) ---
-                    # Usamos el nuevo helper para garantizar consistencia con la consolidaciÃ³n
+                    # --- C. REGLA DE NEGOCIO: Determinación de Horarios (INTEGRADA) ---
+                    # Usamos el nuevo helper para garantizar consistencia con la consolidación
                     final_in_obj = self._calculate_time_logic(new_status, "IN", raw_in_time)
                     final_out_obj = self._calculate_time_logic(new_status, "OUT", raw_out_time)
 
@@ -2375,16 +2385,16 @@ class PlanStaffWidget(QWidget):
                     # --- E. Persistencia ---
                     # --- E. Persistencia ---
                     try:
-                        # [PATCH COLISIÃ“N] ----------------------------------------
-                        # Verificar si el inicio del relleno choca con el dÃ­a anterior
+                        # [PATCH COLISIÓN] ----------------------------------------
+                        # Verificar si el inicio del relleno choca con el día anterior
                         force_flag = self._resolve_force_new_entry_start(badge, start_fill_date, new_status)
                         
                         if force_flag is None:
-                            # Usuario cancelÃ³ en el popup -> Abortar este empleado
+                            # Usuario canceló en el popup -> Abortar este empleado
                             continue 
                         # ---------------------------------------------------------
 
-                        # 1. Guardar Schedule (SSoT) - DÃ­a a dÃ­a
+                        # 1. Guardar Schedule (SSoT) - Día a día
                         # Se guardan las celdas rellenadas (del 22 en adelante)
                         db.upsert_schedule_range(
                             badge, 
@@ -2399,7 +2409,7 @@ class PlanStaffWidget(QWidget):
                             force_new_entry_start=force_flag  # <--- NUEVO ARGUMENTO
                         )
 
-                        # 2. Guardar Excel - Fila FÃ­sica
+                        # 2. Guardar Excel - Fila Física
                         self._is_internal_update = True 
                         excel.update_plan_staff_excel(
                             self.excel_file,
@@ -2415,10 +2425,10 @@ class PlanStaffWidget(QWidget):
                             new_out_time_str,
                         )
 
-                        # 3. [MODIFICACIÃ“N CLAVE] CONSOLIDACIÃ“N LOGÃSTICA (Operations)
+                        # 3. [MODIFICACIÓN CLAVE] CONSOLIDACIÓN LOGÍSTICA (Operations)
                         # En lugar de guardar ciegamente, llamamos al consolidador.
-                        # Le pasamos operation_start_date (el dÃ­a 21) y end_fill_date (el dÃ­a 25).
-                        # Ã‰l se encargarÃ¡ de ver si hay que fusionar con el 20 o el 26.
+                        # Le pasamos operation_start_date (el día 21) y end_fill_date (el día 25).
+                        # Él se encargará de ver si hay que fusionar con el 20 o el 26.
                         # Recuperar config de _resolve_force_new_entry_start (si hubo Separar)
                         start_manual_cfg = getattr(self, '_last_manual_exit_config', None)
                         self._last_manual_exit_config = None  # Consumir
@@ -2438,7 +2448,7 @@ class PlanStaffWidget(QWidget):
                             badge, end_fill_date, new_status
                         )
                         if end_result == 1:
-                            # Recuperar config manual del diÃ¡logo (si existe)
+                            # Recuperar config manual del diálogo (si existe)
                             manual_cfg = getattr(self, '_last_manual_exit_config', None)
                             self._last_manual_exit_config = None  # Consumir
 
@@ -2564,14 +2574,14 @@ class PlanStaffWidget(QWidget):
                     right = sel.rightColumn()
                     col_range = list(range(left, right + 1))
 
-            # ---------------- Valores iniciales para el diÃƒÂ¡logo ----------------
-            # Leemos info actual de BD (status, remark, pickup/dropoff) para el dÃƒÂ­a base
+            # ---------------- Valores iniciales para el diálogo ----------------
+            # Leemos info actual de BD (status, remark, pickup/dropoff) para el día base
             schedule_map = db.get_schedule_map_for_range(
                 badge, base_date, base_date, self.source
             )
             day_info = schedule_map.get(base_date.isoformat(), {}) or {}
 
-            # --- LÃƒÂ³gica de resoluciÃƒÂ³n de cÃƒÂ³digo (MANTENER TU ARREGLO PREVIO) ---
+            # --- Lógica de resolución de código (MANTENER TU ARREGLO PREVIO) ---
             raw_cell_text = new_text if new_text else ""
             resolved_status_code = raw_cell_text
 
@@ -2581,7 +2591,7 @@ class PlanStaffWidget(QWidget):
                 if not isinstance(data, dict):
                     continue
 
-                # 1. Ã‚Â¿Coincide con la etiqueta visual?
+                # 1. Â¿Coincide con la etiqueta visual?
                 if label.strip().upper() == raw_cell_text:
                     if data.get("kind") == "base":
                         resolved_status_code = data.get("status")
@@ -2589,7 +2599,7 @@ class PlanStaffWidget(QWidget):
                         resolved_status_code = data.get("code")
                     break
 
-                # 2. Ã‚Â¿Coincide con el cÃƒÂ³digo interno?
+                # 2. Â¿Coincide con el código interno?
                 internal_code = (
                     data.get("status")
                     if data.get("kind") == "base"
@@ -2621,11 +2631,11 @@ class PlanStaffWidget(QWidget):
                 initial=initial,
             )
 
-            # --- AQUÃƒÂ OCURRÃƒÂA EL DOBLE TRIGGER ---
+            # --- AQUÍ OCURRÍA EL DOBLE TRIGGER ---
             # Al ejecutarse editor.exec(), se pierde foco, se dispara itemChanged de nuevo.
             # Pero como _is_handling_change es True, la segunda llamada entra al 'if' inicial y retorna.
             if editor.exec() != QDialog.DialogCode.Accepted:
-                # Usuario cancelÃƒÂ³: revertimos el cambio visual y salimos
+                # Usuario canceló: revertimos el cambio visual y salimos
                 with QSignalBlocker(self.schedule_table):
                     self._safe_revert_item(item, old_text)
                 return
@@ -2640,7 +2650,7 @@ class PlanStaffWidget(QWidget):
             entry_datetime = payload.get("entry_datetime")
             exit_datetime = payload.get("exit_datetime")
 
-            # ValidaciÃƒÂ³n simple
+            # Validación simple
             if entry_datetime and exit_datetime and entry_datetime > exit_datetime:
                 QMessageBox.warning(
                     self,
@@ -2651,7 +2661,7 @@ class PlanStaffWidget(QWidget):
                     self._safe_revert_item(item, old_text)
                 return
 
-            # Interpretar selecciÃƒÂ³n
+            # Interpretar selección
             if not sel or sel.get("kind") in ("none", "separator"):
                 schedule_status = None
                 shift_type = None
@@ -2727,12 +2737,12 @@ class PlanStaffWidget(QWidget):
 
             # Actualizar Base de Datos
             try:
-                # [PATCH COLISIÃ“N] ----------------------------------------
+                # [PATCH COLISIÓN] ----------------------------------------
                 # start_date_block es la fecha donde inicia el cambio
                 force_flag = self._resolve_force_new_entry_start(badge, start_date_block, schedule_status)
                 
                 if force_flag is None:
-                    # Usuario cancelÃƒÂ³ -> Revertir visualmente y salir
+                    # Usuario canceló -> Revertir visualmente y salir
                     with QSignalBlocker(self.schedule_table):
                         self._safe_revert_item(item, old_text)
                     return
@@ -2751,12 +2761,12 @@ class PlanStaffWidget(QWidget):
                     force_new_entry_start=force_flag
                 )
                 
-                # [RIGHT BOUNDARY CHECK] Ãƒ¢€â€Â Borde final del bloque editado
+                # [RIGHT BOUNDARY CHECK] " Borde final del bloque editado
                 end_result = self._resolve_force_new_entry_end(
                     badge, end_date_block, schedule_status
                 )
                 if end_result is None:
-                    # Usuario cancelÃƒÂ³ → revertir
+                    # Usuario canceló â†’ revertir
                     with QSignalBlocker(self.schedule_table):
                         self._safe_revert_item(item, old_text)
                     return
@@ -2764,7 +2774,7 @@ class PlanStaffWidget(QWidget):
                 #    FIX: Antes solo se llamaba cuando end_result==1 (SEPARATE),
                 #    lo que dejaba "Unir (Mismo Viaje)" sin efecto real.
                 
-                # Recuperar config manual del diÃƒÂ¡logo (si existe)
+                # Recuperar config manual del diálogo (si existe)
                 manual_cfg = getattr(self, '_last_manual_exit_config', None)
                 self._last_manual_exit_config = None  # Consumir
 
@@ -2821,12 +2831,12 @@ class PlanStaffWidget(QWidget):
                 self.refresh_ui_data()
                 return
 
-            # FinalizaciÃƒÂ³n
+            # Finalización
             self.check_excel_health()
             self.rotation_changed.emit()
 
         finally:
-            # 3. LIBERAR BANDERA (CRÃƒÂTICO)
+            # 3. LIBERAR BANDERA (CRÍTICO)
             self._is_handling_change = False
 
     # ---------- MODIFIED: hover card logic ----------
@@ -2894,54 +2904,55 @@ class PlanStaffWidget(QWidget):
         in_time = day_info.get("in_time")
         out_time = day_info.get("out_time")
         
-        # --- DETECCIÃ“N DE "TREAT AS OFF" ---
+        # --- DETECCIÓN DE "TREAT AS OFF" ---
         is_custom_off = False
         custom_color_hex = "#FFFFFF" # Default title color
 
         if status_code in self._custom_shift_map:
             info = self._custom_shift_map[status_code]
             is_custom_off = info.get("is_off", False)
-            # Opcional: Si quisieras usar el color en el tÃ­tulo del tooltip
+            # Opcional: Si quisieras usar el color en el título del tooltip
             # custom_color_hex = info.get("color_hex", "#FFFFFF")
 
-        # --- LOGICA DE TÃTULOS Y HORARIOS ---
-        if status_code == "ON":
-            shift_title = "ON (Day Shift)"
-            # Default times logic...
-            if not in_time: in_time = "06:00" if self.source == "Newmont" else "07:00"
-            if not out_time: out_time = "12:00" if self.source == "Newmont" else "07:00"
+        # --- LOGICA DE TITULOS Y HORARIOS (data-driven via DB) ---
+        # Buscar el type en _custom_shift_map (incluye ON/ON NS/OFF si estan en DB)
+        _type_info = (self._custom_shift_map or {}).get(status_code)
 
-        elif status_code == "ON NS":
-            shift_title = "ON NS (Night Shift)"
-            if not in_time: in_time = "12:00" if self.source == "Newmont" else "07:00"
-            if not out_time: out_time = "06:00" if self.source == "Newmont" else "07:00"
+        if _type_info:
+            shift_title = _type_info.get("name", status_code)
+            is_custom_off = bool(_type_info.get("is_off", 0))
 
-        elif status_code in self._custom_shift_map:
-            custom_info = self._custom_shift_map[status_code]
-            shift_title = custom_info.get("name", status_code)
-            
-            # CRÃTICO: Si es 'Treat as OFF', matamos los horarios para que no se muestren
             if is_custom_off:
+                # Tipo OFF (system u otro): no mostrar horarios
                 in_time = None
                 out_time = None
             else:
-                # Si es un custom normal (Working), llenamos defaults si faltan
-                if not in_time: in_time = custom_info.get("in_time")
-                if not out_time: out_time = custom_info.get("out_time")
+                # Tipo working: usar tiempos de DB si no vienen de la celda
+                if not in_time:
+                    in_time = _type_info.get("in_time")
+                if not out_time:
+                    out_time = _type_info.get("out_time")
 
         elif status_code == "OFF":
+            # Fallback hardcode para OFF si no esta en DB
             shift_title = "OFF"
             in_time = None
             out_time = None
+            is_custom_off = True
+
+        else:
+            # Status desconocido: mostrar tal cual
+            shift_title = status_code
+            is_custom_off = False
 
         # 5. Build HTML Content
-        # Usamos un color blanco fuerte para el tÃ­tulo para asegurar contraste en el tooltip oscuro
+        # Usamos un color blanco fuerte para el título para asegurar contraste en el tooltip oscuro
         title_style = f"style='margin: 0 0 2px 0; font-size: 14px; color: #FFFFFF; font-weight: 600;'"
         schedule_style = "style='margin: 0; font-size: 13px; color: #FFFFFF;'"
 
         content_lines = [f"<p {title_style}>{shift_title}</p>"]
 
-        # Mostrar reloj solo si hay horas Y NO es un dÃ­a OFF
+        # Mostrar reloj solo si hay horas Y NO es un día OFF
         if in_time and out_time and not is_custom_off:
             content_lines.append(f"<p {schedule_style}>⏰ {in_time} – {out_time}</p>")
 
@@ -2965,7 +2976,7 @@ class PlanStaffWidget(QWidget):
                     pass
 
         # --- LOGICA DE FILTRADO (PICKUP / DROP OFF) ---
-        # Solo mostrar logÃ­stica si NO es OFF y NO es Custom OFF
+        # Solo mostrar logística si NO es OFF y NO es Custom OFF
         pickup_clean = _clean(pickup)
         dropoff_clean = _clean(dropoff)
 
@@ -2997,7 +3008,7 @@ class PlanStaffWidget(QWidget):
         self.user_selector_combo.blockSignals(True)
         self.user_selector_combo.clear()
         
-        # --- CAMBIO AQUÃ: Usamos la nueva funciÃ³n que trae los defaults ---
+        # --- CAMBIO AQUÍ: Usamos la nueva función que trae los defaults ---
         # Antes era: db.get_all_users(self.source)
         self.users_for_selector = db.get_users_with_defaults(self.source)
         # ----------------------------------------------------------------
@@ -3020,14 +3031,14 @@ class PlanStaffWidget(QWidget):
     def autofill_user_data(self, index):
         """
         Prellena rol/badge/defaults del usuario, pero respeta el Status actual.
-        Si el Status es tipo OFF, NO llenamos la logÃ­stica.
+        Si el Status es tipo OFF, NO llenamos la logística.
         """
         # 1. Obtener estado actual del selector de estatus
         current_sel = self.status_selector.currentData()
         is_current_status_off = _is_off_like_payload(current_sel) if isinstance(current_sel, dict) else False
 
         if index > 0:
-            # La lista 'users_for_selector' coincide con el Ã­ndice del combo (offset -1)
+            # La lista 'users_for_selector' coincide con el índice del combo (offset -1)
             user = self.users_for_selector[index - 1]
             
             # Llenar campos de solo lectura
@@ -3038,12 +3049,12 @@ class PlanStaffWidget(QWidget):
             def_pu = user.get("pickup_location")
             def_do = user.get("dropoff_location")
 
-            # GUARDAR ESTADO: Actualizamos la memoria del "Ãºltimo working" 
+            # GUARDAR ESTADO: Actualizamos la memoria del "último working" 
             # para poder restaurar si el usuario cambia de OFF -> ON.
             self._last_working_pickup = def_pu or None
             self._last_working_dropoff = def_do or None
 
-            # 2. LÃ³gica: Llenar combos O Limpiar combos basado en el Status
+            # 2. Lógica: Llenar combos O Limpiar combos basado en el Status
             with QSignalBlocker(self.pickup_combo), QSignalBlocker(self.dropoff_combo):
                 if is_current_status_off:
                     # El status dice NO -> Limpiar
@@ -3088,14 +3099,14 @@ class PlanStaffWidget(QWidget):
         out_time=None,
     ):
         """
-        Aplica un perÃ­odo [start_date, end_date] a DB y Excel.
-        Se basa en la misma lÃ³gica que save_plan_changes, pero
-        sin mostrar diÃ¡logos.
+        Aplica un período [start_date, end_date] a DB y Excel.
+        Se basa en la misma lógica que save_plan_changes, pero
+        sin mostrar diálogos.
         """
         # -------------------------------------------------------
-        # 1) Decidir quÃ© horas vamos a usar
-        #    - Si vienen in_time/out_time como parÃ¡metros (copiados
-        #      del dÃ­a ancla), usamos esas tal cual.
+        # 1) Decidir qué horas vamos a usar
+        #    - Si vienen in_time/out_time como parámetros (copiados
+        #      del día ancla), usamos esas tal cual.
         #    - Si no, usamos las horas definidas en el shift_type.
         # -------------------------------------------------------
         if in_time or out_time:
@@ -3134,7 +3145,7 @@ class PlanStaffWidget(QWidget):
             exit_datetime = datetime.combine(real_exit_date, out_time_obj)
         
         db.delete_operations_in_range(badge, start_date, end_date)
-        # DB: operaciÃ³n
+        # DB: operación
         db.add_operation(
             username=username,
             role=role,
@@ -3187,15 +3198,15 @@ class PlanStaffWidget(QWidget):
             out_time,
         )
         if not success:
-            # No muestro QMessageBox aquÃ­ para no interrumpir al usuario
-            # pero podrÃ­as loguearlo si quieres.
+            # No muestro QMessageBox aquí para no interrumpir al usuario
+            # pero podrías loguearlo si quieres.
             print("Excel update failed from cell edit:", message)
    
    # --------------------------------------------------------------------------
-    # HELPER: DetecciÃ³n de Colisiones (Working -> Working con CAMBIO DE TURNO)
+    # HELPER: Detección de Colisiones (Working -> Working con CAMBIO DE TURNO)
     # --------------------------------------------------------------------------
     # --------------------------------------------------------------------------
-    # HELPER: DetecciÃ³n de Colisiones con UI Avanzada
+    # HELPER: Detección de Colisiones con UI Avanzada
     # --------------------------------------------------------------------------
     def _resolve_force_new_entry_start(self, badge, start_date, new_status, cursor=None):
         """
@@ -3204,13 +3215,13 @@ class PlanStaffWidget(QWidget):
         
         Args:
           cursor: Si se pasa (ej: desde paste), las lecturas usan ESA misma
-                  conexiÃ³n/transacciÃ³n para ver datos reciÃ©n escritos.
+                  conexión/transacción para ver datos recién escritos.
         Retorna:
           1 -> Separar (force_new_entry_start=1 para hoy)
           0 -> Unir (force_new_entry_start=0 para hoy)
-          None -> Cancelar operaciÃ³n
+          None -> Cancelar operación
         """
-        # 1. Validaciones bÃ¡sicas (sin cambios)
+        # 1. Validaciones básicas (sin cambios)
         n_code = str(new_status or "").strip().upper()
         if not n_code or not db.is_working_status(n_code, self.source):
             return 0 
@@ -3223,12 +3234,12 @@ class PlanStaffWidget(QWidget):
         if not p_code or not db.is_working_status(p_code, self.source):
             return 0
 
-        # Si son el mismo cÃ³digo (ej: ON -> ON), asumimos continuidad automÃ¡tica
+        # Si son el mismo código (ej: ON -> ON), asumimos continuidad automática
         if p_code == n_code:
             return 0 
 
         # ---------------------------------------------------------
-        # 2. REGLA DE NEGOCIO: Â¿Mostrar editor de hora de salida?
+        # 2. REGLA DE NEGOCIO: ¿Mostrar editor de hora de salida?
         #    SOLO para RGM + turno anterior aplica regla 1+D.
         #    Cubre ON, ON NS y cualquier Shift Type custom con apply_1d=True.
         # ---------------------------------------------------------
@@ -3238,16 +3249,16 @@ class PlanStaffWidget(QWidget):
         )
 
         # ---------------------------------------------------------
-        # 3. CONSTRUCCIÃ“N DEL DIÃLOGO PERSONALIZADO
+        # 3. CONSTRUCCIÓN DEL DIÁLOGO PERSONALIZADO
         # ---------------------------------------------------------
         dialog = QDialog(self)
-        dialog.setWindowTitle("GestiÃ³n de Turnos Consecutivos")
+        dialog.setWindowTitle("Gestión de Turnos Consecutivos")
         dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
         dialog.setFixedWidth(420)
         
         layout = QVBoxLayout(dialog)
 
-        # A) Panel de InformaciÃ³n (Alerta Visual)
+        # A) Panel de Información (Alerta Visual)
         info_frame = QFrame()
         info_frame.setStyleSheet("background-color: #FFF3E0; border: 1px solid #FFE0B2; border-radius: 4px; padding: 6px;")
         info_layout = QVBoxLayout(info_frame)
@@ -3275,7 +3286,7 @@ class PlanStaffWidget(QWidget):
             
             grp_layout.addWidget(QLabel(f"Defina la hora real de SALIDA del viaje de ayer ({prev_day.strftime('%d/%m')}):"))
             
-            # HeurÃ­stica: Si ayer fue turno de noche (NS), sugerir 06:00, sino 18:00
+            # Heurística: Si ayer fue turno de noche (NS), sugerir 06:00, sino 18:00
             default_hour = 6 if ("NS" in p_code or "NIGHT" in p_code) else 18
             time_edit = QTimeEdit(QTime(default_hour, 0))
             time_edit.setDisplayFormat("HH:mm")
@@ -3288,26 +3299,26 @@ class PlanStaffWidget(QWidget):
         # C) Botonera
         btn_box = QDialogButtonBox()
         
-        # BotÃ³n UNIR (Primary)
+        # Botón UNIR (Primary)
         btn_join = btn_box.addButton("Unir (Mismo Viaje)", QDialogButtonBox.ButtonRole.AcceptRole)
         btn_join.setStyleSheet("padding: 6px 15px;")
         
-        # BotÃ³n SEPARAR (Action/Destructive) - Color Rojo para resaltar ruptura
+        # Botón SEPARAR (Action/Destructive) - Color Rojo para resaltar ruptura
         btn_split = btn_box.addButton("Separar (Nuevo Viaje)", QDialogButtonBox.ButtonRole.ActionRole)
         btn_split.setStyleSheet("background-color: #D32F2F; color: white; padding: 6px 15px; font-weight: bold;")
         
-        # BotÃ³n CANCELAR
+        # Botón CANCELAR
         btn_cancel = btn_box.addButton("Cancelar", QDialogButtonBox.ButtonRole.RejectRole)
         
         layout.addWidget(btn_box)
 
-        # Conectar seÃ±ales (Usamos cÃ³digos de salida: 10=Join, 20=Split)
+        # Conectar señales (Usamos códigos de salida: 10=Join, 20=Split)
         btn_join.clicked.connect(lambda: dialog.done(10))
         btn_split.clicked.connect(lambda: dialog.done(20))
         btn_cancel.clicked.connect(dialog.reject)
 
         # ---------------------------------------------------------
-        # 3. EJECUCIÃ“N Y PROCESAMIENTO
+        # 3. EJECUCIÓN Y PROCESAMIENTO
         # ---------------------------------------------------------
         result = dialog.exec()
 
@@ -3318,7 +3329,7 @@ class PlanStaffWidget(QWidget):
         elif result == 20: # SEPARAR
             print("[SCD] User chose: SEPARATE (1)")
             
-            # Actualizar hora de salida del viaje anterior SOLO si se mostrÃ³ el editor
+            # Actualizar hora de salida del viaje anterior SOLO si se mostró el editor
             if ask_prev_exit_time and time_edit is not None:
                 try:
                     custom_exit_time = time_edit.time().toPyTime()
@@ -3352,11 +3363,11 @@ class PlanStaffWidget(QWidget):
         """
         Detecta colisiones en el BORDE DERECHO del bloque pegado/arrastrado.
         
-        Escenario: pegaste ON en 16-17, pero el dÃ­a 18 ya tiene WH.
-        Sin esta validaciÃ³n, el ON aplica 1+D (exit=18 07:00) y se cruza con WH (04:00).
+        Escenario: pegaste ON en 16-17, pero el día 18 ya tiene WH.
+        Sin esta validación, el ON aplica 1+D (exit=18 07:00) y se cruza con WH (04:00).
         
         Retorna:
-          1 -> Separar (se marcÃ³ force_new_entry en next_day + exit override aplicado)
+          1 -> Separar (se marcó force_new_entry en next_day + exit override aplicado)
           0 -> Unir / No hay conflicto
           None -> Cancelar
         """
@@ -3372,16 +3383,16 @@ class PlanStaffWidget(QWidget):
         if not n_code or not db.is_working_status(n_code, self.source):
             return 0
 
-        # Mismo cÃ³digo = continuidad, no hay conflicto
+        # Mismo código = continuidad, no hay conflicto
         if e_code == n_code:
             return 0
 
-        # Si maÃ±ana YA tiene force_new_entry, no necesitamos preguntar de nuevo
+        # Si mañana YA tiene force_new_entry, no necesitamos preguntar de nuevo
         if next_info.get("force_new_entry", 0) == 1:
             return 0
 
         # ---------------------------------------------------------
-        # REGLA DE NEGOCIO: Â¿Mostrar editor de hora de salida?
+        # REGLA DE NEGOCIO: ¿Mostrar editor de hora de salida?
         # SOLO para RGM + el bloque que TERMINA aplica regla 1+D.
         # Cubre ON, ON NS y cualquier Shift Type custom con apply_1d=True.
         # ---------------------------------------------------------
@@ -3391,16 +3402,16 @@ class PlanStaffWidget(QWidget):
         )
 
         # ---------------------------------------------------------
-        # DIÃLOGO PERSONALIZADO (Borde Derecho)
+        # DIÁLOGO PERSONALIZADO (Borde Derecho)
         # ---------------------------------------------------------
         dialog = QDialog(self)
-        dialog.setWindowTitle("GestiÃ³n de Turnos Consecutivos (Borde Final)")
+        dialog.setWindowTitle("Gestión de Turnos Consecutivos (Borde Final)")
         dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
         dialog.setFixedWidth(440)
 
         layout = QVBoxLayout(dialog)
 
-        # A) Panel de InformaciÃ³n
+        # A) Panel de Información
         info_frame = QFrame()
         info_frame.setStyleSheet(
             "background-color: #FFF3E0; border: 1px solid #FFE0B2; "
@@ -3412,8 +3423,8 @@ class PlanStaffWidget(QWidget):
             f"<h3 style='color:#E65100; margin:0;'>⚠️ Cambio de Turno Detectado (Borde Final)</h3>"
             f"<div style='margin-top:5px;'>"
             f"El usuario <b>{badge}</b> tiene turnos consecutivos diferentes:<br>"
-            f"• Ãšltimo dÃ­a marcado ({end_date.strftime('%d/%m')}): <b>{e_code}</b><br>"
-            f"• DÃ­a siguiente ({next_day.strftime('%d/%m')}): <b>{n_code}</b>"
+            f"• Último día marcado ({end_date.strftime('%d/%m')}): <b>{e_code}</b><br>"
+            f"• Día siguiente ({next_day.strftime('%d/%m')}): <b>{n_code}</b>"
             f"</div>"
         )
         lbl_info.setTextFormat(Qt.TextFormat.RichText)
@@ -3424,16 +3435,16 @@ class PlanStaffWidget(QWidget):
         if ask_exit_time:
             warn_lbl = QLabel(
                 f"<div style='color:#C62828; margin-top:6px;'>"
-                f"⛔ El turno <b>{e_code}</b> aplica la regla 1+D: su salida estÃ¡ndar serÃ­a "
+                f"⛔ El turno <b>{e_code}</b> aplica la regla 1+D: su salida estándar sería "
                 f"<b>{next_day.strftime('%d/%m')} 07:00</b>, lo que se cruza con el turno "
-                f"<b>{n_code}</b> del mismo dÃ­a."
+                f"<b>{n_code}</b> del mismo día."
                 f"</div>"
             )
             warn_lbl.setTextFormat(Qt.TextFormat.RichText)
             warn_lbl.setWordWrap(True)
             layout.addWidget(warn_lbl)
 
-            # FIX BUG 5: Label dinÃ¡mico que refleja la hora seleccionada
+            # FIX BUG 5: Label dinámico que refleja la hora seleccionada
             selected_preview_lbl = QLabel()
             selected_preview_lbl.setStyleSheet(
                 "color: #1B5E20; font-weight: bold; font-size: 12px; margin-top: 4px;"
@@ -3451,7 +3462,7 @@ class PlanStaffWidget(QWidget):
 
             grp_layout.addWidget(QLabel(
                 f"Defina la hora real de SALIDA del bloque {e_code} "
-                f"(Ãºltimo dÃ­a: {end_date.strftime('%d/%m')}):"
+                f"(último día: {end_date.strftime('%d/%m')}):"
             ))
 
             default_hour = 6 if ("NS" in e_code or "NIGHT" in e_code) else 18
@@ -3460,7 +3471,7 @@ class PlanStaffWidget(QWidget):
             time_edit.setStyleSheet("font-size: 13px; padding: 4px;")
             grp_layout.addWidget(time_edit)
 
-            # FIX BUG 5: Conectar cambio de hora a actualizaciÃ³n visual
+            # FIX BUG 5: Conectar cambio de hora a actualización visual
             def _update_preview():
                 if selected_preview_lbl is not None:
                     chosen = time_edit.time().toPyTime()
@@ -3492,7 +3503,7 @@ class PlanStaffWidget(QWidget):
         btn_cancel.clicked.connect(dialog.reject)
 
         # ---------------------------------------------------------
-        # EJECUCIÃ“N Y PROCESAMIENTO
+        # EJECUCIÓN Y PROCESAMIENTO
         # ---------------------------------------------------------
         result = dialog.exec()
 
@@ -3503,7 +3514,7 @@ class PlanStaffWidget(QWidget):
         elif result == 20:  # SEPARAR
             print(f"[SCD-END] User chose: SEPARATE for {badge} {end_date}->{next_day}")
 
-            # --- FIX BUG 1: Garantizar que siempre hay un cursor vÃ¡lido ---
+            # --- FIX BUG 1: Garantizar que siempre hay un cursor válido ---
             own_conn = None
             active_cursor = cursor
             if active_cursor is None:
@@ -3511,7 +3522,7 @@ class PlanStaffWidget(QWidget):
                 active_cursor = own_conn.cursor()
 
             try:
-                # 1. Marcar force_new_entry=1 en el dÃ­a siguiente
+                # 1. Marcar force_new_entry=1 en el día siguiente
                 active_cursor.execute(
                     "UPDATE schedules SET force_new_entry = 1 "
                     "WHERE badge = ? AND date = ? AND source = ?",
@@ -3534,7 +3545,7 @@ class PlanStaffWidget(QWidget):
                     else:
                         print(f"[SCD-END]  Failed: {msg}")
 
-                # Commit solo si abrimos conexiÃ³n propia
+                # Commit solo si abrimos conexión propia
                 if own_conn:
                     own_conn.commit()
 
@@ -3571,7 +3582,7 @@ class PlanStaffWidget(QWidget):
         mark_error(self.entry_date_edit, False)
         mark_error(self.exit_date_edit, False)
 
-        # 2. Leer datos bÃ¡sicos del formulario
+        # 2. Leer datos básicos del formulario
         username = self.user_selector_combo.currentText()
         badge = self.badge_display.text()
         role = self.role_display.text()
@@ -3582,7 +3593,7 @@ class PlanStaffWidget(QWidget):
         dropoff = self.dropoff_combo.currentData() or None
         remark = self.remarks_input.text().strip() or None
 
-        # 3. Validaciones bÃ¡sicas
+        # 3. Validaciones básicas
         if not username or username == "-- Select a user --":
             mark_error(self.user_selector_combo, True)
             QMessageBox.warning(self, "Incomplete Data", "Please select an employee.")
@@ -3603,7 +3614,7 @@ class PlanStaffWidget(QWidget):
             )
             return
 
-        # 4. Interpretar selecciÃ³n del turno (Status/Shift)
+        # 4. Interpretar selección del turno (Status/Shift)
         sel = self.status_selector.currentData()
         if not sel or sel.get("kind") in ("none", "separator"):
             schedule_status = None
@@ -3617,13 +3628,13 @@ class PlanStaffWidget(QWidget):
             in_time_raw, out_time_raw = sel.get("in_time"), sel.get("out_time")
 
         # ---------------------------------------------------------------------
-        # 5. CÃLCULO DE FECHAS Y HORAS DE VIAJE (CORRECCIÃ“N PUNTUAL)
+        # 5. CÁLCULO DE FECHAS Y HORAS DE VIAJE (CORRECCIÓN PUNTUAL)
         # ---------------------------------------------------------------------
         entry_datetime = None
         exit_datetime = None
 
         if self.travel_dates_check.isChecked():
-            # OPCIÃ“N A: El usuario define fechas especÃ­ficas manualmente
+            # OPCIÓN A: El usuario define fechas específicas manualmente
             entry_date = self.entry_date_edit.date().toPyDate()
             entry_time = self.entry_time_edit.time().toPyTime()
             entry_datetime = datetime.combine(entry_date, entry_time)
@@ -3632,7 +3643,7 @@ class PlanStaffWidget(QWidget):
             exit_time = self.exit_time_edit.time().toPyTime()
             exit_datetime = datetime.combine(exit_date, exit_time)
 
-            # ValidaciÃ³n lÃ³gica de viaje
+            # Validación lógica de viaje
             if entry_datetime > exit_datetime:
                 mark_error(self.entry_date_edit, True)
                 mark_error(self.exit_date_edit, True)
@@ -3655,15 +3666,15 @@ class PlanStaffWidget(QWidget):
                     return
 
         elif schedule_status is not None:
-            # OPCIÃ“N B: AutomÃ¡tico (Check desmarcado) -> Calcular Defaults
+            # OPCIÓN B: Automático (Check desmarcado) -> Calcular Defaults
             # Se usa la fecha de inicio del periodo para Entry y fin para Exit.
-            # Se inyectan las horas segÃºn el tipo de turno o reglas de negocio.
+            # Se inyectan las horas según el tipo de turno o reglas de negocio.
 
             # Hora por defecto base (07:00 / 07:00) Para RGM
             t_in = datetime.strptime("07:00", "%H:%M").time()
             t_out = datetime.strptime("07:00", "%H:%M").time()
 
-            # LÃ³gica de Horas
+            # Lógica de Horas
             if in_time_raw and out_time_raw:
                 # Si el turno (custom) ya trae horas definidas en DB
                 try: 
@@ -3675,7 +3686,7 @@ class PlanStaffWidget(QWidget):
                 is_newmont = (self.source == "Newmont")
                 
                 if is_newmont:
-                    if schedule_status == "ON": # DÃ­a Newmont
+                    if schedule_status == "ON": # Día Newmont
                         t_in = datetime.strptime("06:00", "%H:%M").time()
                         t_out = datetime.strptime("12:00", "%H:%M").time()
                     elif schedule_status == "ON NS": # Noche Newmont
@@ -3691,9 +3702,9 @@ class PlanStaffWidget(QWidget):
             # --- INICIO DEL CAMBIO 1+D ---
             
             # 1. Calculamos la fecha de salida real
-            # Si es RGM y es ON/ON NS -> Salida es MaÃ±ana (end_date + 1)
+            # Si es RGM y es ON/ON NS -> Salida es Mañana (end_date + 1)
             # Si es RGM y es Otro (Capacitacion) -> Salida es Hoy (end_date)
-            # El mÃ©todo _calculate_rgm_exit_date encapsula esta lÃ³gica para no repetir if/else aquÃ­.
+            # El método _calculate_rgm_exit_date encapsula esta lógica para no repetir if/else aquí.
             real_exit_date = self._calculate_rgm_exit_date(schedule_status, end_date)
 
             # 2. Combinamos con las horas (t_in / t_out) que ya calculaste arriba
@@ -3703,10 +3714,10 @@ class PlanStaffWidget(QWidget):
             # --- FIN DEL CAMBIO 1+D ---
 
         # ---------------------------------------------------------------------
-        # FIN DE LA CORRECCIÃ“N
+        # FIN DE LA CORRECCIÓN
         # ---------------------------------------------------------------------
 
-        # 6. DetecciÃ³n de Conflictos (Overwrite check)
+        # 6. Detección de Conflictos (Overwrite check)
         conflicts_excel = excel.find_conflicts(
             self.excel_file, username, badge, start_date, end_date
         )
@@ -3724,7 +3735,7 @@ class PlanStaffWidget(QWidget):
             if box.clickedButton() != accept_btn:
                 return
 
-        # Para auditorÃ­a
+        # Para auditoría
         prev_map = db.get_schedule_map_for_range(
             badge, start_date, end_date, self.source
         )
@@ -3786,7 +3797,7 @@ class PlanStaffWidget(QWidget):
 
         # 7. Guardar en BD (SSoT)
         if schedule_status is not None:
-            # AquÃ­ es donde se guardan los datetimes calculados (entry_datetime/exit_datetime)
+            # Aquí es donde se guardan los datetimes calculados (entry_datetime/exit_datetime)
             db.delete_operations_in_range(badge, start_date, end_date)
             db.add_operation(
                 username=username,
@@ -3795,8 +3806,8 @@ class PlanStaffWidget(QWidget):
                 start_date=start_date,
                 end_date=end_date,
                 created_by=self.logged_username,
-                entry_date=entry_datetime,  # Ahora siempre tendrÃ¡ valor si hay turno
-                exit_date=exit_datetime,  # Ahora siempre tendrÃ¡ valor si hay turno
+                entry_date=entry_datetime,  # Ahora siempre tendrá valor si hay turno
+                exit_date=exit_datetime,  # Ahora siempre tendrá valor si hay turno
             )
             db.upsert_schedule_range(
                 badge,
@@ -3841,7 +3852,7 @@ class PlanStaffWidget(QWidget):
             elif sel.get("status") == "OFF":
                 is_off_day_guard = True
         else:
-            # Si no hay selecciÃ³n (sel is None), asumimos que no se marca (OFF-like)
+            # Si no hay selección (sel is None), asumimos que no se marca (OFF-like)
             is_off_day_guard = True
 
         if is_off_day_guard:
@@ -3849,7 +3860,7 @@ class PlanStaffWidget(QWidget):
             dropoff = None
 
 
-        # Guardar ubicaciÃ³n si aplica
+        # Guardar ubicación si aplica
         if pickup or dropoff:
             db.assign_user_location_range(badge, start_date, end_date, pickup, dropoff)
             db.log_event(
@@ -3876,7 +3887,7 @@ class PlanStaffWidget(QWidget):
         )
         QTimer.singleShot(2000, lambda: setattr(self, "_is_internal_update", False))
 
-        # 9. AuditorÃ­a y FinalizaciÃ³n
+        # 9. Auditoría y Finalización
         new_map = db.get_schedule_map_for_range(
             badge, start_date, end_date, self.source
         )
@@ -3940,7 +3951,7 @@ class PlanStaffWidget(QWidget):
             )
 
     # =======================================================
-    # NUEVA FUNCIONALIDAD: LÃ³gica para el reporte de estadÃ­as
+    # NUEVA FUNCIONALIDAD: Lógica para el reporte de estadías
     # =======================================================
     def _generate_stay_report(self):
         """Generates and saves the Onsite Stay Period report."""
@@ -4095,7 +4106,7 @@ class PlanStaffWidget(QWidget):
             if self._last_excel_mtime is None or mtime != self._last_excel_mtime:
                 # --- AGREGAR ESTE BLOQUE DE SEGURIDAD ---
                 if self._is_internal_update:
-                    # Actualizamos el mtime para que la prÃ³xima vez no crea que es nuevo
+                    # Actualizamos el mtime para que la próxima vez no crea que es nuevo
                     self._last_excel_mtime = mtime
                     print("DEBUG: Ignorando recarga por guardado interno.")
                     return
@@ -4149,7 +4160,7 @@ class PlanStaffWidget(QWidget):
                 db.log_event(self.logged_username, self.source, "EXCEL_PATH_UPDATE",
                              f"plan_staff: {old_path} -> {new_path}")
 
-                # 2. Emitir seÃ±al para avisar a otros widgets
+                # 2. Emitir señal para avisar a otros widgets
                 self.excel_path_changed.emit(self.source, new_path)
                 # ------------------------------------
 
@@ -4254,14 +4265,14 @@ class PlanStaffWidget(QWidget):
 
     def _handle_paste_operation(self):
         """
-        Maneja la operaciÃ³n de PEGAR (Paste) replicando la lÃ³gica "Smart Drag".
+        Maneja la operación de PEGAR (Paste) replicando la lógica "Smart Drag".
         
         Flujo por celda:
         1. Parsing del Clipboard.
-        2. CÃ¡lculo de horas (Calculate Time Logic).
+        2. Cálculo de horas (Calculate Time Logic).
         3. Upsert en Schedule (SSoT).
-        4. ConsolidaciÃ³n LogÃ­stica (Operations) inmediata para reparar vecinos.
-        5. ActualizaciÃ³n Excel.
+        4. Consolidación Logística (Operations) inmediata para reparar vecinos.
+        5. Actualización Excel.
         """
         # 1. Parsing del Clipboard
         payload, fmt = ScheduleClipboardService.parse_clipboard()
@@ -4272,7 +4283,7 @@ class PlanStaffWidget(QWidget):
         if not selected_ranges:
             return
 
-        # 2. GeometrÃ­a
+        # 2. Geometría
         anchor_row = selected_ranges[0].topRow()
         anchor_col = selected_ranges[0].leftColumn()
         
@@ -4283,7 +4294,7 @@ class PlanStaffWidget(QWidget):
         src_cols = payload['cols']
         src_grid = payload['grid']
 
-        # Ajuste de tamaÃ±o (Repetir patrÃ³n o 1:1)
+        # Ajuste de tamaño (Repetir patrón o 1:1)
         if sel_rows == 1 and sel_cols == 1:
             target_rows = src_rows
             target_cols = src_cols
@@ -4295,7 +4306,7 @@ class PlanStaffWidget(QWidget):
         self._is_internal_update = True 
         self._bulk_editing = True
         
-        # Para optimizaciÃ³n de Excel (escritura masiva al final)
+        # Para optimización de Excel (escritura masiva al final)
         excel_updates_queue = [] 
         
         try:
@@ -4312,7 +4323,7 @@ class PlanStaffWidget(QWidget):
                         abs_row = anchor_row + r
                         abs_col = anchor_col + c
 
-                        # Validaciones de lÃ­mites
+                        # Validaciones de límites
                         if abs_row >= self.schedule_table.rowCount(): continue
                         if abs_col >= self.schedule_table.columnCount(): continue
                         
@@ -4329,7 +4340,7 @@ class PlanStaffWidget(QWidget):
                         if abs_col >= len(self._date_col_dates): continue
                         target_date = self._date_col_dates[abs_col]
 
-                        # --- ExtracciÃ³n de datos del portapapeles ---
+                        # --- Extracción de datos del portapapeles ---
                         src_r_idx = r % src_rows
                         src_c_idx = c % src_cols
                         cell_data = src_grid[src_r_idx][src_c_idx]
@@ -4338,18 +4349,18 @@ class PlanStaffWidget(QWidget):
                         # --- [LOGICA SMART DRAG] 1. Calculo de Horas ---
                         # Usamos raw_text como status base. 
                         # NOTA: Al pegar texto plano, no tenemos horas "raw" previas, 
-                        # asÃ­ que confiamos en la lÃ³gica de negocio para rellenarlas.
+                        # así que confiamos en la lógica de negocio para rellenarlas.
                         final_in = self._calculate_time_logic(raw_text, "IN", None)
                         final_out = self._calculate_time_logic(raw_text, "OUT", None)
                         
                         in_str = final_in.strftime("%H:%M") if final_in else None
                         out_str = final_out.strftime("%H:%M") if final_out else None
-                        # [PATCH COLISIÃ“N] --------------------------------
-                        # Validamos colisiÃ³n celda por celda al pegar
+                        # [PATCH COLISIÓN] --------------------------------
+                        # Validamos colisión celda por celda al pegar
                         force_flag = self._resolve_force_new_entry_start(badge, target_date, raw_text, cursor=cursor)
                         
                         if force_flag is None:
-                            # Si cancela, saltamos esta celda (o podrÃ­as hacer 'break' para cancelar todo)
+                            # Si cancela, saltamos esta celda (o podrías hacer 'break' para cancelar todo)
                             continue
                         # -------------------------------------------------
                         
@@ -4362,11 +4373,11 @@ class PlanStaffWidget(QWidget):
                             cursor=cursor
                         )
                         
-                        # --- [LOGICA SMART DRAG] 3. ConsolidaciÃ³n LogÃ­stica ---
-                        # Esto es lo que repara los "vecinos". Al consolidar el dÃ­a X, 
+                        # --- [LOGICA SMART DRAG] 3. Consolidación Logística ---
+                        # Esto es lo que repara los "vecinos". Al consolidar el día X, 
                         # el sistema revisa X-1 y X+1. Si rompe un bloque antiguo, 
-                        # la funciÃ³n _consolidate_and_record_logistics se encarga de 
-                        # re-crear la operaciÃ³n correcta para este dÃ­a.
+                        # la función _consolidate_and_record_logistics se encarga de 
+                        # re-crear la operación correcta para este día.
                         self._consolidate_and_record_logistics(
                             badge, role, username, 
                             target_date, target_date, raw_text,
@@ -4375,7 +4386,7 @@ class PlanStaffWidget(QWidget):
                         )
                         self._last_manual_exit_config = None  # Consumir
 
-                        # --- ActualizaciÃ³n Visual ---
+                        # --- Actualización Visual ---
                         item = self.schedule_table.item(abs_row, abs_col)
                         if not item:
                             item = QTableWidgetItem()
@@ -4411,11 +4422,11 @@ class PlanStaffWidget(QWidget):
                         b_badge, b_end_date, b_end_status, cursor=cursor
                     )
                     if end_result is None:
-                        # Usuario cancelÃ³ → rollback
+                        # Usuario canceló → rollback
                         cursor.execute("ROLLBACK")
                         return
                     if end_result == 1:
-                        # Recuperar config manual del diÃ¡logo
+                        # Recuperar config manual del diálogo
                         manual_cfg = getattr(self, '_last_manual_exit_config', None)
                         self._last_manual_exit_config = None  # Consumir
 
@@ -4477,7 +4488,7 @@ class PlanStaffWidget(QWidget):
                 except Exception as ex_excel:
                     print(f"Error writing to Excel during paste: {ex_excel}")
 
-            # SincronizaciÃ³n final
+            # Sincronización final
             self.check_excel_health()
 
         except Exception as e:
@@ -4500,8 +4511,8 @@ class PlanStaffWidget(QWidget):
 
         with QSignalBlocker(self.pickup_combo), QSignalBlocker(self.dropoff_combo):
             if is_off:
-                # 1. LÃ³gica OFF: 
-                # Guardamos la selecciÃ³n actual antes de borrar (por si fue manual)
+                # 1. Lógica OFF: 
+                # Guardamos la selección actual antes de borrar (por si fue manual)
                 cur_pu = self.pickup_combo.currentData()
                 cur_do = self.dropoff_combo.currentData()
                 if cur_pu: self._last_working_pickup = cur_pu
@@ -4512,15 +4523,15 @@ class PlanStaffWidget(QWidget):
                 self.dropoff_combo.setCurrentIndex(0)
             
             else:
-                # 2. LÃ³gica ON: Restaurar estado previo vÃ¡lido
-                # Chequear si estÃ¡ vacÃ­o actualmente, si es asÃ­, restaurar memoria
+                # 2. Lógica ON: Restaurar estado previo válido
+                # Chequear si está vacío actualmente, si es así, restaurar memoria
                 if self.pickup_combo.currentIndex() <= 0:
                     self._set_combo_text(self.pickup_combo, getattr(self, '_last_working_pickup', None))
                 
                 if self.dropoff_combo.currentIndex() <= 0:
                     self._set_combo_text(self.dropoff_combo, getattr(self, '_last_working_dropoff', None))
                 
-                # Fallback: Si la memoria estÃ¡ vacÃ­a, intentar recargar del Objeto Usuario actual
+                # Fallback: Si la memoria está vacía, intentar recargar del Objeto Usuario actual
                 if self.pickup_combo.currentIndex() <= 0 or self.dropoff_combo.currentIndex() <= 0:
                      uidx = self.user_selector_combo.currentIndex()
                      if uidx > 0:
@@ -4532,21 +4543,28 @@ class PlanStaffWidget(QWidget):
 
     def _shift_applies_1d(self, shift_code: str) -> bool:
         """
-        Returns True if the given shift code should use the 1+D exit rule (RGM only).
-        This covers:
-          - Hardcoded codes ON / ON NS (backward compatibility).
-          - Any custom Shift Type saved with apply_1d=True in the DB.
+        Retorna True si el shift debe usar la regla 1+D (salida = end_date + 1).
+        Solo aplica para RGM.
+
+        PRIORIDAD:
+        1. DB: shift_types.apply_1d (ON/ON NS son system types con apply_1d=1 en RGM)
+        2. Hardcode legacy (fallback si DB vacia / seed no ejecutado)
         """
         if self.source != "RGM":
             return False
+
         code_up = (shift_code or "").strip().upper()
+
+        # PRIORIDAD 1: Consultar DB
+        meta = (self._custom_shift_map or {}).get(code_up)
+        if meta is not None:
+            return bool(meta.get("apply_1d", 0))
+
+        # PRIORIDAD 2: Fallback hardcode (solo si ON/ON NS no estan en DB)
         if code_up in ("ON", "ON NS"):
             return True
-        meta = (self._custom_shift_map or {}).get(code_up)
-        if meta and meta.get("apply_1d"):
-            return True
-        return False
 
+        return False
     def _calculate_rgm_exit_date(self, shift_code, end_date, separated_trip=False):
         """
         RGM exit date logic:
@@ -5122,7 +5140,7 @@ class CrudWidget(QWidget):
             QMessageBox.information(self, "Deletion Result", final_msg)
 
     def import_users_from_excel(self):
-        # (Sin cambios en esta funciÃ³n)
+        # (Sin cambios en esta función)
         try:
             inserted, skipped, upserts = excel.import_excel_to_db(self.excel_file, self.source)
             db.log_event(self.logged_username, self.source, "DATA_IMPORT", f"users_inserted={inserted}; skipped={skipped}")
@@ -5197,7 +5215,7 @@ class ShiftTypeAdminWidget(QWidget):
         h_color.addWidget(self.color_display)
         h_color.addWidget(self.pick_color_btn)
         form_layout.addLayout(h_color, 2, 1)
-       # --- MODIFICACIÃ“N: Guardamos referencias a los Labels ---
+       # --- MODIFICACIÓN: Guardamos referencias a los Labels ---
         self.lbl_in = QLabel("IN time (HH:MM):")
         self.lbl_out = QLabel("OUT time (HH:MM):")
 
@@ -5293,7 +5311,7 @@ class ShiftTypeAdminWidget(QWidget):
         table_group = create_group_box(f"{self.source} Shift Types", table_layout)
         layout.addWidget(form_group)
         layout.addWidget(table_group)
-        # --- MODIFICACIÃ“N: Conectar Checkbox a la visibilidad ---
+        # --- MODIFICACIÓN: Conectar Checkbox a la visibilidad ---
         # Conectar checkboxes: visibilidad de tiempos + exclusividad mutua
         self.is_off_check.toggled.connect(self.toggle_time_inputs)
         self.is_off_check.toggled.connect(self._on_is_off_toggled)
@@ -5317,7 +5335,7 @@ class ShiftTypeAdminWidget(QWidget):
 
     def toggle_time_inputs(self, checked):
         """
-        Oculta o muestra los inputs de tiempo segÃºn si es 'Treat as OFF'.
+        Oculta o muestra los inputs de tiempo según si es 'Treat as OFF'.
         Si es OFF (checked=True), ocultamos los tiempos (Visible=False).
         """
         is_working = not checked
@@ -5333,7 +5351,7 @@ class ShiftTypeAdminWidget(QWidget):
             self.in_time_edit.setTime(QTime(0, 0))
             self.out_time_edit.setTime(QTime(0, 0))
         else:
-            # Si se desmarca (vuelve a ser laboral) y estÃ¡ en 00:00, restaurar defaults
+            # Si se desmarca (vuelve a ser laboral) y está en 00:00, restaurar defaults
             if self.in_time_edit.time().toString("HH:mm") == "00:00":
                 self.in_time_edit.setTime(QTime(8, 0))
                 self.out_time_edit.setTime(QTime(17, 0))
@@ -5350,7 +5368,7 @@ class ShiftTypeAdminWidget(QWidget):
     def _on_no_transport_toggled(self, checked: bool):
         """
         Exclusividad mutua: si se marca 'No Transport', desmarcar 'Treat as OFF'.
-        AdemÃ¡s, con no_transport los campos de horario SÃ son visibles
+        Además, con no_transport los campos de horario SÍ son visibles
         (la persona trabaja, solo que no necesita transporte al site).
         """
         if checked and self.is_off_check.isChecked():
@@ -5417,8 +5435,32 @@ class ShiftTypeAdminWidget(QWidget):
                 with QSignalBlocker(self.apply_1d_check):
                     self.apply_1d_check.setChecked(False)
             
-        # Forzar actualizaciÃ³n visual de los campos de tiempo
+        # Forzar actualización visual de los campos de tiempo
         self.toggle_time_inputs(self.is_off_check.isChecked())
+
+        # --- GUARDRAILS: Bloquear controles para System Types ---
+        _is_system = bool(record.get("is_system", 0)) if record else False
+
+        # Bloquear el campo Code (ON/ON NS/OFF no pueden renombrarse)
+        self.code_input.setReadOnly(_is_system)
+        self.code_input.setStyleSheet(
+            "background: #F3F4F6; color: #9CA3AF;" if _is_system else ""
+        )
+        self.code_input.setToolTip(
+            "System type - code cannot be changed." if _is_system
+            else "Short code used in the schedule (e.g. SOP, STP)"
+        )
+
+        # Deshabilitar Delete para system types
+        self.delete_btn.setEnabled(not _is_system)
+        self.delete_btn.setToolTip(
+            "System types cannot be deleted." if _is_system else ""
+        )
+
+        # Bloquear flags criticos: is_off y apply_1d son invariantes en system types
+        self.is_off_check.setEnabled(not _is_system)
+        if self.apply_1d_check is not None:
+            self.apply_1d_check.setEnabled(not _is_system)
 
     def clear_form(self):
         self.current_type_id = None
@@ -5429,7 +5471,7 @@ class ShiftTypeAdminWidget(QWidget):
         self.in_time_edit.setTime(QTime(8, 0))
         self.out_time_edit.setTime(QTime(17, 0))
         
-        # Resetear todos los flags sin disparar seÃ±ales de exclusividad
+        # Resetear todos los flags sin disparar señales de exclusividad
         with QSignalBlocker(self.is_off_check), QSignalBlocker(self.no_transport_check):
             self.is_off_check.setChecked(False)
             self.no_transport_check.setChecked(False)
@@ -5439,7 +5481,17 @@ class ShiftTypeAdminWidget(QWidget):
         
         # Asegurar que los tiempos sean visibles al limpiar
         self.toggle_time_inputs(False)
-        
+
+        # Restaurar controles que pudieron quedar bloqueados por un system type
+        self.code_input.setReadOnly(False)
+        self.code_input.setStyleSheet("")
+        self.code_input.setToolTip("Short code used in the schedule (e.g. SOP, STP)")
+        self.delete_btn.setEnabled(True)
+        self.delete_btn.setToolTip("")
+        self.is_off_check.setEnabled(True)
+        if self.apply_1d_check is not None:
+            self.apply_1d_check.setEnabled(True)
+
         self.types_table.clearSelection()
 
     def save_type(self):
@@ -5581,7 +5633,7 @@ class ShiftTypeAdminWidget(QWidget):
             in_to=self._filter_state["in_to"],
             usage=self._filter_state["usage"],
         )
-        headers = ["ID", "Name", "Code", "Color", "Color Preview", "IN", "OUT"]
+        headers = ["ID", "Name", "Code", "Color", "Color Preview", "IN", "OUT", "Type"]
         self.types_table.setRowCount(len(types))
         self.types_table.setColumnCount(len(headers))
         self.types_table.setHorizontalHeaderLabels(headers)
@@ -5591,13 +5643,23 @@ class ShiftTypeAdminWidget(QWidget):
             self.types_table.setItem(r, 2, QTableWidgetItem(t["code"]))
             self.types_table.setItem(r, 3, QTableWidgetItem(t["color_hex"]))
 
-            # Add color preview item
+            # Color preview
             preview_item = QTableWidgetItem()
             preview_item.setIcon(_create_color_icon(t["color_hex"]))
             self.types_table.setItem(r, 4, preview_item)
 
             self.types_table.setItem(r, 5, QTableWidgetItem(t["in_time"]))
             self.types_table.setItem(r, 6, QTableWidgetItem(t["out_time"]))
+
+            # Columna Type: System vs Custom
+            _is_sys = bool(t.get("is_system", 0))
+            type_item = QTableWidgetItem("🔒 System" if _is_sys else "Custom")
+            type_item.setForeground(QColor("#1565C0") if _is_sys else QColor("#374151"))
+            if _is_sys:
+                _f = type_item.font()
+                _f.setBold(True)
+                type_item.setFont(_f)
+            self.types_table.setItem(r, 7, type_item)
 
         self.types_table.setColumnHidden(0, True)
         self.types_table.horizontalHeader().setSectionResizeMode(
@@ -5616,8 +5678,8 @@ class ShiftTypeAdminWidget(QWidget):
 # -------------------------------------------------------------
 class LocationAdminWidget(QWidget):
     """
-    Si scope_source es 'RGM' o 'Newmont' -> modo estÃ¡ndar (solo su empresa).
-    Si scope_source es None -> modo Admin (todas, con filtro y selector de dueÃ±o).
+    Si scope_source es 'RGM' o 'Newmont' -> modo estándar (solo su empresa).
+    Si scope_source es None -> modo Admin (todas, con filtro y selector de dueño).
     """
 
     locations_changed = pyqtSignal()
@@ -5642,7 +5704,7 @@ class LocationAdminWidget(QWidget):
         form.addWidget(self.loc_input, row, 1)
         row += 1
 
-        # En modo admin, permitir elegir dueÃ±o (source) del registro
+        # En modo admin, permitir elegir dueño (source) del registro
         self.owner_combo = None
         if self.scope_source is None:
             self.owner_combo = QComboBox()
@@ -5799,12 +5861,12 @@ class LocationAdminWidget(QWidget):
         self._new_loc()
 
     def _delete_loc(self):
-        # 1. ValidaciÃ³n bÃ¡sica: Â¿Hay algo seleccionado?
+        # 1. Validación básica: ¿Hay algo seleccionado?
         if not self.loc_id:
             QMessageBox.warning(self, "Location", "Please select a row.")
             return
             
-        # 2. ConfirmaciÃ³n de seguridad (UI)
+        # 2. Confirmación de seguridad (UI)
         # Esto evita clics accidentales
         reply = QMessageBox.question(
             self,
@@ -5815,7 +5877,7 @@ class LocationAdminWidget(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        # 3. EjecuciÃ³n en Base de Datos
+        # 3. Ejecución en Base de Datos
         # Ahora esperamos recibir DOS valores: ok (True/False) y msg (el mensaje)
         if self.scope_source is None:
             # Modo Admin Global
@@ -5826,13 +5888,13 @@ class LocationAdminWidget(QWidget):
         
         # 4. Feedback al usuario
         if ok:
-            # Si se borrÃ³ bien, mostramos Ã©xito y recargamos la tabla
+            # Si se borró bien, mostramos éxito y recargamos la tabla
             QMessageBox.information(self, "Success", msg)
             self._reload_table()
             self.locations_changed.emit()
             self._new_loc()
         else:
-            # Si la BD dijo que NO (porque hay usuarios usÃ¡ndola), mostramos el error
+            # Si la BD dijo que NO (porque hay usuarios usándola), mostramos el error
             QMessageBox.warning(self, "Cannot Delete", msg)
 
     def _load_to_form(self, item):
@@ -5918,7 +5980,7 @@ class MainWindow(QMainWindow):
         )
 
         self.setWindowTitle(
-            f"👨‍✈️ Operations Manager - Profile: {self.user_role} | User: {self.logged_username}"
+            f"👨â€✈️ Operations Manager - Profile: {self.user_role} | User: {self.logged_username}"
         )
         self.setGeometry(100, 100, 1200, 800)
 
@@ -5970,7 +6032,7 @@ class MainWindow(QMainWindow):
         # 2) Rotation History (new tab, no ID column)
         self.rotation_widget = RotationHistoryWidget(
             created_by=self.logged_username
-        )  # ← NUEVO: solo mis registros
+        )  # â† NUEVO: solo mis registros
         tabs.addTab(self.rotation_widget, "🔁 Rotation History")
         # Refresh rotation history whenever plan saves a rotation
         self.plan_widget.rotation_changed.connect(self.rotation_widget.refresh_data)
