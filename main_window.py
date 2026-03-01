@@ -68,7 +68,7 @@ from PyQt6.QtCore import (
     QRect,
     QSize,
 )
-from PyQt6.QtGui import QColor, QFont, QCursor, QIcon, QPixmap, QPainter, QPen, QKeySequence
+from PyQt6.QtGui import QColor, QFont, QCursor, QIcon, QPixmap, QPainter, QPen, QKeySequence, QUndoCommand, QUndoStack, QAction
 from datetime import datetime, date as pydate, timedelta
 from PyQt6.QtWidgets import QStyledItemDelegate
 from clipboard_logic import ScheduleClipboardService
@@ -1012,6 +1012,339 @@ class WeekendHeader(QHeaderView):
             # Comportamiento normal para días de semana
             super().paintSection(painter, rect, logicalIndex)
             
+# =============================================================================
+# UNDO / REDO COMMAND  (Command Pattern sobre lógica existente — SSoT = SQLite)
+# =============================================================================
+class UndoCellChangeCommand(QUndoCommand):
+    """
+    Encapsula un cambio de celda/rango para Ctrl+Z / Ctrl+Y.
+
+    PRINCIPIOS:
+    • NO duplica reglas de negocio: delega a métodos existentes de PlanStaffWidget.
+    • SSoT siempre es SQLite: undo/redo escriben en DB primero, luego actualizan
+      Excel y la UI.
+    • El primer redo() no re-ejecuta la escritura (ya la hizo _on_schedule_cell_changed).
+    • _patch_cells_in_table() actualiza solo las celdas afectadas sin recargar Excel.
+    """
+
+    def __init__(
+        self,
+        widget,                  # referencia a PlanStaffWidget
+        badge: str,
+        role: str,
+        username: str,
+        start_date,              # datetime.date
+        end_date,                # datetime.date
+        old_schedule_map: dict,  # {date_str: {status, shift_type, in_time, out_time, remark, force_new_entry}}
+        old_pickup,
+        old_dropoff,
+        new_status: str,
+        new_shift_type,
+        new_in_time,
+        new_out_time,
+        new_remark,
+        new_pickup,
+        new_dropoff,
+        description: str = "Edit schedule",
+    ):
+        super().__init__(description)
+        self._widget       = widget
+        self._badge        = badge
+        self._role         = role
+        self._username     = username
+        self._start_date   = start_date
+        self._end_date     = end_date
+        self._old_map      = old_schedule_map   # snapshot antes del cambio
+        self._old_pickup   = old_pickup
+        self._old_dropoff  = old_dropoff
+        self._new_status       = new_status
+        self._new_shift_type   = new_shift_type
+        self._new_in_time      = new_in_time
+        self._new_out_time     = new_out_time
+        self._new_remark       = new_remark
+        self._new_pickup       = new_pickup
+        self._new_dropoff      = new_dropoff
+        self._first_redo   = True   # skip primer redo: la escritura ya ocurrió
+
+    # ------------------------------------------------------------------ redo --
+    def redo(self):
+        if self._first_redo:
+            self._first_redo = False
+            return   # ya aplicado por _on_schedule_cell_changed
+
+        widget = self._widget
+        try:
+            db.upsert_schedule_range(
+                self._badge, self._start_date, self._end_date,
+                self._new_status, self._new_shift_type, widget.source,
+                self._new_in_time, self._new_out_time, self._new_remark,
+            )
+            widget._consolidate_and_record_logistics(
+                self._badge, self._role, self._username,
+                self._start_date, self._end_date, self._new_status,
+            )
+            if self._new_pickup or self._new_dropoff:
+                db.assign_user_location_range(
+                    self._badge, self._start_date, self._end_date,
+                    self._new_pickup, self._new_dropoff,
+                )
+            excel.update_plan_staff_excel(
+                widget.excel_file,
+                self._username, self._role, self._badge,
+                self._new_status, self._new_shift_type,
+                self._start_date, self._end_date,
+                widget.source, self._new_in_time, self._new_out_time,
+            )
+            widget._patch_cells_in_table(
+                self._badge, self._start_date, self._end_date, self._new_status
+            )
+            db.log_event(
+                widget.logged_username, widget.source,
+                "SHIFT_REDO",
+                f"{self._badge} {self._start_date}..{self._end_date} → {self._new_status}",
+            )
+        except Exception as e:
+            print(f"[UndoCmd.redo] Error: {e}")
+
+    # ------------------------------------------------------------------ undo --
+    def undo(self):
+        widget = self._widget
+        try:
+            # 1. Restaurar cada día con sus datos originales (o borrar si no existía)
+            self._restore_old_schedule()
+
+            # 2. Recalcular operaciones logísticas con el status antiguo
+            first_day_str = self._start_date.isoformat()
+            old_day = self._old_map.get(first_day_str) or {}
+            old_status      = old_day.get("status") or ""
+            old_shift_type  = old_day.get("shift_type")
+            old_in_time     = old_day.get("in_time")
+            old_out_time    = old_day.get("out_time")
+
+            widget._consolidate_and_record_logistics(
+                self._badge, self._role, self._username,
+                self._start_date, self._end_date, old_status,
+            )
+
+            # 3. Restaurar ubicaciones si cambiaaron
+            if self._old_pickup is not None or self._old_dropoff is not None:
+                db.assign_user_location_range(
+                    self._badge, self._start_date, self._end_date,
+                    self._old_pickup, self._old_dropoff,
+                )
+
+            # 4. Actualizar Excel con estado anterior
+            excel.update_plan_staff_excel(
+                widget.excel_file,
+                self._username, self._role, self._badge,
+                old_status, old_shift_type,
+                self._start_date, self._end_date,
+                widget.source, old_in_time, old_out_time,
+            )
+
+            # 5. Actualizar sólo las celdas afectadas en la tabla (sin recargar Excel)
+            widget._patch_cells_in_table(
+                self._badge, self._start_date, self._end_date, old_status
+            )
+            db.log_event(
+                widget.logged_username, widget.source,
+                "SHIFT_UNDO",
+                f"{self._badge} {self._start_date}..{self._end_date} ← {old_status}",
+            )
+        except Exception as e:
+            print(f"[UndoCmd.undo] Error: {e}")
+
+    # --------------------------------------------------------- helper privado --
+    def _restore_old_schedule(self):
+        """Restaura registros en DB día a día desde el snapshot old_map."""
+        widget = self._widget
+        d = self._start_date
+        while d <= self._end_date:
+            day_str = d.isoformat()
+            old_rec = self._old_map.get(day_str)
+            if not old_rec or old_rec.get("status") is None:
+                # El día no existía antes → borrar el registro nuevo
+                db.clear_schedule_range(self._badge, d, d, widget.source)
+            else:
+                db.upsert_schedule_day(
+                    self._badge, d,
+                    old_rec.get("status", ""),
+                    old_rec.get("shift_type"),
+                    widget.source,
+                    old_rec.get("in_time"),
+                    old_rec.get("out_time"),
+                    old_rec.get("remark"),
+                    old_rec.get("force_new_entry"),
+                )
+            d += timedelta(days=1)
+
+
+# =============================================================================
+# UNDO / REDO (SNAPSHOT) — para operaciones multi-celda como drag-fill
+# =============================================================================
+class UndoScheduleSnapshotCommand(QUndoCommand):
+    """
+    Undo/Redo basado en *snapshots* para drag-fill (y futuras ops masivas).
+
+    PRINCIPIOS:
+    • Guarda un mapa completo (old y new) de la ventana afectada, incluidos
+      los bordes adyacentes al rango (para respetar force_new_entry).
+    • undo()/redo() restauran EXACTAMENTE ese estado en DB (SSoT).
+    • Luego reconcilia operaciones logísticas, sincroniza Excel y parchea UI.
+    • El primer redo() es no-op: el cambio original ya ocurrió en _apply_fill_from_anchor.
+    """
+
+    def __init__(
+        self,
+        widget,                     # PlanStaffWidget
+        badge: str,
+        role: str,
+        username: str,
+        snapshot_start,             # datetime.date — inicio de la ventana capturada
+        snapshot_end,               # datetime.date — fin de la ventana capturada
+        op_start,                   # datetime.date — para consolidación logística
+        op_end,                     # datetime.date
+        old_schedule_map: dict,     # {date_iso: {...}}  — estado ANTES del drag
+        new_schedule_map: dict,     # {date_iso: {...}}  — estado DESPUÉS del drag
+        description: str = "Drag fill",
+    ):
+        super().__init__(description)
+        self._widget         = widget
+        self._badge          = badge
+        self._role           = role
+        self._username       = username
+        self._snapshot_start = snapshot_start
+        self._snapshot_end   = snapshot_end
+        self._op_start       = op_start
+        self._op_end         = op_end
+        self._old_map        = old_schedule_map or {}
+        self._new_map        = new_schedule_map or {}
+        self._first_redo     = True   # el drag original ya ocurrió
+
+    # ------------------------------------------------------------------ redo --
+    def redo(self):
+        if self._first_redo:
+            self._first_redo = False
+            return  # ya aplicado por _apply_fill_from_anchor
+        self._apply_snapshot(self._new_map, action="SHIFT_REDO_DRAGFILL")
+
+    # ------------------------------------------------------------------ undo --
+    def undo(self):
+        self._apply_snapshot(self._old_map, action="SHIFT_UNDO_DRAGFILL")
+
+    # --------------------------------------------------------------- helpers --
+    def _apply_snapshot(self, target_map: dict, action: str):
+        """Restaura target_map en DB → reconsolida → sincroniza Excel → parchea UI."""
+        import sqlite3 as _sqlite3
+        widget = self._widget
+        try:
+            # 1) DB (SSoT) — transacción atómica día a día
+            conn = _sqlite3.connect(db.DB_FILE)
+            cur  = conn.cursor()
+            cur.execute("BEGIN TRANSACTION")
+            try:
+                d = self._snapshot_start
+                while d <= self._snapshot_end:
+                    day_str = d.isoformat()
+                    rec = target_map.get(day_str)
+                    if rec and rec.get("status") is not None:
+                        db.upsert_schedule_day(
+                            self._badge, d,
+                            rec.get("status") or "",
+                            rec.get("shift_type"),
+                            widget.source,
+                            rec.get("in_time"),
+                            rec.get("out_time"),
+                            rec.get("remark"),
+                            rec.get("force_new_entry"),
+                            cursor=cur,
+                        )
+                    else:
+                        cur.execute(
+                            "DELETE FROM schedules WHERE badge = ? AND source = ? AND date = ?",
+                            (self._badge, widget.source, day_str),
+                        )
+                    d += timedelta(days=1)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+            # 2) Operaciones logísticas — reconsolidar con el status resultante
+            status_for_consol = ""
+            d = self._op_start
+            while d <= self._op_end:
+                rec = target_map.get(d.isoformat())
+                st  = (rec.get("status") or "").strip().upper() if rec else ""
+                if st and db.is_working_status(st, widget.source):
+                    status_for_consol = st
+                    break
+                d += timedelta(days=1)
+
+            widget._consolidate_and_record_logistics(
+                self._badge, self._role, self._username,
+                self._op_start, self._op_end, status_for_consol,
+            )
+
+            # 3) Excel — sincronizar en runs contiguos (minimiza escrituras)
+            self._sync_excel_from_map(target_map)
+
+            # 4) UI — parchear sólo celdas afectadas desde el mapa (soporta statuses mixtos)
+            widget._patch_cells_in_table_from_map(
+                self._badge, self._snapshot_start, self._snapshot_end, target_map
+            )
+
+            db.log_event(
+                widget.logged_username, widget.source,
+                action,
+                f"{self._badge} {self._snapshot_start}..{self._snapshot_end}",
+            )
+        except Exception as e:
+            print(f"[UndoScheduleSnapshotCommand] Error ({action}): {e}")
+
+    def _sync_excel_from_map(self, target_map: dict):
+        """Sincroniza Excel agrupando días consecutivos con el mismo status en runs."""
+        widget = self._widget
+
+        def norm_tuple(rec):
+            if not rec:
+                return (None, None, None, None)
+            st = rec.get("status") or None
+            return (st, rec.get("shift_type"), rec.get("in_time"), rec.get("out_time"))
+
+        # Agrupar en runs de mismo (status, shift_type, in_time, out_time)
+        runs      = []
+        curr_t    = None
+        run_start = None
+        d = self._snapshot_start
+
+        while d <= self._snapshot_end:
+            t = norm_tuple(target_map.get(d.isoformat()))
+            if curr_t is None:
+                curr_t    = t
+                run_start = d
+            elif t != curr_t:
+                runs.append((run_start, d - timedelta(days=1), curr_t))
+                curr_t    = t
+                run_start = d
+            d += timedelta(days=1)
+
+        if curr_t is not None and run_start is not None:
+            runs.append((run_start, self._snapshot_end, curr_t))
+
+        for rs, re_, (st, shift_type, in_time, out_time) in runs:
+            excel.update_plan_staff_excel(
+                widget.excel_file,
+                self._username, self._role, self._badge,
+                st, shift_type,
+                rs, re_,
+                widget.source,
+                in_time, out_time,
+            )
+
+
 class PlanStaffWidget(QWidget):
     # Emitted after saving a change so the Rotation History tab can refresh
     rotation_changed = pyqtSignal()
@@ -1043,6 +1376,11 @@ class PlanStaffWidget(QWidget):
         self._last_manual_exit_config = None
         
         self._is_first_load = True
+
+        # ── Undo / Redo stack (Ctrl+Z / Ctrl+Y) ────────────────────────────────
+        self._undo_stack = QUndoStack(self)
+        self._undo_stack.setUndoLimit(50)   # limitar memoria en sesiones largas
+        self._undo_in_progress = False       # previene re-entrada durante undo/redo
         
         # ---------- root layout ----------
         root = QVBoxLayout(self)
@@ -1221,6 +1559,131 @@ class PlanStaffWidget(QWidget):
         # Track current responsive columns for the register grid
         self._current_form_cols = 3
         self._rebuild_registration_grid(self._current_form_cols)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # UNDO / REDO SUPPORT
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def keyPressEvent(self, event):
+        """
+        Smart Ctrl+Z / Ctrl+Y dispatch.
+        • Si el foco está en un widget de texto → deja que ese widget haga su undo nativo.
+        • Si el foco está en la tabla de schedule → usa el QUndoStack del sistema.
+        """
+        from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit, QApplication
+        w = QApplication.focusWidget()
+        if isinstance(w, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            super().keyPressEvent(event)
+            return
+
+        if event.matches(QKeySequence.StandardKey.Undo):
+            if self._undo_stack.canUndo():
+                self._undo_in_progress = True
+                try:
+                    self._undo_stack.undo()
+                finally:
+                    self._undo_in_progress = False
+            event.accept()
+            return
+
+        if event.matches(QKeySequence.StandardKey.Redo):
+            if self._undo_stack.canRedo():
+                self._undo_in_progress = True
+                try:
+                    self._undo_stack.redo()
+                finally:
+                    self._undo_in_progress = False
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
+
+    def _patch_cells_in_table(self, badge: str, start_date, end_date, status: str):
+        """
+        Actualiza visualmente sólo las celdas afectadas por undo/redo
+        sin recargar todo el Excel.  Mucho más rápido que refresh_ui_data().
+        Si el badge no está visible en la vista actual, hace un refresh completo
+        como fallback seguro.
+        """
+        # 1. Buscar la fila del empleado
+        row_idx = None
+        for i, identity in enumerate(self._row_identities):
+            if identity.get("badge") == badge:
+                row_idx = i
+                break
+
+        if row_idx is None:
+            # El empleado no está en la vista actual → recarga completa
+            self.refresh_ui_data()
+            return
+
+        # 2. Actualizar celdas en el rango de fechas
+        from datetime import timedelta
+        d = start_date
+        with QSignalBlocker(self.schedule_table):
+            while d <= end_date:
+                try:
+                    col_idx = self._date_col_dates.index(d)
+                except ValueError:
+                    d += timedelta(days=1)
+                    continue
+
+                item = self.schedule_table.item(row_idx, col_idx)
+                if not item:
+                    item = QTableWidgetItem()
+                    self.schedule_table.setItem(row_idx, col_idx, item)
+
+                display_text = status or ""
+                item.setText(display_text)
+                self._apply_status_background(item, display_text)
+                self._cell_original_values[(row_idx, col_idx)] = display_text
+                d += timedelta(days=1)
+
+        self.schedule_table.viewport().update()
+        self.rotation_changed.emit()
+
+    def _patch_cells_in_table_from_map(
+        self, badge: str, start_date, end_date, schedule_map: dict
+    ):
+        """
+        Versión de _patch_cells_in_table que acepta un mapa {date_iso: {status, ...}}
+        en lugar de un único status uniforme.  Necesario para undo/redo de drag-fill
+        donde el estado anterior puede tener valores distintos por día.
+        """
+        row_idx = None
+        for i, identity in enumerate(self._row_identities):
+            if identity.get("badge") == badge:
+                row_idx = i
+                break
+
+        if row_idx is None:
+            self.refresh_ui_data()
+            return
+
+        d = start_date
+        with QSignalBlocker(self.schedule_table):
+            while d <= end_date:
+                try:
+                    col_idx = self._date_col_dates.index(d)
+                except ValueError:
+                    d += timedelta(days=1)
+                    continue
+
+                rec = schedule_map.get(d.isoformat())
+                display_text = (rec.get("status") or "") if rec else ""
+
+                item = self.schedule_table.item(row_idx, col_idx)
+                if not item:
+                    item = QTableWidgetItem()
+                    self.schedule_table.setItem(row_idx, col_idx, item)
+
+                item.setText(display_text)
+                self._apply_status_background(item, display_text)
+                self._cell_original_values[(row_idx, col_idx)] = display_text
+                d += timedelta(days=1)
+
+        self.schedule_table.viewport().update()
+        self.rotation_changed.emit()
 
     def _smart_reflow(self, cursor, badge: str, center_date: datetime.date):
         """
@@ -2305,6 +2768,7 @@ class PlanStaffWidget(QWidget):
 
         # Bloquear señales para optimizar rendimiento visual
         self._bulk_editing = True
+        macro_started = False  # agrupa todos los empleados del mismo drag en 1 undo-step
         
         try:
             # Iterar por cada bloque de selección
@@ -2394,6 +2858,13 @@ class PlanStaffWidget(QWidget):
                             continue 
                         # ---------------------------------------------------------
 
+                        # ── UNDO: capturar estado ANTES del drag (incluye bordes) ──
+                        snapshot_start = operation_start_date
+                        snapshot_end   = end_fill_date + timedelta(days=1)
+                        _drag_old_map  = db.get_schedule_map_for_range(
+                            badge, snapshot_start, snapshot_end, self.source
+                        )
+
                         # 1. Guardar Schedule (SSoT) - Día a día
                         # Se guardan las celdas rellenadas (del 22 en adelante)
                         db.upsert_schedule_range(
@@ -2459,10 +2930,39 @@ class PlanStaffWidget(QWidget):
                                 manual_split_config=manual_cfg
                             )
 
+                        # ── UNDO: registrar drag como un paso (DB+Excel+UI) ──────
+                        if not self._undo_in_progress:
+                            _drag_new_map = db.get_schedule_map_for_range(
+                                badge, snapshot_start, snapshot_end, self.source
+                            )
+                            if not macro_started:
+                                self._undo_stack.beginMacro("Drag fill")
+                                macro_started = True
+                            self._undo_stack.push(
+                                UndoScheduleSnapshotCommand(
+                                    widget=self,
+                                    badge=badge,
+                                    role=role,
+                                    username=username,
+                                    snapshot_start=snapshot_start,
+                                    snapshot_end=snapshot_end,
+                                    op_start=operation_start_date,
+                                    op_end=end_fill_date,
+                                    old_schedule_map=_drag_old_map,
+                                    new_schedule_map=_drag_new_map,
+                                    description=f"Drag fill {badge} {start_fill_date}..{end_fill_date}",
+                                )
+                            )
+
                     except Exception as e:
                         print(f"Error saving drag-fill for {badge}: {e}")
 
         finally:
+            if macro_started:
+                try:
+                    self._undo_stack.endMacro()
+                except Exception:
+                    pass
             self._is_internal_update = False
             self._bulk_editing = False
             self.rotation_changed.emit()
@@ -2722,6 +3222,12 @@ class PlanStaffWidget(QWidget):
                 entry_dt_for_save = datetime.combine(start_date_block, entry_time_obj)
                 exit_dt_for_save = datetime.combine(end_date_block, exit_time_obj)
 
+            # ── CAPTURAR ESTADO ANTIGUO para Undo Stack (antes de la escritura) ──
+            # Necesitamos el rango completo (puede ser >1 día si apply_to_range).
+            _undo_old_map = db.get_schedule_map_for_range(
+                badge, start_date_block, end_date_block, self.source
+            )
+
             # Actualizar UI visualmente
             with QSignalBlocker(self.schedule_table):
                 for col_idx in cols_sorted:
@@ -2824,6 +3330,29 @@ class PlanStaffWidget(QWidget):
                     "SHIFT_MODIFICATION_INLINE",
                     f"Updated range {start_date_block} to {end_date_block} for {badge}. Remark: {remark}",
                 )
+
+                # ── REGISTRAR EN UNDO STACK (sólo si NO estamos en undo/redo) ──
+                if not self._undo_in_progress:
+                    _undo_cmd = UndoCellChangeCommand(
+                        widget=self,
+                        badge=badge,
+                        role=role,
+                        username=username,
+                        start_date=start_date_block,
+                        end_date=end_date_block,
+                        old_schedule_map=_undo_old_map,
+                        old_pickup=pickup_init,
+                        old_dropoff=dropoff_init,
+                        new_status=schedule_status or "",
+                        new_shift_type=shift_type,
+                        new_in_time=in_time,
+                        new_out_time=out_time,
+                        new_remark=remark,
+                        new_pickup=pickup,
+                        new_dropoff=dropoff,
+                        description=f"Edit {badge} {start_date_block}",
+                    )
+                    self._undo_stack.push(_undo_cmd)
 
             except Exception as e:
                 self._is_internal_update = False
@@ -5224,37 +5753,23 @@ class ShiftTypeAdminWidget(QWidget):
         form_layout.addWidget(self.lbl_out, 4, 0)
         form_layout.addWidget(self.out_time_edit, 4, 1)
 
-        # --- NUEVO: Checkbox 'Treat as OFF' ---
-        self.is_off_check = QCheckBox("Treat as 'OFF' (Non-working day)")
-        self.is_off_check.setToolTip(
-            "Check this if the shift (e.g., Vacation, Sick Leave) should be treated\n"
-            "as a day OFF for transport and onsite-stay reports."
+        # --- Dropdown de Behavior (reemplaza 3 checkboxes) ---
+        self.behavior_combo = QComboBox()
+        self.behavior_combo.addItem("Normal (transport required)", "normal")
+        self.behavior_combo.addItem("Treat as OFF (Non-working day)", "off")
+        self.behavior_combo.addItem("No Transport Required (working, off-site)", "no_transport")
+        if self.source == "RGM":
+            self.behavior_combo.addItem(
+                "Apply 1+D logic (Exit date = End Date + 1)", "apply_1d"
+            )
+        self.behavior_combo.setToolTip(
+            "Normal: standard shift requiring site transport.\n"
+            "OFF: non-working day (Vacation, Sick Leave, etc.) — excluded from transport & stay reports.\n"
+            "No Transport: person works but does NOT need site transport (Office day, off-site training).\n"
+            "1+D (RGM only): exit date = End Date + 1 day, triggers consecutive-shift dialog."
         )
         form_layout.addWidget(QLabel("Behavior:"), 5, 0)
-        form_layout.addWidget(self.is_off_check, 5, 1)
-
-        # --- NUEVO: Checkbox 'No Transport Required' ---
-        self.no_transport_check = QCheckBox("No Transport Required (working, but off-site)")
-        self.no_transport_check.setToolTip(
-            "Check this if the person is WORKING but does NOT need site transport.\n"
-            "Example: Office day, Local Training, Fusecon Office.\n"
-            "Will NOT appear in Inbound/Outbound reports.\n"
-            "Will NOT extend the Onsite Stay period.\n"
-            "Person is still considered active/working in the system."
-        )
-        form_layout.addWidget(self.no_transport_check, 6, 1)
-
-        # --- NUEVO: Checkbox 'Apply 1+D logic' (solo visible para RGM) ---
-        self.apply_1d_check = None
-        if self.source == "RGM":
-            self.apply_1d_check = QCheckBox("Apply 1+D logic (Exit date = End Date + 1)")
-            self.apply_1d_check.setToolTip(
-                "Activar para turnos que se comportan como ON/ON NS.\n"
-                "La fecha de salida se calculara como End Date + 1 dia.\n"
-                "Tambien activa el dialogo de 'Gestion de Turnos Consecutivos'."
-            )
-            form_layout.addWidget(self.apply_1d_check, 7, 1)
-        # --------------------------------------
+        form_layout.addWidget(self.behavior_combo, 5, 1)
 
         actions = QHBoxLayout()
         #actions.addWidget(self.new_btn)
@@ -5311,13 +5826,8 @@ class ShiftTypeAdminWidget(QWidget):
         table_group = create_group_box(f"{self.source} Shift Types", table_layout)
         layout.addWidget(form_group)
         layout.addWidget(table_group)
-        # --- MODIFICACIÓN: Conectar Checkbox a la visibilidad ---
-        # Conectar checkboxes: visibilidad de tiempos + exclusividad mutua
-        self.is_off_check.toggled.connect(self.toggle_time_inputs)
-        self.is_off_check.toggled.connect(self._on_is_off_toggled)
-        self.no_transport_check.toggled.connect(self._on_no_transport_toggled)
-        if self.apply_1d_check is not None:
-            self.apply_1d_check.toggled.connect(self._on_apply_1d_toggled)
+        # --- Conectar combo Behavior ---
+        self.behavior_combo.currentIndexChanged.connect(self._on_behavior_changed)
         self.reset_filters()
 
     def _request_refresh(self):
@@ -5356,36 +5866,19 @@ class ShiftTypeAdminWidget(QWidget):
                 self.in_time_edit.setTime(QTime(8, 0))
                 self.out_time_edit.setTime(QTime(17, 0))
 
-    def _on_is_off_toggled(self, checked: bool):
-        """
-        Exclusividad mutua: si se marca 'Treat as OFF', desmarcar 'No Transport'.
-        Un turno no puede ser OFF y No-Transport al mismo tiempo.
-        """
-        if checked and self.no_transport_check.isChecked():
-            with QSignalBlocker(self.no_transport_check):
-                self.no_transport_check.setChecked(False)
+    def _behavior_flags(self) -> dict:
+        """Devuelve los 3 flags booleanos según la selección del dropdown Behavior."""
+        mode = self.behavior_combo.currentData()
+        return {
+            "is_off":        mode == "off",
+            "no_transport":  mode == "no_transport",
+            "apply_1d":      mode == "apply_1d",
+        }
 
-    def _on_no_transport_toggled(self, checked: bool):
-        """
-        Exclusividad mutua: si se marca 'No Transport', desmarcar 'Treat as OFF'.
-        Además, con no_transport los campos de horario SÍ son visibles
-        (la persona trabaja, solo que no necesita transporte al site).
-        """
-        if checked and self.is_off_check.isChecked():
-            with QSignalBlocker(self.is_off_check):
-                self.is_off_check.setChecked(False)
-            # Asegurar que los tiempos sean visibles (trabaja)
-            self.toggle_time_inputs(False)
-
-    def _on_apply_1d_toggled(self, checked: bool):
-        """
-        Si se marca Apply 1+D, desmarcar Treat as OFF (incompatible).
-        Un turno OFF no puede aplicar regla de salida al dia siguiente.
-        """
-        if checked and self.is_off_check.isChecked():
-            with QSignalBlocker(self.is_off_check):
-                self.is_off_check.setChecked(False)
-            self.toggle_time_inputs(False)
+    def _on_behavior_changed(self, _idx: int):
+        """Reacciona al cambio del combo: oculta/muestra los campos de tiempo."""
+        flags = self._behavior_flags()
+        self.toggle_time_inputs(flags["is_off"])
 
     def pick_color(self):
         color = QColorDialog.getColor(
@@ -5412,31 +5905,32 @@ class ShiftTypeAdminWidget(QWidget):
         self.out_time_edit.setTime(QTime.fromString(out_time, "HH:mm"))
         self.current_old_code = code
 
-        # --- Cargar flags 'is_off' y 'no_transport' desde la BD ---
-        # QSignalBlocker evita disparar exclusividad mutua mientras seteamos ambos valores.
+        # --- Cargar Behavior desde BD → dropdown ---
         all_types = db.get_shift_types(self.source)
         record = next((t for t in all_types if t['id'] == self.current_type_id), None)
-        
+
         if record:
-            is_off_val = bool(record.get('is_off', 0))
+            is_off_val       = bool(record.get('is_off', 0))
             no_transport_val = bool(record.get('no_transport', 0))
-            apply_1d_val = bool(record.get('apply_1d', 0))
-            with QSignalBlocker(self.is_off_check), QSignalBlocker(self.no_transport_check):
-                self.is_off_check.setChecked(is_off_val)
-                self.no_transport_check.setChecked(no_transport_val)
-            if self.apply_1d_check is not None:
-                with QSignalBlocker(self.apply_1d_check):
-                    self.apply_1d_check.setChecked(apply_1d_val)
+            apply_1d_val     = bool(record.get('apply_1d', 0))
+            if is_off_val:
+                mode = "off"
+            elif no_transport_val:
+                mode = "no_transport"
+            elif self.source == "RGM" and apply_1d_val:
+                mode = "apply_1d"
+            else:
+                mode = "normal"
         else:
-            with QSignalBlocker(self.is_off_check), QSignalBlocker(self.no_transport_check):
-                self.is_off_check.setChecked(False)
-                self.no_transport_check.setChecked(False)
-            if self.apply_1d_check is not None:
-                with QSignalBlocker(self.apply_1d_check):
-                    self.apply_1d_check.setChecked(False)
-            
+            mode = "normal"
+
+        with QSignalBlocker(self.behavior_combo):
+            i = self.behavior_combo.findData(mode)
+            if i >= 0:
+                self.behavior_combo.setCurrentIndex(i)
+
         # Forzar actualización visual de los campos de tiempo
-        self.toggle_time_inputs(self.is_off_check.isChecked())
+        self.toggle_time_inputs(mode == "off")
 
         # --- GUARDRAILS: Bloquear controles para System Types ---
         _is_system = bool(record.get("is_system", 0)) if record else False
@@ -5457,10 +5951,8 @@ class ShiftTypeAdminWidget(QWidget):
             "System types cannot be deleted." if _is_system else ""
         )
 
-        # Bloquear flags criticos: is_off y apply_1d son invariantes en system types
-        self.is_off_check.setEnabled(not _is_system)
-        if self.apply_1d_check is not None:
-            self.apply_1d_check.setEnabled(not _is_system)
+        # El combo Behavior es invariante en system types
+        self.behavior_combo.setEnabled(not _is_system)
 
     def clear_form(self):
         self.current_type_id = None
@@ -5471,14 +5963,12 @@ class ShiftTypeAdminWidget(QWidget):
         self.in_time_edit.setTime(QTime(8, 0))
         self.out_time_edit.setTime(QTime(17, 0))
         
-        # Resetear todos los flags sin disparar señales de exclusividad
-        with QSignalBlocker(self.is_off_check), QSignalBlocker(self.no_transport_check):
-            self.is_off_check.setChecked(False)
-            self.no_transport_check.setChecked(False)
-        if self.apply_1d_check is not None:
-            with QSignalBlocker(self.apply_1d_check):
-                self.apply_1d_check.setChecked(False)
-        
+        # Resetear Behavior al estado "Normal"
+        with QSignalBlocker(self.behavior_combo):
+            i = self.behavior_combo.findData("normal")
+            if i >= 0:
+                self.behavior_combo.setCurrentIndex(i)
+
         # Asegurar que los tiempos sean visibles al limpiar
         self.toggle_time_inputs(False)
 
@@ -5488,9 +5978,7 @@ class ShiftTypeAdminWidget(QWidget):
         self.code_input.setToolTip("Short code used in the schedule (e.g. SOP, STP)")
         self.delete_btn.setEnabled(True)
         self.delete_btn.setToolTip("")
-        self.is_off_check.setEnabled(True)
-        if self.apply_1d_check is not None:
-            self.apply_1d_check.setEnabled(True)
+        self.behavior_combo.setEnabled(True)
 
         self.types_table.clearSelection()
 
@@ -5501,14 +5989,11 @@ class ShiftTypeAdminWidget(QWidget):
         in_time = self.in_time_edit.time().toString("HH:mm")
         out_time = self.out_time_edit.time().toString("HH:mm")
         
-        # Leer ambos flags del formulario
-        is_off_val = self.is_off_check.isChecked()
-        no_transport_val = self.no_transport_check.isChecked()
-        apply_1d_val = (
-            self.apply_1d_check.isChecked()
-            if self.apply_1d_check is not None
-            else False
-        )
+        # Leer flags del dropdown Behavior
+        flags = self._behavior_flags()
+        is_off_val       = flags["is_off"]
+        no_transport_val = flags["no_transport"]
+        apply_1d_val     = flags["apply_1d"]
 
         if not name or not code:
             box = QMessageBox(self)
@@ -6098,6 +6583,80 @@ class MainWindow(QMainWindow):
             )
         )
 
+        # ── Menú Editar: Ctrl+Z / Ctrl+Y conectados al undo_stack de PlanStaffWidget ──
+        self._setup_undo_menu()
+
+    def _setup_undo_menu(self):
+        """
+        Crea un menú 'Edit' con acciones Ctrl+Z / Ctrl+Y conectadas al
+        undo_stack de PlanStaffWidget.
+
+        Smart dispatch:
+        • Si el foco está en QLineEdit/QTextEdit → el widget nativo maneja undo/redo.
+        • Si no → delega al QUndoStack del schedule.
+        """
+        edit_menu = self.menuBar().addMenu("✏️ Edit")
+
+        self._act_undo = QAction("↩ Undo", self)
+        self._act_undo.setShortcut(QKeySequence.StandardKey.Undo)
+        self._act_undo.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self._act_undo.setEnabled(False)
+        self._act_undo.triggered.connect(self._smart_undo)
+        edit_menu.addAction(self._act_undo)
+
+        self._act_redo = QAction("↪ Redo", self)
+        self._act_redo.setShortcut(QKeySequence.StandardKey.Redo)
+        self._act_redo.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self._act_redo.setEnabled(False)
+        self._act_redo.triggered.connect(self._smart_redo)
+        edit_menu.addAction(self._act_redo)
+
+        # Mantener estados habilitados/deshabilitados en sincronía con el stack
+        stack = self.plan_widget._undo_stack
+        stack.canUndoChanged.connect(self._act_undo.setEnabled)
+        stack.canRedoChanged.connect(self._act_redo.setEnabled)
+        # Actualizar tooltips con la descripción del comando
+        stack.indexChanged.connect(self._refresh_undo_tooltips)
+
+    def _refresh_undo_tooltips(self):
+        stack = self.plan_widget._undo_stack
+        self._act_undo.setText(
+            f"↩ Undo: {stack.undoText()}" if stack.canUndo() else "↩ Undo"
+        )
+        self._act_redo.setText(
+            f"↪ Redo: {stack.redoText()}" if stack.canRedo() else "↪ Redo"
+        )
+
+    def _smart_undo(self):
+        """Delega undo al widget con foco (texto nativo) o al schedule stack."""
+        from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit
+        w = QApplication.focusWidget()
+        if isinstance(w, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            w.undo()
+            return
+        stack = self.plan_widget._undo_stack
+        if stack.canUndo():
+            self.plan_widget._undo_in_progress = True
+            try:
+                stack.undo()
+            finally:
+                self.plan_widget._undo_in_progress = False
+
+    def _smart_redo(self):
+        """Delega redo al widget con foco (texto nativo) o al schedule stack."""
+        from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit
+        w = QApplication.focusWidget()
+        if isinstance(w, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            w.redo()
+            return
+        stack = self.plan_widget._undo_stack
+        if stack.canRedo():
+            self.plan_widget._undo_in_progress = True
+            try:
+                stack.redo()
+            finally:
+                self.plan_widget._undo_in_progress = False
+
     def _sync_after_users_changed(self, src: str):
         if src == self.user_role:
             self.plan_widget.refresh_users_only()
@@ -6263,6 +6822,80 @@ class AdminMainWindow(QMainWindow):
             lambda src: self.rgm_plan.refresh_ui_data()
         )
         self.nm_types.types_changed.connect(lambda src: self.nm_plan.refresh_ui_data())
+
+        # ── Menú Editar: Ctrl+Z / Ctrl+Y — contexto = tab activo ────────────
+        self._setup_admin_undo_menu()
+
+    def _setup_admin_undo_menu(self):
+        """
+        Admin tiene 2 plan tabs (RGM y Newmont). El undo/redo actúa sobre el
+        PlanStaffWidget que esté en la pestaña activa en ese momento.
+        """
+        edit_menu = self.menuBar().addMenu("✏️ Edit")
+
+        self._act_undo_admin = QAction("↩ Undo", self)
+        self._act_undo_admin.setShortcut(QKeySequence.StandardKey.Undo)
+        self._act_undo_admin.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self._act_undo_admin.setEnabled(False)
+        self._act_undo_admin.triggered.connect(self._admin_smart_undo)
+        edit_menu.addAction(self._act_undo_admin)
+
+        self._act_redo_admin = QAction("↪ Redo", self)
+        self._act_redo_admin.setShortcut(QKeySequence.StandardKey.Redo)
+        self._act_redo_admin.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self._act_redo_admin.setEnabled(False)
+        self._act_redo_admin.triggered.connect(self._admin_smart_redo)
+        edit_menu.addAction(self._act_redo_admin)
+
+        # Actualizar estado cuando cambie el tab activo
+        self.tabs.currentChanged.connect(self._admin_refresh_undo_state)
+        # Conectar stacks de ambos planes
+        self.rgm_plan._undo_stack.indexChanged.connect(self._admin_refresh_undo_state)
+        self.nm_plan._undo_stack.indexChanged.connect(self._admin_refresh_undo_state)
+
+    def _active_plan_widget(self):
+        """Devuelve el PlanStaffWidget activo según el tab seleccionado."""
+        current = self.tabs.currentWidget()
+        if current is self.rgm_plan:
+            return self.rgm_plan
+        if current is self.nm_plan:
+            return self.nm_plan
+        return None   # otro tab activo — undo no aplica
+
+    def _admin_refresh_undo_state(self):
+        plan = self._active_plan_widget()
+        if plan:
+            self._act_undo_admin.setEnabled(plan._undo_stack.canUndo())
+            self._act_redo_admin.setEnabled(plan._undo_stack.canRedo())
+        else:
+            self._act_undo_admin.setEnabled(False)
+            self._act_redo_admin.setEnabled(False)
+
+    def _admin_smart_undo(self):
+        from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit
+        w = QApplication.focusWidget()
+        if isinstance(w, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            w.undo(); return
+        plan = self._active_plan_widget()
+        if plan and plan._undo_stack.canUndo():
+            plan._undo_in_progress = True
+            try:
+                plan._undo_stack.undo()
+            finally:
+                plan._undo_in_progress = False
+
+    def _admin_smart_redo(self):
+        from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit
+        w = QApplication.focusWidget()
+        if isinstance(w, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            w.redo(); return
+        plan = self._active_plan_widget()
+        if plan and plan._undo_stack.canRedo():
+            plan._undo_in_progress = True
+            try:
+                plan._undo_stack.redo()
+            finally:
+                plan._undo_in_progress = False
 
     def handle_logout(self):
         self.logout_signal.emit()
