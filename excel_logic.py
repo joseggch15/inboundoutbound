@@ -2342,7 +2342,158 @@ def refresh_excel_from_db(plan_staff_file: str, source: str) -> Tuple[bool, str]
     except Exception as e:
         return False, f"Refresh error: {e}"
 
-    # En excel_logic.py
+def rename_user_badge_in_excel(
+    plan_staff_file: str, source: str, old_badge: str, new_badge: str
+) -> Tuple[bool, str]:
+    """
+    Rename a user's badge in-place in the Excel file.
+    If both old and new badge rows exist (historical duplicates), merges them
+    and deletes the orphan row.
+    Also updates name/role columns from DB to keep Excel in sync.
+    """
+    if not os.path.exists(plan_staff_file):
+        return False, f"File not found: {plan_staff_file}"
+
+    ok, _errors, meta = validate_excel_structure(plan_staff_file)
+    if not ok:
+        return False, "Invalid Excel structure."
+
+    try:
+        wb = openpyxl.load_workbook(plan_staff_file)
+        ws = wb.active
+
+        header_map = {
+            cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)
+        }
+        variant = meta.get("variant")
+
+        badge_col = (
+            header_map.get("BADGE")
+            if variant == "RGM"
+            else header_map.get("Company ID")
+        )
+        if not badge_col:
+            return False, "Badge column not found in Excel."
+
+        old_badge = str(old_badge).strip()
+        new_badge = str(new_badge).strip()
+
+        # Locate rows for old and new badge
+        row_old = None
+        row_new = None
+        for r in range(2, ws.max_row + 1):
+            v = ws.cell(r, badge_col).value
+            if not v:
+                continue
+            b = str(v).strip()
+            if b == old_badge:
+                row_old = r
+            elif b == new_badge:
+                row_new = r
+
+        if not row_old and not row_new:
+            return False, (
+                f"Neither old badge '{old_badge}' nor new badge '{new_badge}' "
+                f"found in Excel."
+            )
+
+        # CASE 1: Both exist (historical duplicates) → merge old into new, delete old
+        if row_old and row_new:
+            for c in range(1, ws.max_column + 1):
+                v_old = ws.cell(row_old, c).value
+                v_new = ws.cell(row_new, c).value
+                if (v_new is None or str(v_new).strip() == "") and (
+                    v_old is not None and str(v_old).strip() != ""
+                ):
+                    ws.cell(row_new, c).value = v_old
+                    ws.cell(row_new, c)._style = ws.cell(row_old, c)._style
+            ws.delete_rows(row_old, 1)
+            wb.save(plan_staff_file)
+            return True, f"Merged duplicate rows and kept badge '{new_badge}'."
+
+        # CASE 2: Only old exists → rename in-place
+        if row_old and not row_new:
+            ws.cell(row_old, badge_col).value = new_badge
+            wb.save(plan_staff_file)
+            return True, f"Renamed badge {old_badge} → {new_badge} in Excel."
+
+        # CASE 3: Only new exists → nothing to rename
+        wb.save(plan_staff_file)
+        return True, f"Excel already contains badge '{new_badge}'."
+
+    except Exception as e:
+        return False, f"Error renaming badge in Excel: {e}"
+
+
+def update_user_info_in_excel(
+    plan_staff_file: str, source: str, badge: str, name: str, role: str
+) -> Tuple[bool, str]:
+    """
+    Update name and role columns for an existing badge row in Excel.
+    Used when name/role change but badge stays the same.
+    """
+    if not os.path.exists(plan_staff_file):
+        return False, f"File not found: {plan_staff_file}"
+
+    ok, _errors, meta = validate_excel_structure(plan_staff_file)
+    if not ok:
+        return False, "Invalid Excel structure."
+
+    try:
+        wb = openpyxl.load_workbook(plan_staff_file)
+        ws = wb.active
+
+        header_map = {
+            cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)
+        }
+        variant = meta.get("variant")
+
+        badge_col = (
+            header_map.get("BADGE")
+            if variant == "RGM"
+            else header_map.get("Company ID")
+        )
+        if not badge_col:
+            return False, "Badge column not found in Excel."
+
+        badge = str(badge).strip()
+
+        # Find the row
+        target_row = None
+        for r in range(2, ws.max_row + 1):
+            v = ws.cell(r, badge_col).value
+            if v and str(v).strip() == badge:
+                target_row = r
+                break
+
+        if not target_row:
+            return False, f"Badge '{badge}' not found in Excel."
+
+        # Update name/role
+        if variant == "RGM":
+            if "NAME" in header_map:
+                ws.cell(target_row, header_map["NAME"]).value = name
+            if "ROLE" in header_map:
+                ws.cell(target_row, header_map["ROLE"]).value = role
+        else:  # Newmont
+            if "," in name:
+                last, first = (name.split(",", 1) + [""])[:2]
+            else:
+                last, first = (name.rsplit(" ", 1) + [""])[:2]
+            last, first = last.strip(), first.strip()
+
+            if "Last Name" in header_map:
+                ws.cell(target_row, header_map["Last Name"]).value = last
+            if "First Name" in header_map:
+                ws.cell(target_row, header_map["First Name"]).value = first
+            if "Discipline" in header_map:
+                ws.cell(target_row, header_map["Discipline"]).value = role
+
+        wb.save(plan_staff_file)
+        return True, f"Updated name/role for badge '{badge}' in Excel."
+
+    except Exception as e:
+        return False, f"Error updating user info in Excel: {e}"
 
 
 def remove_user_from_excel(plan_staff_file: str, badge: str) -> Tuple[bool, str]:

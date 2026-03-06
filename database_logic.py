@@ -777,6 +777,107 @@ def update_user(
         conn.close()
 
 
+def update_user_with_cascade(
+    user_id: int, name: str, role: str, new_badge: str, source: str
+) -> Tuple[bool, str, Optional[str]]:
+    """
+    Update user core fields (name, role, badge). If badge changed,
+    rename badge across ALL dependent tables in a single transaction:
+      - users
+      - schedules (badge, date, source)
+      - user_locations
+      - operations
+
+    Returns: (success, message, old_badge)
+      old_badge is None if user not found, otherwise the badge BEFORE the update.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    try:
+        # 1. Fetch current badge
+        cur.execute(
+            "SELECT badge FROM users WHERE id = ? AND source = ?",
+            (user_id, source),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False, "Error: User not found.", None
+
+        old_badge = str(row[0]).strip()
+        new_badge = str(new_badge).strip()
+
+        # 2. Check uniqueness: another user must NOT own the new badge
+        if new_badge != old_badge:
+            cur.execute(
+                "SELECT id FROM users WHERE badge = ? AND source = ? AND id != ?",
+                (new_badge, source, user_id),
+            )
+            if cur.fetchone():
+                return (
+                    False,
+                    f"Error: The badge '{new_badge}' is already assigned to another user.",
+                    old_badge,
+                )
+
+        # 3. Begin atomic transaction
+        conn.execute("BEGIN")
+
+        # 4. If badge changed, check for schedule collisions
+        if new_badge != old_badge:
+            cur.execute(
+                """
+                SELECT s_old.date
+                FROM schedules s_old
+                JOIN schedules s_new
+                  ON s_new.source = s_old.source
+                 AND s_new.date   = s_old.date
+                 AND s_new.badge  = ?
+                WHERE s_old.source = ?
+                  AND s_old.badge  = ?
+                LIMIT 1
+                """,
+                (new_badge, source, old_badge),
+            )
+            if cur.fetchone():
+                conn.rollback()
+                return (
+                    False,
+                    f"Error: Cannot rename badge {old_badge} → {new_badge} because "
+                    f"schedules already exist for the new badge on overlapping dates.",
+                    old_badge,
+                )
+
+        # 5. Update users row (name, role, badge)
+        cur.execute(
+            "UPDATE users SET name = ?, role = ?, badge = ? WHERE id = ?",
+            (name, role, new_badge, user_id),
+        )
+
+        # 6. Cascade rename to dependent tables
+        if new_badge != old_badge:
+            cur.execute(
+                "UPDATE schedules SET badge = ? WHERE source = ? AND badge = ?",
+                (new_badge, source, old_badge),
+            )
+            cur.execute(
+                "UPDATE user_locations SET badge = ? WHERE badge = ?",
+                (new_badge, old_badge),
+            )
+            cur.execute(
+                "UPDATE operations SET badge = ? WHERE badge = ?",
+                (new_badge, old_badge),
+            )
+
+        conn.commit()
+        return True, f"User {name} updated successfully.", old_badge
+
+    except sqlite3.Error as e:
+        conn.rollback()
+        return False, f"Database error: {e}", None
+    finally:
+        conn.close()
+
+
 def delete_user(user_id: int) -> Tuple[bool, str]:
     """Delete a user from the database."""
     conn = sqlite3.connect(DB_FILE)

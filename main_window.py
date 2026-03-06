@@ -5584,10 +5584,10 @@ class CrudWidget(QWidget):
         name = self.crud_name_input.text().strip()
         # Get Role from Combo Text (NOT ID)
         # This ensures we save "Driver" to the user table, keeping PlanStaffWidget compatible.
-        role = self.crud_role_input.currentText().strip() 
-        
+        role = self.crud_role_input.currentText().strip()
+
         badge = self.crud_badge_input.text().strip()
-        
+
         # Get defaults
         def_pickup = self.def_pickup_combo.currentData()
         def_dropoff = self.def_dropoff_combo.currentData()
@@ -5596,9 +5596,14 @@ class CrudWidget(QWidget):
             QMessageBox.warning(self, "Incomplete Data", "Name, Role, and Badge are required.")
             return
 
+        old_badge = None
+
         # 1. Save User Core Data
         if self.current_user_id:
-            success, message = db.update_user(self.current_user_id, name, role, badge, self.source)
+            # Use cascade update: handles badge rename across all dependent tables
+            success, message, old_badge = db.update_user_with_cascade(
+                self.current_user_id, name, role, badge, self.source
+            )
         else:
             success, message = db.add_user(name, role, badge, self.source)
 
@@ -5610,11 +5615,27 @@ class CrudWidget(QWidget):
             except Exception as e:
                 message += f"\nWarning: Could not save locations ({e})"
 
-            # 3. Sync Excel
+            # 3. Sync Excel — targeted update instead of full refresh
             try:
-                excel.refresh_excel_from_db(self.excel_file, self.source)
+                if old_badge and old_badge != badge:
+                    # Badge changed: rename in Excel (handles duplicates/merge)
+                    excel.rename_user_badge_in_excel(
+                        self.excel_file, self.source, old_badge, badge
+                    )
+                    # Also update name/role in the renamed row
+                    excel.update_user_info_in_excel(
+                        self.excel_file, self.source, badge, name, role
+                    )
+                elif self.current_user_id:
+                    # Editing existing user (name/role changed, badge same)
+                    excel.update_user_info_in_excel(
+                        self.excel_file, self.source, badge, name, role
+                    )
+                else:
+                    # New user: full refresh adds the missing row
+                    excel.refresh_excel_from_db(self.excel_file, self.source)
             except Exception as e:
-                print(f"Auto-refresh failed: {e}")
+                print(f"Excel sync failed: {e}")
 
             # 4. Refresh UI
             self._populate_role_filter() # Refresh roles in case user added a new one
