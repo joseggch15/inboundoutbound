@@ -2496,6 +2496,106 @@ def update_user_info_in_excel(
         return False, f"Error updating user info in Excel: {e}"
 
 
+def swap_rows_in_excel(
+    plan_staff_file: str, badge_a: str, badge_b: str
+) -> Tuple[bool, str]:
+    """
+    Swap two entire rows in the Excel file, identified by their badges.
+    Preserves values, styles, comments, and formatting for every cell.
+    Used by Move Up / Move Down operations.
+    """
+    from copy import copy as _copy
+
+    if not os.path.exists(plan_staff_file):
+        return False, f"File not found: {plan_staff_file}"
+
+    ok, _errors, meta = validate_excel_structure(plan_staff_file)
+    if not ok:
+        return False, "Invalid Excel structure."
+
+    try:
+        wb = openpyxl.load_workbook(plan_staff_file)
+        ws = wb.active
+
+        header_map = {
+            cell.value: cell.column for cell in ws[1] if isinstance(cell.value, str)
+        }
+        variant = meta.get("variant")
+        badge_col = (
+            header_map.get("BADGE")
+            if variant == "RGM"
+            else header_map.get("Company ID")
+        )
+        if not badge_col:
+            return False, "Badge column not found in Excel."
+
+        badge_a = str(badge_a).strip()
+        badge_b = str(badge_b).strip()
+
+        row_a = None
+        row_b = None
+        for r in range(2, ws.max_row + 1):
+            v = ws.cell(r, badge_col).value
+            if not v:
+                continue
+            b = str(v).strip()
+            if b == badge_a:
+                row_a = r
+            elif b == badge_b:
+                row_b = r
+
+        if row_a is None:
+            return False, f"Badge ‘{badge_a}’ not found in Excel."
+        if row_b is None:
+            return False, f"Badge ‘{badge_b}’ not found in Excel."
+
+        max_col = ws.max_column
+
+        # Snapshot row A
+        snap_a = []
+        for c in range(1, max_col + 1):
+            cell = ws.cell(row_a, c)
+            snap_a.append({
+                "value": cell.value,
+                "style": _copy(cell._style),
+                "number_format": cell.number_format,
+                "comment": _copy(cell.comment) if cell.comment else None,
+            })
+
+        # Snapshot row B
+        snap_b = []
+        for c in range(1, max_col + 1):
+            cell = ws.cell(row_b, c)
+            snap_b.append({
+                "value": cell.value,
+                "style": _copy(cell._style),
+                "number_format": cell.number_format,
+                "comment": _copy(cell.comment) if cell.comment else None,
+            })
+
+        # Write B’s data into row A
+        for c, data in enumerate(snap_b, start=1):
+            cell = ws.cell(row_a, c)
+            cell.value = data["value"]
+            cell._style = data["style"]
+            cell.number_format = data["number_format"]
+            cell.comment = data["comment"]
+
+        # Write A’s data into row B
+        for c, data in enumerate(snap_a, start=1):
+            cell = ws.cell(row_b, c)
+            cell.value = data["value"]
+            cell._style = data["style"]
+            cell.number_format = data["number_format"]
+            cell.comment = data["comment"]
+
+        wb.save(plan_staff_file)
+        return True, f"Swapped rows: {badge_a} ↔ {badge_b}"
+
+    except Exception as e:
+        return False, f"Error swapping rows in Excel: {e}"
+
+
 def remove_user_from_excel(plan_staff_file: str, badge: str) -> Tuple[bool, str]:
     """
     Elimina la fila completa de un usuario en el Excel basado en su BADGE.

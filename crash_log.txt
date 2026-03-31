@@ -1,5 +1,13 @@
 Traceback (most recent call last):
-  File "e:\1+D CRUD\inboundoutbound\main_window.py", line 5505, in save_type
-    ok, msg = db.create_shift_type(
-              ^^^^^^^^^^^^^^^^^^^^^
-TypeError: create_shift_type() got an unexpected keyword argument 'apply_1d'
+  File "e:\1+D CRUD\inboundoutbound\main.py", line 154, in _on_loading_finished
+    self._open_main_window(payload)
+  File "e:\1+D CRUD\inboundoutbound\main.py", line 183, in _open_main_window
+    self.main_app_window = MainWindow(
+                           ^^^^^^^^^^^
+  File "e:\1+D CRUD\inboundoutbound\main_window.py", line 6532, in __init__
+    self.plan_widget = PlanStaffWidget(
+                       ^^^^^^^^^^^^^^^^
+  File "e:\1+D CRUD\inboundoutbound\main_window.py", line 1551, in __init__
+    self.frozen_table.customContextMenuRequested.connect(self._show_row_reorder_menu)
+                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'PlanStaffWidget' object has no attribute '_show_row_reorder_menu'

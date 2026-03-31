@@ -1546,6 +1546,10 @@ class PlanStaffWidget(QWidget):
         self.schedule_table.cellEntered.connect(self._show_shift_tooltip)
         self.schedule_table.viewport().installEventFilter(self)
 
+        # --- Row reorder: context menu on frozen table ---
+        self.frozen_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.frozen_table.customContextMenuRequested.connect(self._show_row_reorder_menu)
+
         # Initial data load
         self.refresh_ui_data(use_preloaded=True)
 
@@ -2098,6 +2102,91 @@ class PlanStaffWidget(QWidget):
         self.dropoff_combo.setCurrentIndex(0)
         self.pickup_combo.blockSignals(False)
         self.dropoff_combo.blockSignals(False)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ROW REORDER (Move Up / Move Down)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def _show_row_reorder_menu(self, pos):
+        """Context menu on frozen_table for row reorder operations."""
+        from PyQt6.QtWidgets import QMenu
+        row = self.frozen_table.rowAt(pos.y())
+        if row < 0 or row >= len(self._row_identities):
+            return
+
+        identity = self._row_identities[row]
+        badge = identity.get("badge", "").strip()
+        name = identity.get("name", "").strip()
+        if not badge:
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet("QMenu { font-size: 13px; }")
+
+        # Move Up (not available if already first row)
+        action_up = menu.addAction("⬆️  Move Up")
+        action_up.setEnabled(row > 0)
+
+        # Move Down (not available if already last row)
+        action_down = menu.addAction("⬇️  Move Down")
+        action_down.setEnabled(row < len(self._row_identities) - 1)
+
+        menu.addSeparator()
+
+        # Header with user info (non-interactive)
+        info_action = menu.addAction(f"👤 {name} [{badge}]")
+        info_action.setEnabled(False)
+
+        chosen = menu.exec(self.frozen_table.viewport().mapToGlobal(pos))
+        if chosen is None:
+            return
+
+        if chosen == action_up:
+            self._move_row_direction(row, badge, direction="up")
+        elif chosen == action_down:
+            self._move_row_direction(row, badge, direction="down")
+
+    def _move_row_direction(self, current_row: int, badge: str, direction: str):
+        """
+        Move a row up or down by swapping with the adjacent row.
+        Atomic operation: DB swap → Excel swap → UI refresh.
+        """
+        if direction == "up" and current_row <= 0:
+            return
+        if direction == "down" and current_row >= len(self._row_identities) - 1:
+            return
+
+        # Determine neighbor
+        neighbor_row = current_row - 1 if direction == "up" else current_row + 1
+        neighbor_identity = self._row_identities[neighbor_row]
+        neighbor_badge = neighbor_identity.get("badge", "").strip()
+
+        if not neighbor_badge:
+            return
+
+        # 1. Swap in DB (display_order)
+        ok, msg = db.swap_user_order(self.source, badge, neighbor_badge)
+        if not ok:
+            QMessageBox.warning(self, "Move Error", msg)
+            return
+
+        # 2. Swap in Excel (full row with styles/values/comments)
+        try:
+            ok_xl, msg_xl = excel.swap_rows_in_excel(
+                self.excel_file, badge, neighbor_badge
+            )
+            if not ok_xl:
+                print(f"Excel swap warning: {msg_xl}")
+        except Exception as e:
+            print(f"Excel swap failed: {e}")
+
+        # 3. Refresh UI (rebuilds both tables from Excel)
+        self.refresh_ui_data()
+
+        # 4. Re-select the moved row in the new position
+        new_row = neighbor_row
+        if 0 <= new_row < self.frozen_table.rowCount():
+            self.frozen_table.selectRow(new_row)
 
     def refresh_ui_data(self, use_preloaded=False):
         self.load_shift_type_options()

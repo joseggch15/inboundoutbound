@@ -25,6 +25,12 @@ CREDENTIALS = {
         "excel_file": "PlanStaffNewmont.xlsx",
         "can_manage_shift_types": True
     },
+    "tonyrios": {
+        "password": "357",
+        "role": "Newmont",
+        "excel_file": "PlanStaffNewmont.xlsx",
+        "can_manage_shift_types": True
+    },
     # Administrator (mantiene acceso completo)
     "admin": {
         "password": "123456789",

@@ -35,6 +35,20 @@ def setup_database():
         )
     """)
     
+    # 1b. Migración: columna display_order para orden visual persistente
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN display_order INTEGER")
+    except sqlite3.OperationalError:
+        pass  # Ya existe
+    # Backfill: usuarios sin orden asignado reciben id como orden por defecto
+    cursor.execute("""
+        UPDATE users SET display_order = id WHERE display_order IS NULL
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_users_source_display_order "
+        "ON users(source, display_order)"
+    )
+
     # 2. Tabla de Roles
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS roles (
@@ -702,12 +716,13 @@ def add_users_bulk(users: list, source: str) -> int:
 
 
 def get_all_users(source: str) -> list:
-    """Get all users from the database for a specific source."""
+    """Get all users from the database for a specific source, ordered by display_order."""
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, name, role, badge FROM users WHERE source = ? ORDER BY name",
+        "SELECT id, name, role, badge, display_order FROM users "
+        "WHERE source = ? ORDER BY COALESCE(display_order, id) ASC, name ASC",
         (source,),
     )
     users = [dict(row) for row in cursor.fetchall()]
@@ -876,6 +891,190 @@ def update_user_with_cascade(
         return False, f"Database error: {e}", None
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------
+# Row reorder (display_order)
+# ---------------------------------------------------------------------
+def normalize_user_order(source: str, cursor=None) -> None:
+    """
+    Re-sequence display_order for all users of a source as 10, 20, 30…
+    Eliminates gaps and fractional orders after moves.
+    Supports external cursor for use within transactions.
+    """
+    own_conn = cursor is None
+    conn = None
+    if own_conn:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT id FROM users WHERE source = ? "
+        "ORDER BY COALESCE(display_order, id) ASC, id ASC",
+        (source,),
+    )
+    ids = [row[0] for row in cursor.fetchall()]
+
+    for pos, user_id in enumerate(ids, start=1):
+        cursor.execute(
+            "UPDATE users SET display_order = ? WHERE id = ?",
+            (pos * 10, user_id),
+        )
+
+    if own_conn and conn:
+        conn.commit()
+        conn.close()
+
+
+def move_user_after(
+    source: str, moving_badge: str, after_badge: Optional[str]
+) -> Tuple[bool, str]:
+    """
+    Move user identified by moving_badge immediately AFTER user identified
+    by after_badge. If after_badge is None, moves to the top (first position).
+    Updates display_order atomically.
+    Returns: (success, message)
+    """
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    try:
+        cur.execute("BEGIN IMMEDIATE")
+
+        # Normalize first so we have clean gaps
+        normalize_user_order(source, cursor=cur)
+
+        # Find moving user
+        cur.execute(
+            "SELECT id, display_order FROM users WHERE source = ? AND badge = ?",
+            (source, moving_badge),
+        )
+        moving = cur.fetchone()
+        if not moving:
+            conn.rollback()
+            return False, f"Badge not found: {moving_badge}"
+
+        moving_id = moving[0]
+
+        # Temporarily remove from sequence
+        cur.execute(
+            "UPDATE users SET display_order = -1 WHERE id = ?",
+            (moving_id,),
+        )
+
+        if after_badge is None:
+            # Move to the very top
+            cur.execute(
+                "SELECT MIN(display_order) FROM users "
+                "WHERE source = ? AND id != ?",
+                (source, moving_id),
+            )
+            min_order = cur.fetchone()[0]
+            new_order = (min_order or 10) - 5
+        else:
+            # Find target user
+            cur.execute(
+                "SELECT display_order FROM users "
+                "WHERE source = ? AND badge = ? AND id != ?",
+                (source, after_badge, moving_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                conn.rollback()
+                return False, f"Target badge not found: {after_badge}"
+            base_order = row[0]
+
+            # Find next user after target
+            cur.execute(
+                "SELECT MIN(display_order) FROM users "
+                "WHERE source = ? AND display_order > ? AND id != ?",
+                (source, base_order, moving_id),
+            )
+            next_row = cur.fetchone()[0]
+            new_order = (
+                (base_order + next_row) // 2
+                if next_row
+                else base_order + 10
+            )
+
+        cur.execute(
+            "UPDATE users SET display_order = ? WHERE id = ?",
+            (new_order, moving_id),
+        )
+
+        # Normalize again to keep clean sequence
+        normalize_user_order(source, cursor=cur)
+
+        conn.commit()
+        return True, "Row order updated."
+    except Exception as e:
+        conn.rollback()
+        return False, f"Move error: {e}"
+    finally:
+        conn.close()
+
+
+def swap_user_order(
+    source: str, badge_a: str, badge_b: str
+) -> Tuple[bool, str]:
+    """
+    Swap the display_order of two users. Used by Move Up / Move Down.
+    Returns: (success, message)
+    """
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    try:
+        cur.execute("BEGIN IMMEDIATE")
+
+        cur.execute(
+            "SELECT id, display_order FROM users WHERE source = ? AND badge = ?",
+            (source, badge_a),
+        )
+        row_a = cur.fetchone()
+
+        cur.execute(
+            "SELECT id, display_order FROM users WHERE source = ? AND badge = ?",
+            (source, badge_b),
+        )
+        row_b = cur.fetchone()
+
+        if not row_a or not row_b:
+            conn.rollback()
+            return False, "One of the users was not found."
+
+        id_a, order_a = row_a
+        id_b, order_b = row_b
+
+        # Swap display_order values
+        cur.execute(
+            "UPDATE users SET display_order = ? WHERE id = ?",
+            (order_b, id_a),
+        )
+        cur.execute(
+            "UPDATE users SET display_order = ? WHERE id = ?",
+            (order_a, id_b),
+        )
+
+        conn.commit()
+        return True, "Row order swapped."
+    except Exception as e:
+        conn.rollback()
+        return False, f"Swap error: {e}"
+    finally:
+        conn.close()
+
+
+def get_ordered_badges(source: str) -> List[str]:
+    """Get all badges in display_order. Used by UI for neighbor detection."""
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT badge FROM users WHERE source = ? "
+        "ORDER BY COALESCE(display_order, id) ASC",
+        (source,),
+    )
+    badges = [str(row[0]).strip() for row in cur.fetchall()]
+    conn.close()
+    return badges
 
 
 def delete_user(user_id: int) -> Tuple[bool, str]:
@@ -1094,9 +1293,9 @@ def get_users_with_defaults(source: str) -> list:
             ON u.badge = ul.badge 
             AND ul.is_default = 1
         WHERE u.source = ?
-        ORDER BY u.name
+        ORDER BY COALESCE(u.display_order, u.id) ASC, u.name ASC
     """
-    
+
     cursor.execute(query, (source,))
     # Convertimos a lista de diccionarios para facilitar el manejo en UI
     users = [dict(row) for row in cursor.fetchall()]
