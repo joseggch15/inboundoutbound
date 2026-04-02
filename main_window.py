@@ -114,6 +114,156 @@ DEBOUNCE_MS = 200
 
 WEEKEND_HEADER_YELLOW = "#FFEB3B"  # Amarillo vibrante para cabeceras
 
+# ─── Multi-user session awareness widgets ─────────────────────────────
+
+# Color palette for user avatars (up to 6 unique colors)
+_AVATAR_COLORS = ["#0288D1", "#7B1FA2", "#388E3C", "#F57C00", "#D32F2F", "#00796B"]
+
+
+class UserAvatarWidget(QWidget):
+    """Circular badge showing user initials, like Office co-authoring indicators."""
+
+    def __init__(self, username: str, color: str, is_self: bool = False,
+                 is_editor: bool = False, parent=None):
+        super().__init__(parent)
+        self._username = username
+        self._color = QColor(color)
+        self._is_self = is_self
+        self._is_editor = is_editor
+        self._initials = self._get_initials(username)
+        self.setFixedSize(36, 36)
+        self.setToolTip(
+            f"{username} {'(You)' if is_self else ''}"
+            f" — {'Editing' if is_editor else 'Viewing'}"
+        )
+
+    @staticmethod
+    def _get_initials(name: str) -> str:
+        parts = name.strip().split()
+        if len(parts) >= 2:
+            return (parts[0][0] + parts[-1][0]).upper()
+        return name[:2].upper() if name else "?"
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(2, 2, -2, -2)
+
+        # Circle fill
+        painter.setBrush(self._color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(rect)
+
+        # Editor gets a green border ring
+        if self._is_editor:
+            pen = QPen(QColor("#4CAF50"), 2)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(rect)
+
+        # Initials text
+        painter.setPen(QColor("#FFFFFF"))
+        font = QFont()
+        font.setPointSize(10)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self._initials)
+        painter.end()
+
+
+class SessionBarWidget(QWidget):
+    """
+    Horizontal bar that shows circular avatars for all active sessions.
+    Refreshes periodically by polling the active_sessions table.
+    """
+
+    def __init__(self, current_username: str, parent=None):
+        super().__init__(parent)
+        self._current_username = current_username
+        self._avatar_layout = QHBoxLayout(self)
+        self._avatar_layout.setContentsMargins(0, 0, 0, 0)
+        self._avatar_layout.setSpacing(4)
+
+        # Mode label (Editing / View Only)
+        self._mode_label = QLabel()
+        font = self._mode_label.font()
+        font.setBold(True)
+        font.setPointSize(9)
+        self._mode_label.setFont(font)
+
+        self._avatars_container = QWidget()
+        self._avatars_layout = QHBoxLayout(self._avatars_container)
+        self._avatars_layout.setContentsMargins(0, 0, 0, 0)
+        self._avatars_layout.setSpacing(-8)  # overlap like Office
+
+        self._avatar_layout.addWidget(self._avatars_container)
+        self._avatar_layout.addWidget(self._mode_label)
+
+        # Refresh timer (every 15 seconds)
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.timeout.connect(self.refresh)
+        self._refresh_timer.start(15_000)
+
+        self._is_editor = True  # default until first refresh
+
+    @property
+    def is_editor(self) -> bool:
+        return self._is_editor
+
+    def refresh(self):
+        """Poll active_sessions and rebuild avatar widgets."""
+        try:
+            sessions = db.get_all_active_sessions()
+        except Exception:
+            return
+
+        # Clear existing avatars
+        while self._avatars_layout.count():
+            item = self._avatars_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not sessions:
+            self._is_editor = True
+            self._mode_label.setText("Editing")
+            self._mode_label.setStyleSheet("color: #388E3C; padding-left: 8px;")
+            return
+
+        # First session (oldest login_time) is the editor
+        editor_username = sessions[0]["username"]
+        editor_machine = sessions[0]["machine_name"]
+
+        import socket
+        current_machine = socket.gethostname()
+        self._is_editor = (
+            editor_username == self._current_username
+            and editor_machine == current_machine
+        )
+
+        for i, session in enumerate(sessions):
+            color = _AVATAR_COLORS[i % len(_AVATAR_COLORS)]
+            is_self = (
+                session["username"] == self._current_username
+                and session["machine_name"] == current_machine
+            )
+            is_session_editor = (i == 0)  # first session = editor
+            avatar = UserAvatarWidget(
+                session["username"], color, is_self=is_self,
+                is_editor=is_session_editor
+            )
+            self._avatars_layout.addWidget(avatar)
+
+        if self._is_editor:
+            self._mode_label.setText("Editing")
+            self._mode_label.setStyleSheet("color: #388E3C; padding-left: 8px;")
+        else:
+            self._mode_label.setText("View Only")
+            self._mode_label.setStyleSheet("color: #D32F2F; padding-left: 8px;")
+
+    def stop(self):
+        """Stop the refresh timer (call on close/logout)."""
+        self._refresh_timer.stop()
+
 
 def _is_off_like_payload(payload: dict) -> bool:
     """
@@ -6558,13 +6708,15 @@ class MainWindow(QMainWindow):
         excel_file,
         logged_username=None,
         can_manage_shift_types: bool = False,
-        preloaded_data=None # [CAMBIO 6] Nuevo argumento opcional
+        preloaded_data=None,
+        is_editor: bool = True,
     ):
         super().__init__()
         self.user_role = user_role  # RGM or Newmont. Used as 'source'
         self.excel_file = excel_file
         self.logged_username = logged_username or "Unknown"
         self.can_manage_shift_types = bool(can_manage_shift_types)
+        self._is_editor = is_editor
 
         db.setup_database()
         db.log_event(
@@ -6574,8 +6726,9 @@ class MainWindow(QMainWindow):
             f"Excel={self.excel_file}",
         )
 
+        _mode_tag = "Editing" if self._is_editor else "View Only"
         self.setWindowTitle(
-            f"👨â€✈️ Operations Manager - Profile: {self.user_role} | User: {self.logged_username}"
+            f"Operations Manager - {self.user_role} | {self.logged_username} [{_mode_tag}]"
         )
         self.setGeometry(100, 100, 1200, 800)
 
@@ -6591,20 +6744,18 @@ class MainWindow(QMainWindow):
         font.setBold(True)
         title_label.setFont(font)
 
-        self.logged_user_label = QLabel(f"👤 {self.logged_username}")
-        lu_font = self.logged_user_label.font()
-        lu_font.setBold(True)
-        self.logged_user_label.setFont(lu_font)
-        self.logged_user_label.setStyleSheet("padding: 0 12px;")
+        # Session avatars bar (co-authoring indicators)
+        self._session_bar = SessionBarWidget(self.logged_username)
+        self._session_bar.refresh()
 
-        logout_button = QPushButton("🔒 Log Out")
-        logout_button.setFixedWidth(150)
+        logout_button = QPushButton("Log Out")
+        logout_button.setFixedWidth(120)
         logout_button.setProperty("variant", "text")
         logout_button.clicked.connect(self.handle_logout)
 
         top_layout.addWidget(title_label)
         top_layout.addStretch()
-        top_layout.addWidget(self.logged_user_label)
+        top_layout.addWidget(self._session_bar)
         top_layout.addWidget(logout_button)
         main_layout.addLayout(top_layout)
 
@@ -6696,6 +6847,10 @@ class MainWindow(QMainWindow):
         # ── Menú Editar: Ctrl+Z / Ctrl+Y conectados al undo_stack de PlanStaffWidget ──
         self._setup_undo_menu()
 
+        # Apply read-only mode after all widgets are created
+        if not self._is_editor:
+            QTimer.singleShot(200, self._apply_readonly_mode)
+
     def _setup_undo_menu(self):
         """
         Crea un menú 'Edit' con acciones Ctrl+Z / Ctrl+Y conectadas al
@@ -6773,13 +6928,34 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()  # ensure UI repaints
 
     def handle_logout(self):
+        if hasattr(self, "_session_bar"):
+            self._session_bar.stop()
         self.logout_signal.emit()
         self.close()
-        
-        
-        
-  
-    
+
+    def _apply_readonly_mode(self):
+        """Disable all editing controls when in View Only mode."""
+        if self._is_editor:
+            return
+        # Disable all buttons, line edits, combos, date edits recursively
+        from PyQt6.QtWidgets import (
+            QPushButton, QLineEdit, QComboBox, QDateEdit,
+            QTimeEdit, QCheckBox, QToolButton, QTableWidget,
+        )
+        for widget in self.findChildren(
+            (QPushButton, QLineEdit, QComboBox, QDateEdit,
+             QTimeEdit, QCheckBox, QToolButton)
+        ):
+            # Keep logout button enabled
+            if widget.property("variant") == "text" and isinstance(widget, QPushButton):
+                text = widget.text()
+                if "Log Out" in text:
+                    continue
+            widget.setEnabled(False)
+        # Make tables read-only (no editing triggers)
+        for table in self.findChildren(QTableWidget):
+            table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
     def _on_excel_path_changed(self, source: str, new_path: str) -> None:
         """Actualiza la ruta del Excel en todos los widgets cuando cambia."""
         if source != self.user_role:
@@ -6802,9 +6978,10 @@ class MainWindow(QMainWindow):
 class AdminMainWindow(QMainWindow):
     logout_signal = pyqtSignal()
 
-    def __init__(self, logged_username: str, rgm_excel: str, newmont_excel: str):
+    def __init__(self, logged_username: str, rgm_excel: str, newmont_excel: str, is_editor: bool = True):
         super().__init__()
         self.logged_username = logged_username or "admin"
+        self._is_editor = is_editor
 
         db.setup_database()
         db.log_event(
@@ -6814,7 +6991,8 @@ class AdminMainWindow(QMainWindow):
             f"Access to admin console | RGM={rgm_excel} | Newmont={newmont_excel}",
         )
 
-        self.setWindowTitle(f"🛡️ Administrator Console | User: {self.logged_username}")
+        _mode_tag = "Editing" if self._is_editor else "View Only"
+        self.setWindowTitle(f"Administrator Console | {self.logged_username} [{_mode_tag}]")
         self.setGeometry(100, 100, 1400, 900)
 
         central_widget = QWidget()
@@ -6829,20 +7007,18 @@ class AdminMainWindow(QMainWindow):
         font.setBold(True)
         title_label.setFont(font)
 
-        self.logged_user_label = QLabel(f"👤 {self.logged_username} (Administrator)")
-        lu_font = self.logged_user_label.font()
-        lu_font.setBold(True)
-        self.logged_user_label.setFont(lu_font)
-        self.logged_user_label.setStyleSheet("padding: 0 12px;")
+        # Session avatars bar (co-authoring indicators)
+        self._session_bar = SessionBarWidget(self.logged_username)
+        self._session_bar.refresh()
 
-        logout_button = QPushButton("🔒 Log Out")
-        logout_button.setFixedWidth(150)
+        logout_button = QPushButton("Log Out")
+        logout_button.setFixedWidth(120)
         logout_button.setProperty("variant", "text")
         logout_button.clicked.connect(self.handle_logout)
 
         top_layout.addWidget(title_label)
         top_layout.addStretch()
-        top_layout.addWidget(self.logged_user_label)
+        top_layout.addWidget(self._session_bar)
         top_layout.addWidget(logout_button)
         main_layout.addLayout(top_layout)
 
@@ -6936,6 +7112,30 @@ class AdminMainWindow(QMainWindow):
         # ── Menú Editar: Ctrl+Z / Ctrl+Y — contexto = tab activo ────────────
         self._setup_admin_undo_menu()
 
+        # Apply read-only mode after all widgets are created
+        if not self._is_editor:
+            QTimer.singleShot(200, self._apply_readonly_mode)
+
+    def _apply_readonly_mode(self):
+        """Disable all editing controls when in View Only mode."""
+        if self._is_editor:
+            return
+        from PyQt6.QtWidgets import (
+            QPushButton, QLineEdit, QComboBox, QDateEdit,
+            QTimeEdit, QCheckBox, QToolButton, QTableWidget,
+        )
+        for widget in self.findChildren(
+            (QPushButton, QLineEdit, QComboBox, QDateEdit,
+             QTimeEdit, QCheckBox, QToolButton)
+        ):
+            if widget.property("variant") == "text" and isinstance(widget, QPushButton):
+                text = widget.text()
+                if "Log Out" in text:
+                    continue
+            widget.setEnabled(False)
+        for table in self.findChildren(QTableWidget):
+            table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
     def _setup_admin_undo_menu(self):
         """
         Admin tiene 2 plan tabs (RGM y Newmont). El undo/redo actúa sobre el
@@ -7008,9 +7208,11 @@ class AdminMainWindow(QMainWindow):
                 plan._undo_in_progress = False
 
     def handle_logout(self):
+        if hasattr(self, "_session_bar"):
+            self._session_bar.stop()
         self.logout_signal.emit()
         self.close()
-        
+
     def _on_excel_path_changed(self, source: str, new_path: str) -> None:
         if source == "RGM":
             self.rgm_excel = new_path

@@ -1,6 +1,7 @@
 # Basado y extendido a partir del mÃƒÆ’Ã‚Â³dulo original. Referencia: :contentReference[oaicite:0]{index=0}
 import sqlite3
 import json
+import socket
 from datetime import date, timedelta, datetime
 from typing import Tuple, List, Dict, Optional, Set
 
@@ -227,6 +228,19 @@ def setup_database():
     """)
     try: cursor.execute("ALTER TABLE report_settings ADD COLUMN settings_json TEXT")
     except sqlite3.OperationalError: pass
+
+    # 11. Active Sessions (multi-user lock / co-authoring awareness)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS active_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            source TEXT NOT NULL,
+            machine_name TEXT NOT NULL,
+            login_time TEXT NOT NULL DEFAULT (datetime('now')),
+            last_heartbeat TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(username, machine_name)
+        )
+    """)
 
     conn.commit()
     conn.close()
@@ -2188,3 +2202,112 @@ def ensure_system_shift_types(source: str) -> None:
         print(f"[ensure_system_shift_types] Error para source={source}: {e}")
     finally:
         conn.close()
+
+
+# ─── Active Sessions (multi-user awareness) ──────────────────────────
+
+_MACHINE_NAME = socket.gethostname()
+
+# Seconds without heartbeat before a session is considered expired
+SESSION_TIMEOUT_SECONDS = 60
+
+
+def register_session(username: str, source: str) -> None:
+    """Register current user as active. Replaces any stale session from same machine."""
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO active_sessions "
+        "(username, source, machine_name, login_time, last_heartbeat) "
+        "VALUES (?, ?, ?, datetime('now'), datetime('now'))",
+        (username, source, _MACHINE_NAME),
+    )
+    conn.commit()
+    conn.close()
+
+
+def heartbeat_session(username: str) -> None:
+    """Update last_heartbeat for current user/machine."""
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE active_sessions SET last_heartbeat = datetime('now') "
+        "WHERE username = ? AND machine_name = ?",
+        (username, _MACHINE_NAME),
+    )
+    conn.commit()
+    conn.close()
+
+
+def unregister_session(username: str) -> None:
+    """Remove session on logout / app close."""
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(
+        "DELETE FROM active_sessions WHERE username = ? AND machine_name = ?",
+        (username, _MACHINE_NAME),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_active_sessions(exclude_username: Optional[str] = None) -> List[Dict]:
+    """
+    Return all sessions whose heartbeat is within the timeout window.
+    Automatically purges expired sessions.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    # Purge expired sessions first
+    cur.execute(
+        "DELETE FROM active_sessions "
+        "WHERE (strftime('%s','now') - strftime('%s', last_heartbeat)) > ?",
+        (SESSION_TIMEOUT_SECONDS,),
+    )
+    conn.commit()
+
+    if exclude_username:
+        cur.execute(
+            "SELECT username, source, machine_name, login_time, last_heartbeat "
+            "FROM active_sessions WHERE username != ? ORDER BY login_time ASC",
+            (exclude_username,),
+        )
+    else:
+        cur.execute(
+            "SELECT username, source, machine_name, login_time, last_heartbeat "
+            "FROM active_sessions ORDER BY login_time ASC"
+        )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_all_active_sessions() -> List[Dict]:
+    """Return all live sessions ordered by login_time (oldest first = editor)."""
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    # Purge expired
+    cur.execute(
+        "DELETE FROM active_sessions "
+        "WHERE (strftime('%s','now') - strftime('%s', last_heartbeat)) > ?",
+        (SESSION_TIMEOUT_SECONDS,),
+    )
+    conn.commit()
+    cur.execute(
+        "SELECT username, source, machine_name, login_time, last_heartbeat "
+        "FROM active_sessions ORDER BY login_time ASC"
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def is_first_session(username: str) -> bool:
+    """Check if this user holds the oldest (editor) session."""
+    sessions = get_all_active_sessions()
+    if not sessions:
+        return True
+    return sessions[0]["username"] == username and sessions[0]["machine_name"] == _MACHINE_NAME

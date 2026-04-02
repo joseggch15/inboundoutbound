@@ -123,8 +123,17 @@ class LauncherWindow(QWidget):
                 "logged_username": login_dialog.username,
                 "can_manage_shift_types": bool(getattr(login_dialog, "can_manage_shift_types", False)),
             }
+
+            # Register session in DB so other instances can see us
+            username = self._login_payload["logged_username"]
+            source = self._login_payload["user_role"]
+            db.register_session(username, source)
+
+            # Check if we are the first (editor) or a viewer
+            self._login_payload["is_editor"] = db.is_first_session(username)
+
             self.hide()
-            
+
             # INICIO DEL PROCESO REAL DE CARGA
             self._start_loading_sequence()
 
@@ -162,7 +171,8 @@ class LauncherWindow(QWidget):
     def _open_main_window(self, preloaded_payload):
         p = self._login_payload or {}
         role = p.get("user_role")
-        
+        is_editor = p.get("is_editor", True)
+
         # Extraemos el DataFrame pre-cargado
         schedule_df = preloaded_payload.get("schedule_df")
 
@@ -177,6 +187,7 @@ class LauncherWindow(QWidget):
                 logged_username=p.get("logged_username") or "",
                 rgm_excel="PlanStaffRGM.xlsx",
                 newmont_excel="PlanStaffNewmont.xlsx",
+                is_editor=is_editor,
             )
         else:
             # Aquí pasamos el DF pre-cargado al MainWindow
@@ -185,13 +196,40 @@ class LauncherWindow(QWidget):
                 excel_file=p.get("excel_file") or "",
                 logged_username=p.get("logged_username") or "",
                 can_manage_shift_types=p.get("can_manage_shift_types", False),
-                preloaded_data=schedule_df  # <--- INYECCIÓN DE DEPENDENCIA
+                preloaded_data=schedule_df,
+                is_editor=is_editor,
             )
 
         self.main_app_window.logout_signal.connect(self.handle_logout)
         self.main_app_window.show()
 
+        # Start heartbeat timer (every 30 seconds)
+        self._heartbeat_timer = QTimer()
+        self._heartbeat_timer.timeout.connect(self._send_heartbeat)
+        self._heartbeat_timer.start(30_000)
+
+    def _send_heartbeat(self):
+        """Update heartbeat timestamp so other instances know we're alive."""
+        if self._login_payload:
+            try:
+                db.heartbeat_session(self._login_payload["logged_username"])
+            except Exception:
+                pass
+
     def handle_logout(self):
+        # Stop heartbeat
+        if hasattr(self, "_heartbeat_timer") and self._heartbeat_timer:
+            self._heartbeat_timer.stop()
+            self._heartbeat_timer = None
+
+        # Unregister session from DB
+        if self._login_payload:
+            try:
+                db.unregister_session(self._login_payload["logged_username"])
+            except Exception:
+                pass
+
+        self._login_payload = None
         self.main_app_window = None
         self.show()
 
@@ -242,13 +280,22 @@ if __name__ == '__main__':
         )
     except Exception:
         pass
-    
+
     app = QApplication(sys.argv)
     app.setApplicationName("Inbound - Outbound PLG")
-    
+
     apply_app_theme(app)
-    
+
     launcher = LauncherWindow()
     launcher.show()
-    
+
+    # Cleanup session on any exit (X button, Alt+F4, crash)
+    def _cleanup_on_exit():
+        if launcher._login_payload:
+            try:
+                db.unregister_session(launcher._login_payload["logged_username"])
+            except Exception:
+                pass
+    app.aboutToQuit.connect(_cleanup_on_exit)
+
     sys.exit(app.exec())
