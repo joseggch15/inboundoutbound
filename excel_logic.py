@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import os
 import io
+import logging
+import sqlite3
 from datetime import date, timedelta, datetime
 from typing import List, Dict, Tuple, Optional, Set
 
@@ -36,8 +38,14 @@ import openpyxl
 import xlsxwriter
 from openpyxl.styles import PatternFill
 from openpyxl.comments import Comment
-import calendar  # <--- Necesario para calcular el ÃƒÆ’Ã‚Âºltimo dÃƒÆ’Ã‚Â­a del mes
+import calendar
 from database_logic import get_shift_types, get_shift_type_map
+
+from constants import (
+    Source, ShiftStatus, ShiftLabel, ShiftColor, BadgePrefix,
+)
+
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # Helpers / NormalizaciÃƒÆ’Ã‚Â³n
@@ -58,8 +66,8 @@ def _prefix_for_file(plan_staff_file: str) -> str:
     """Prefijo de badge basado en el archivo."""
     base = os.path.basename(plan_staff_file).lower()
     if "newmont" in base:
-        return "NM"
-    return "ID"
+        return BadgePrefix.NEWMONT.value
+    return BadgePrefix.RGM.value
 
 
 def _normalize_status(v: object) -> Tuple[Optional[str], Optional[str]]:
@@ -77,15 +85,14 @@ def _normalize_status(v: object) -> Tuple[Optional[str], Optional[str]]:
     s = str(v).strip().upper()
     if s in ("", "NONE", "NAN", "NULL"):
         return None, None
-    if s in ("OFF", "BREAK", "KO", "LEAVE"):
-        return "OFF", None
-    if s == "ON":
-        return "ON", "Day Shift"
-    if "ON NS" in s or "NIGHT" in s:
-        return "ON NS", "Night Shift"
-    # dÃƒÆ’Ã‚Â­gitos o 'OK'
-    if s.isdigit() or s == "OK":
-        return "ON", "Day Shift"
+    if s in ShiftStatus.off_aliases():
+        return ShiftStatus.OFF.value, None
+    if s == ShiftStatus.ON.value:
+        return ShiftStatus.ON.value, ShiftLabel.DAY_SHIFT.value
+    if ShiftStatus.ON_NS.value in s or "NIGHT" in s:
+        return ShiftStatus.ON_NS.value, ShiftLabel.NIGHT_SHIFT.value
+    if s.isdigit() or s in ShiftStatus.on_aliases():
+        return ShiftStatus.ON.value, ShiftLabel.DAY_SHIFT.value
     return None, None
 
 
@@ -122,16 +129,19 @@ def _fill_for_base_status(status: Optional[str], source: str = "RGM") -> Optiona
         if info and info.get("color_hex"):
             hex6 = str(info["color_hex"]).lstrip("#").upper()
             return PatternFill(start_color=hex6, end_color=hex6, fill_type="solid")
-    except Exception:
-        pass  # DB no disponible, usar fallback
+    except (sqlite3.Error, OSError) as e:
+        logger.debug("DB unavailable for shift color lookup: %s", e)
 
-    # PRIORIDAD 2: Hardcode legacy
-    green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-    red   = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-    yel   = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
-    if s == "ON":    return green
-    if s == "OFF":   return red
-    if s == "ON NS": return yel
+    # PRIORIDAD 2: Fallback colors from constants
+    _color_map = {
+        ShiftStatus.ON.value: ShiftColor.GREEN_ON.value,
+        ShiftStatus.OFF.value: ShiftColor.RED_OFF.value,
+        ShiftStatus.ON_NS.value: ShiftColor.YELLOW_NS.value,
+    }
+    hex_color = _color_map.get(s)
+    if hex_color:
+        hex6 = hex_color.lstrip("#").upper()
+        return PatternFill(start_color=hex6, end_color=hex6, fill_type="solid")
     return None
 
 
@@ -171,22 +181,16 @@ def _get_transport_time_str(
             return _hhmmss(t) or "00:00:00"
 
     # Priority 2: Standard shifts (LOGIC SPLIT BY SOURCE)
-    if source == "Newmont":
-        # Newmont Rules:
-        # ON (DÃƒÆ’Ã‚Â­a): Entrada 06:00, Salida 12:00
-        # ON NS (Noche): Entrada 12:00, Salida 06:00
-        if su == "ON":
+    if source == Source.NEWMONT.value:
+        if su == ShiftStatus.ON.value:
             return "06:00:00" if kind == "IN" else "12:00:00"
-        if su == "ON NS":
+        if su == ShiftStatus.ON_NS.value:
             return "12:00:00" if kind == "IN" else "06:00:00"
-
     else:
-        # RGM / Default Rules:
-        # ON (DÃƒÆ’Ã‚Â­a): Entrada 07:00, Salida 07:00
-        # ON NS (Noche): Entrada 07:00, Salida 07:00
-        if su == "ON":
+        # RGM / Default Rules
+        if su == ShiftStatus.ON.value:
             return "07:00:00" if kind == "IN" else "07:00:00"
-        if su == "ON NS":
+        if su == ShiftStatus.ON_NS.value:
             return "07:00:00" if kind == "IN" else "07:00:00"
 
     # Priority 3: Fallback from cell comment (e.g., "08:00-17:00")

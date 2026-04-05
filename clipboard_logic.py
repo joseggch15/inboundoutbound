@@ -1,7 +1,10 @@
 import json
+import logging
 from PyQt6.QtCore import QMimeData
 from PyQt6.QtGui import QClipboard
 from PyQt6.QtWidgets import QApplication, QTableWidgetItem
+
+logger = logging.getLogger(__name__)
 
 class ScheduleClipboardService:
     MIME_TYPE = "application/x-transport-shifts"
@@ -71,8 +74,8 @@ class ScheduleClipboardService:
             try:
                 data = mime.data(ScheduleClipboardService.MIME_TYPE).data()
                 return json.loads(data.decode('utf-8')), "JSON"
-            except Exception:
-                pass # Fallback to text
+            except (json.JSONDecodeError, ValueError, UnicodeDecodeError) as e:
+                logger.debug("Clipboard JSON parse failed, falling back to text: %s", e)
         
         if mime.hasText():
             text = mime.text()

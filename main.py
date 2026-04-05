@@ -1,16 +1,20 @@
 # main.py
 import sys
 import time
+import logging
 import pandas as pd # Necesario para el tipado
 from PyQt6.QtWidgets import QApplication, QDialog, QWidget, QVBoxLayout, QPushButton, QLabel, QMessageBox
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QObject
 
+from logging_config import setup_logging
 from main_window import MainWindow, AdminMainWindow
 from ui_login import LoginWindow, LoadingWindow
 from ui.theme import apply_app_theme
 import database_logic as db
 import excel_logic as excel
 import traceback  # Necesario para el reporte de errores
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------
 # CLASE WORKER PARA CARGA EN SEGUNDO PLANO
@@ -271,6 +275,9 @@ def exception_hook(exctype, value, tb):
     sys.exit(1)
 
 if __name__ == '__main__':
+    # Initialize logging before anything else
+    setup_logging()
+
     # ---> AQUÍ ACTIVAMOS LA TRAMPA DE ERRORES <---
     sys.excepthook = exception_hook
 
